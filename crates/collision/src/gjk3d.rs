@@ -1,9 +1,10 @@
 use glam::{Quat, Vec3};
+use phieng_math::GJK_EPS;
 
 /// Maximum GJK iterations
 const GJK_MAX_ITERATIONS: usize = 32;
 /// Convergence epsilon
-const GJK_EPSILON: f32 = 1e-6;
+const GJK_EPSILON: f32 = GJK_EPS;
 
 /// Result of a GJK query
 #[derive(Debug, Clone)]
@@ -386,7 +387,7 @@ pub fn gjk(
     // simplex.get(0), which is just the first support point and can be
     // arbitrarily far from the actual closest feature).
     let (contained, dist) = simplex_origin_info(&simplex);
-    if contained {
+    if contained || simplex.count == 4 {
         (GjkResult::Colliding, simplex)
     } else {
         (GjkResult::Separated { distance: dist }, simplex)

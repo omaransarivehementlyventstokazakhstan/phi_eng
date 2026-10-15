@@ -14,6 +14,7 @@ use super::validation::{
 };
 use glam::{Vec2, Vec3};
 use phieng_broadphase::{AABBTree3D, SpatialHash2};
+use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
 
 /// Cached contact impulses from the previous frame, used for warm starting.
 /// Matched to new contacts by proximity of the contact point; the stored
@@ -30,9 +31,8 @@ pub struct CachedContact {
     pub tangent_impulse: f32,
 }
 
-/// Maximum squared distance for matching a new contact to a cached one.
-const CONTACT_MATCH_DIST_SQ: f32 = 0.04; // (0.2 units)^2
-
+/// Maximum squared distance for matching a new contact to a cached one
+/// ((0.2 units)^2) — shared with all other crates via `phieng_math`.
 /// Pre-allocated scratch buffers for zero-allocation narrowphase.
 ///
 /// All buffers are pre-allocated with sufficient capacity and reused
@@ -131,8 +131,8 @@ impl World2 {
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
             dt: 1.0 / 60.0,
-            linear_sleep_threshold: 0.01,
-            angular_sleep_threshold: 0.01,
+            linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
+            angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
             validation: ValidationConfig::default(),
             validation_report: ValidationReport::default(),
             joints: Vec::new(),
@@ -624,7 +624,7 @@ impl World2 {
                 if depth < 0.0 {
                     return;
                 }
-                let normal = if dist > 1e-6 { delta / dist } else { Vec2::X };
+                let normal = if dist > EPS { delta / dist } else { Vec2::X };
                 let point = body_a.transform.position + normal * *ra;
                 out.push(ContactConstraint {
                     body_a: a,
@@ -1028,8 +1028,8 @@ impl World3 {
             gravity: Vec3::new(0.0, -9.81, 0.0),
             next_body_id: 0,
             dt: 1.0 / 60.0,
-            linear_sleep_threshold: 0.01,
-            angular_sleep_threshold: 0.01,
+            linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
+            angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
             contact_cache: FxHashMap::default(),
             joints: Vec::new(),
             next_joint_id: 0,
@@ -1501,7 +1501,7 @@ impl World3 {
                 if depth < 0.0 {
                     return;
                 }
-                let normal = if dist > 1e-6 { delta / dist } else { Vec3::X };
+                let normal = if dist > EPS { delta / dist } else { Vec3::X };
                 out.push(ContactConstraint3D::new(
                     a,
                     b,
@@ -1529,7 +1529,7 @@ impl World3 {
                 // center, i.e. B -> A; flip to the A -> B convention.
                 // Falls back to the EPA normal when the center is
                 // inside the box.
-                let normal = if dist > 1e-6 {
+                let normal = if dist > EPS {
                     -(diff / dist)
                 } else {
                     let sa = Self::support_function_for(body_a);
@@ -1564,7 +1564,7 @@ impl World3 {
                 }
                 // diff points from the box surface toward the sphere
                 // center, i.e. A -> B. No flip needed.
-                let normal = if dist > 1e-6 {
+                let normal = if dist > EPS {
                     diff / dist
                 } else {
                     let sa = Self::support_function_for(body_a);

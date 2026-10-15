@@ -1,4 +1,5 @@
 use glam::{Quat, Vec3};
+use phieng_math::{EPS_LINE, EPS_PLANE, EPS_SQ};
 
 /// Clip a polygon against a plane (Sutherland-Hodgman)
 pub fn clip_polygon_plane(polygon: &[Vec3], plane_normal: Vec3, plane_offset: f32) -> Vec<Vec3> {
@@ -42,7 +43,7 @@ pub fn clip_polygon_plane_into(
 fn intersect_edge_3d(prev: Vec3, cur: Vec3, n: Vec3, offset: f32) -> Vec3 {
     let d = cur - prev;
     let denom = n.dot(d);
-    if denom.abs() < 1e-9 {
+    if denom.abs() < EPS_LINE {
         return cur;
     }
     let t = (offset - n.dot(prev)) / denom;
@@ -179,13 +180,13 @@ pub fn box_box_contact_points_into(
     let ref_off = n_r.dot(face_center);
     let mut kept = 0;
     for idx in before..out.len() {
-        if n_r.dot(out[idx]) - ref_off <= 0.01 {
+        if n_r.dot(out[idx]) - ref_off <= EPS_PLANE {
             out[before + kept] = out[idx];
             kept += 1;
             if kept == 4 {
                 // Drain-check the rest for the early-out only; simpler
                 // to just stop: remaining points are extra corners.
-                // Verify none of the skipped ones matter: they don't —
+                // Verify none of the skipped ones matter: they don't â€”
                 // 4 corners fully determine a box face contact.
                 break;
             }
@@ -203,7 +204,7 @@ pub fn closest_point_on_box(query: Vec3, center: Vec3, he: Vec3, rot: Quat) -> (
         local.y.clamp(-he.y, he.y),
         local.z.clamp(-he.z, he.z),
     );
-    let inside = (local - clamped).length_squared() < 1e-12;
+    let inside = (local - clamped).length_squared() < EPS_SQ;
     if !inside {
         let world = center + rot * clamped;
         let n = (query - world).normalize_or_zero();

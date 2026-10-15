@@ -1,5 +1,6 @@
 use crate::body::RigidBody3;
 use glam::{Mat3, Vec3};
+use phieng_math::{DEFAULT_BAUMGARTE, DEFAULT_SLOP, EARLY_EXIT_TOL, EPS_SQ};
 
 #[derive(Debug, Clone)]
 pub struct ContactConstraint3D {
@@ -81,14 +82,14 @@ impl Solver3D {
     /// Maximum Baumgarte bias velocity (m/s). Same policy as
     /// [`crate::Solver::MAX_BIAS_VELOCITY`]: deep overlaps resolve
     /// gradually instead of ejecting past discrete collision.
-    pub const MAX_BIAS_VELOCITY: f32 = 2.0;
+    pub const MAX_BIAS_VELOCITY: f32 = phieng_math::MAX_BIAS_VELOCITY;
 
     pub fn new() -> Self {
         Self {
             iterations: 8,
-            slop: 0.005,
-            baumgarte: 0.2,
-            early_exit_tolerance: 1e-6,
+            slop: DEFAULT_SLOP,
+            baumgarte: DEFAULT_BAUMGARTE,
+            early_exit_tolerance: EARLY_EXIT_TOL,
         }
     }
 
@@ -278,12 +279,22 @@ impl Solver3D {
 
         let max_friction = constraint.friction * constraint.normal_impulse;
 
+        // Coulomb friction cone: clamp the tangent impulse VECTOR to the
+        // disk |jt| <= mu*jn. Independent per-axis clamps allow
+        // |jt| up to sqrt(2)*mu*jn (41% over the cone) at 45 degrees.
         let old_impulse1 = constraint.tangent1_impulse;
-        constraint.tangent1_impulse = (old_impulse1 + lambda1).clamp(-max_friction, max_friction);
-        let applied1 = constraint.tangent1_impulse - old_impulse1;
-
         let old_impulse2 = constraint.tangent2_impulse;
-        constraint.tangent2_impulse = (old_impulse2 + lambda2).clamp(-max_friction, max_friction);
+        let mut new_impulse1 = old_impulse1 + lambda1;
+        let mut new_impulse2 = old_impulse2 + lambda2;
+        let jt_len_sq = new_impulse1 * new_impulse1 + new_impulse2 * new_impulse2;
+        if jt_len_sq > max_friction * max_friction && jt_len_sq > EPS_SQ {
+            let scale = max_friction / jt_len_sq.sqrt();
+            new_impulse1 *= scale;
+            new_impulse2 *= scale;
+        }
+        constraint.tangent1_impulse = new_impulse1;
+        constraint.tangent2_impulse = new_impulse2;
+        let applied1 = constraint.tangent1_impulse - old_impulse1;
         let applied2 = constraint.tangent2_impulse - old_impulse2;
 
         if applied1 != 0.0 || applied2 != 0.0 {

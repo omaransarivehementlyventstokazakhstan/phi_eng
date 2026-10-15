@@ -2,7 +2,7 @@
 //!
 //! Particles live in [`FluidState2`], stepped as phase 1b of
 //! [`crate::World2::step`] (right after gravity, before broadphase), so
-//! the rigid pipeline (broadphase → narrowphase → solve → integrate →
+//! the rigid pipeline (broadphase â†’ narrowphase â†’ solve â†’ integrate â†’
 //! sleep) observes post-fluid velocities without any change to its own
 //! invariants. All loops run in index order with fixed neighbor-cell
 //! order, so fluid stepping is deterministic.
@@ -19,6 +19,7 @@
 
 use super::body::{RigidBody2, Shape2};
 use glam::Vec2;
+use phieng_math::{EPS, EPS_SQ};
 use std::collections::HashMap;
 
 /// Hard cap on stored particles per 2D fluid state (creation-time guard
@@ -161,7 +162,7 @@ impl FluidState2 {
     /// Returns zero at and beyond the support radius and at `r == 0`
     /// (no direction), so coincident particles never divide by zero.
     fn spiky_grad(r_vec: Vec2, r: f32, h: f32) -> Vec2 {
-        if r >= h || r < 1e-6 {
+        if r >= h || r < EPS {
             return Vec2::ZERO;
         }
         use std::f32::consts::PI;
@@ -221,7 +222,7 @@ impl FluidState2 {
     /// fluid (no particles nearby), so bodies above water feel nothing.
     /// Callers must have rebuilt the grid after the latest advection.
     fn sample_pressure(&self, point: Vec2) -> f32 {
-        let h = self.config.smoothing_length.max(1e-6);
+        let h = self.config.smoothing_length.max(EPS);
         let m = self.config.particle_mass.max(0.0);
         let cx = (point.x / h).floor() as i32;
         let cy = (point.y / h).floor() as i32;
@@ -233,7 +234,7 @@ impl FluidState2 {
                         let pj = self.particles[j];
                         let r2 = (pj.position - point).length_squared();
                         if r2 < h * h {
-                            p += m * (pj.pressure / pj.density.max(1e-6)) * Self::poly6(r2, h);
+                            p += m * (pj.pressure / pj.density.max(EPS)) * Self::poly6(r2, h);
                         }
                     }
                 }
@@ -305,7 +306,7 @@ impl FluidState2 {
                 if dist >= radius + pr {
                     return None;
                 }
-                let normal = if dist > 1e-6 { delta / dist } else { Vec2::X };
+                let normal = if dist > EPS { delta / dist } else { Vec2::X };
                 let depth = radius + pr - dist;
                 let point = body.transform.position + normal * radius;
                 Some((normal, depth, point))
@@ -322,7 +323,7 @@ impl FluidState2 {
                 );
                 let clamped = Vec2::new(local.x.clamp(-he.x, he.x), local.y.clamp(-he.y, he.y));
                 let diff = local - clamped;
-                if diff.length_squared() > 1e-12 {
+                if diff.length_squared() > EPS_SQ {
                     // Center outside: closest surface point.
                     let dist = diff.length();
                     if dist >= pr {
@@ -373,7 +374,7 @@ impl FluidState2 {
             return;
         }
         let cfg = self.config;
-        let h = cfg.smoothing_length.max(1e-6);
+        let h = cfg.smoothing_length.max(EPS);
         let m = cfg.particle_mass.max(0.0);
 
         self.rebuild_grid();
@@ -391,7 +392,7 @@ impl FluidState2 {
             // Safety net against collapse singularities (same role as
             // MIN_DENSITY for rigid mass): densities above 3x rest are
             // unphysical packing, not information.
-            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(1e-6));
+            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
 
         // 2. Pressures (linear equation of state, tension-free).
@@ -405,7 +406,7 @@ impl FluidState2 {
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
             let pi = self.particles[i].position;
-            let rho_i = self.particles[i].density.max(1e-6);
+            let rho_i = self.particles[i].density.max(EPS);
             let p_i = self.particles[i].pressure;
             let mut f = Vec2::ZERO;
             for &j in nbrs.iter() {
@@ -413,7 +414,7 @@ impl FluidState2 {
                     continue;
                 }
                 let pj = self.particles[j];
-                let rho_j = pj.density.max(1e-6);
+                let rho_j = pj.density.max(EPS);
                 let delta = pi - pj.position;
                 let dist = delta.length();
                 let grad = Self::spiky_grad(delta, dist, h);
@@ -426,7 +427,7 @@ impl FluidState2 {
         // speed cap, advect.
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
-            let rho_i = self.particles[i].density.max(1e-6);
+            let rho_i = self.particles[i].density.max(EPS);
             let mut v = self.particles[i].velocity + (gravity + self.forces[i] / rho_i) * dt;
             // XSPH velocity smoothing against pre-update neighbors.
             if cfg.viscosity > 0.0 {
@@ -437,7 +438,7 @@ impl FluidState2 {
                         continue;
                     }
                     let pj = self.particles[j];
-                    let rho_bar = 0.5 * (rho_i + pj.density.max(1e-6));
+                    let rho_bar = 0.5 * (rho_i + pj.density.max(EPS));
                     smooth += (pj.velocity - self.particles[i].velocity)
                         * (m / rho_bar)
                         * Self::poly6((pj.position - pi).length_squared(), h);
@@ -518,7 +519,7 @@ impl FluidState2 {
                     + Vec2::new(-body.angular_velocity * r.y, body.angular_velocity * r.x);
                 let speed = v_rel.length();
                 let mut force = -*normal * (p * area);
-                if speed > 1e-6 {
+                if speed > EPS {
                     force -= v_rel * (drag * area * speed);
                 }
                 body.apply_force(force, *point, dt);

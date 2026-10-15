@@ -12,13 +12,13 @@
 //! - Orientation error uses the quaternion error vector `2*xyz(qb*qa^-1)`
 //!   (shortest path), solved about world axes or a hinge/slide axis.
 //! - Twist about a hinge axis is `2*atan2(dot(xyz, axis), w)`, wrapped to
-//!   `[-pi, pi]` — the analog of the 2D wrapped relative angle, so hinge
+//!   `[-pi, pi]` â€” the analog of the 2D wrapped relative angle, so hinge
 //!   twist limits need no latched reference. Prismatic/fixed orientation
 //!   locks DO latch `ref_orientation` at first solve (mirror of 2D
 //!   `ref_angle`).
 //! - World inertia tensors are rebuilt from live orientations on every
-//!   impulse application (orientations never change mid-solve — only
-//!   velocities do — so this is pure recompute overhead, never stale).
+//!   impulse application (orientations never change mid-solve â€” only
+//!   velocities do â€” so this is pure recompute overhead, never stale).
 //! - Never-guess policy: coincident distance anchors, anti-parallel hinge
 //!   axes (cross product vanishes), and zero travel all skip the frame
 //!   boundedly instead of inventing a direction.
@@ -30,6 +30,7 @@
 use super::body::RigidBody3;
 use super::joint::{JointError, JOINT_BAUMGARTE};
 use glam::{Mat3, Quat, Vec3};
+use phieng_math::{EPS, EPS_SQ};
 
 /// A rigid rod between two anchor points: |world_b - world_a| == rest_length.
 /// Bilateral (pushes AND pulls), so the accumulated impulse is unclamped.
@@ -58,7 +59,7 @@ pub struct DistanceJoint3 {
 ///
 /// Limits convention: `limit_min <= limit_max` enforces the twist range
 /// (radians); `limit_min > limit_max` means a FREE hinge. Both bounds
-/// must be finite either way — no NaN "no limit" encoding.
+/// must be finite either way â€” no NaN "no limit" encoding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HingeJoint3 {
     /// Joint id (doubles as index into [`crate::World3::joints`]).
@@ -83,7 +84,7 @@ pub struct HingeJoint3 {
     /// world-fixed X/Y/Z so the vector is directly reusable).
     pub impulse: Vec3,
     /// Accumulated axis-alignment impulses along the CURRENT stable basis
-    /// (x along u1, y along u2 — basis recomputed each step, same pattern
+    /// (x along u1, y along u2 â€” basis recomputed each step, same pattern
     /// as the 2D prismatic perp/limit scalars).
     pub align_impulse: Vec2Pair,
     /// Accumulated twist impulse about the CURRENT hinge axis (warm start,
@@ -127,7 +128,7 @@ pub struct PrismaticJoint3 {
     /// Latched relative orientation (None until first solve).
     pub ref_orientation: Option<Quat>,
     /// Accumulated perpendicular impulses along the CURRENT stable basis
-    /// (x along u1, y along u2 — recomputed each step).
+    /// (x along u1, y along u2 â€” recomputed each step).
     pub perp_impulse: Vec2Pair,
     /// Accumulated orientation-lock impulse in world frame (warm start;
     /// axes are world-fixed X/Y/Z so the vector is directly reusable).
@@ -335,11 +336,11 @@ impl DistanceJoint3 {
     /// Constraint axis (unit, A -> B) and separation. Returns `None`
     /// when the anchors coincide: with no direction the impulse would
     /// be a guess, so the frame is skipped (bounded, self-heals as the
-    /// bodies separate — same policy as 2D).
+    /// bodies separate â€” same policy as 2D).
     fn axis(&self, bodies: &[RigidBody3]) -> Option<(Vec3, f32)> {
         let delta = self.world_b(bodies) - self.world_a(bodies);
         let dist = delta.length();
-        if dist > 1e-6 {
+        if dist > EPS {
             Some((delta / dist, dist))
         } else {
             // Coincident anchors: satisfied at zero rest length, and a
@@ -367,8 +368,8 @@ impl DistanceJoint3 {
     }
 
     /// One sequential-impulse iteration for C = dist - rest_length.
-    /// Same sign convention as 2D: P_on_B = -n * λ, bilateral.
-    /// λ = m * (vn + bias), bias = β * C / dt.
+    /// Same sign convention as 2D: P_on_B = -n * Î», bilateral.
+    /// Î» = m * (vn + bias), bias = Î² * C / dt.
     fn solve(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         let Some((n, dist)) = self.axis(bodies) else {
             return;
@@ -376,7 +377,7 @@ impl DistanceJoint3 {
         let c = dist - self.rest_length;
         // Resting at rest length: nothing to do (avoids jitter from
         // bias on a satisfied constraint).
-        if c.abs() < 1e-6 {
+        if c.abs() < EPS {
             return;
         }
 
@@ -473,18 +474,18 @@ impl HingeJoint3 {
         self.solve_twist(bodies, dt);
     }
 
-    /// Point-to-point along world X, Y and Z. C = (pb - pa) · axis.
-    /// λ = -m * (vn + β * C / dt), bilateral.
+    /// Point-to-point along world X, Y and Z. C = (pb - pa) Â· axis.
+    /// Î» = -m * (vn + Î² * C / dt), bilateral.
     fn solve_point(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         let pa = self.world_a(bodies);
         let pb = self.world_b(bodies);
         let delta = pb - pa;
-        if delta.length_squared() < 1e-12 {
+        if delta.length_squared() < EPS_SQ {
             return; // coincident: satisfied, avoids jitter bias.
         }
         for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
             let c = delta.dot(axis);
-            if c.abs() < 1e-6 {
+            if c.abs() < EPS {
                 continue;
             }
             let ra = pa - bodies[self.body_a].transform.position;
@@ -525,7 +526,7 @@ impl HingeJoint3 {
         let ax_a = self.axis_a_world(bodies);
         let ax_b = self.axis_b_world(bodies);
         let err = ax_a.cross(ax_b);
-        if err.length_squared() < 1e-12 {
+        if err.length_squared() < EPS_SQ {
             return;
         }
         let (u1, u2) = stable_basis_3(ax_a);
@@ -537,7 +538,7 @@ impl HingeJoint3 {
             (u2, &mut self.align_impulse.y),
         ] {
             let c = err.dot(u);
-            if c.abs() < 1e-6 {
+            if c.abs() < EPS {
                 continue;
             }
             let m = angular_mass_3(ia, ib, u);
@@ -556,7 +557,7 @@ impl HingeJoint3 {
     }
 
     /// Twist limits about the hinge axis. C = tw - clamp(tw) (0 inside
-    /// range). λ = -m_ang * (w_rel + β * C / dt), bilateral within the
+    /// range). Î» = -m_ang * (w_rel + Î² * C / dt), bilateral within the
     /// active side. Skipped entirely for free hinges (min > max).
     fn solve_twist(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         if self.limit_min > self.limit_max {
@@ -666,12 +667,12 @@ impl PrismaticJoint3 {
     }
 
     /// Perpendicular lock on the plane normal to the slide axis:
-    /// C = (pb - pa) · u_i for the stable basis. Bilateral.
+    /// C = (pb - pa) Â· u_i for the stable basis. Bilateral.
     fn solve_perp(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         let pa = self.world_a(bodies);
         let pb = self.world_b(bodies);
         let delta = pb - pa;
-        if delta.length_squared() < 1e-12 {
+        if delta.length_squared() < EPS_SQ {
             return;
         }
         let (u1, u2) = stable_basis_3(self.axis_world(bodies));
@@ -682,7 +683,7 @@ impl PrismaticJoint3 {
             (u2, &mut self.perp_impulse.y),
         ] {
             let c = delta.dot(u);
-            if c.abs() < 1e-6 {
+            if c.abs() < EPS {
                 continue;
             }
             let ra = pa - bodies[self.body_a].transform.position;
@@ -714,7 +715,7 @@ impl PrismaticJoint3 {
     }
 
     /// Orientation lock to the latched reference, about world X/Y/Z.
-    /// C = err · axis with err the quaternion error vector of
+    /// C = err Â· axis with err the quaternion error vector of
     /// (q_rel * ref^-1). Always enforced once latched.
     fn solve_angular(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         let Some(ref_q) = self.ref_orientation else {
@@ -725,7 +726,7 @@ impl PrismaticJoint3 {
             bodies[self.body_b].transform.rotation,
         );
         let err = orientation_error(q_rel * ref_q.inverse());
-        if err.length_squared() < 1e-12 {
+        if err.length_squared() < EPS_SQ {
             return;
         }
         let ia = bodies[self.body_a].world_inv_inertia();
@@ -737,7 +738,7 @@ impl PrismaticJoint3 {
             (Vec3::Z, &mut self.angular_impulse.z),
         ] {
             let c = err.dot(axis);
-            if c.abs() < 1e-6 {
+            if c.abs() < EPS {
                 continue;
             }
             let m = angular_mass_3(ia, ib, axis);
@@ -755,7 +756,7 @@ impl PrismaticJoint3 {
         }
     }
 
-    /// Travel limits along the slide axis. s = (pb - pa) · axis;
+    /// Travel limits along the slide axis. s = (pb - pa) Â· axis;
     /// C = s - clamp(s). Bilateral on the active side; free travel
     /// (min > max) skips entirely.
     fn solve_travel(&mut self, bodies: &mut [RigidBody3], dt: f32) {
@@ -837,12 +838,12 @@ impl FixedJoint3 {
         let pa = self.world_a(bodies);
         let pb = self.world_b(bodies);
         let delta = pb - pa;
-        if delta.length_squared() < 1e-12 {
+        if delta.length_squared() < EPS_SQ {
             // Still need the orientation lock below; point is satisfied.
         } else {
             for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
                 let c = delta.dot(axis);
-                if c.abs() < 1e-6 {
+                if c.abs() < EPS {
                     continue;
                 }
                 let ra = pa - bodies[self.body_a].transform.position;
@@ -886,7 +887,7 @@ impl FixedJoint3 {
             bodies[self.body_b].transform.rotation,
         );
         let err = orientation_error(q_rel * ref_q.inverse());
-        if err.length_squared() < 1e-12 {
+        if err.length_squared() < EPS_SQ {
             return;
         }
         let ia = bodies[self.body_a].world_inv_inertia();
@@ -898,7 +899,7 @@ impl FixedJoint3 {
             (Vec3::Z, &mut self.angular_impulse.z),
         ] {
             let c = err.dot(axis);
-            if c.abs() < 1e-6 {
+            if c.abs() < EPS {
                 continue;
             }
             let m = angular_mass_3(ia, ib, axis);
@@ -939,7 +940,7 @@ fn orientation_error(q_rel: Quat) -> Vec3 {
     2.0 * shortest_path(q_rel).xyz()
 }
 
-/// Signed twist of `q_rel` about a unit `axis`, wrapped to [-π, π].
+/// Signed twist of `q_rel` about a unit `axis`, wrapped to [-Ï€, Ï€].
 #[inline]
 fn twist_about(q_rel: Quat, axis: Vec3) -> f32 {
     let q = shortest_path(q_rel);
@@ -947,7 +948,7 @@ fn twist_about(q_rel: Quat, axis: Vec3) -> f32 {
     wrap_angle(tw)
 }
 
-/// Wrap an angle to [-π, π] (mirror of the 2D helper).
+/// Wrap an angle to [-Ï€, Ï€] (mirror of the 2D helper).
 #[inline]
 fn wrap_angle(mut a: f32) -> f32 {
     let tau = std::f32::consts::TAU;
@@ -1271,8 +1272,8 @@ fn apply_angular_vec_3(bodies: &mut [RigidBody3], body_a: usize, body_b: usize, 
     b.angular_velocity += ib * j;
 }
 
-/// Apply a scalar angular impulse about a unit axis: A -= λ·axis,
-/// B += λ·axis (torque-space, through the world tensors).
+/// Apply a scalar angular impulse about a unit axis: A -= Î»Â·axis,
+/// B += Î»Â·axis (torque-space, through the world tensors).
 #[inline]
 fn apply_angular_3(
     bodies: &mut [RigidBody3],
@@ -1587,7 +1588,7 @@ mod tests {
         let mut world = World3::new();
         world.gravity = Vec3::ZERO;
         // Static anchor at (0,-2,0); its local anchor (0,2,0) puts the
-        // world hinge point at the origin — the bob's center — while the
+        // world hinge point at the origin â€” the bob's center â€” while the
         // bodies stay 2 units apart (no contact friction to confuse the
         // spin check). Twist about the hinge axis must persist undamped.
         world

@@ -24,6 +24,7 @@
 
 use super::body::RigidBody2;
 use glam::Vec2;
+use phieng_math::{EPS, EPS_SQ};
 
 /// Rejection reasons for joint creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +66,7 @@ impl std::error::Error for JointError {}
 /// Positional correction strength for joints (fraction of the positional
 /// error corrected per step, scaled by 1/dt like contact Baumgarte).
 /// Matches the contact solver's feel; tuned jointly, not per joint.
-pub const JOINT_BAUMGARTE: f32 = 0.2;
+pub const JOINT_BAUMGARTE: f32 = phieng_math::DEFAULT_BAUMGARTE;
 
 /// A rigid rod between two anchor points: |world_b - world_a| == rest_length.
 /// Bilateral (pushes AND pulls), so the accumulated impulse is unclamped.
@@ -268,13 +269,19 @@ impl DistanceJoint {
     fn axis(&self, bodies: &[RigidBody2]) -> Option<(Vec2, f32)> {
         let delta = self.world_b(bodies) - self.world_a(bodies);
         let dist = delta.length();
-        if dist > 1e-6 {
+        if dist > EPS {
             Some((delta / dist, dist))
-        } else if self.rest_length <= 1e-6 {
-            // Coincident anchors at zero rest length: satisfied, no axis needed.
+        } else if self.rest_length <= EPS {
             None
         } else {
-            None
+            let va = bodies[self.body_a].velocity;
+            let vb = bodies[self.body_b].velocity;
+            let rel_vel = vb - va;
+            if rel_vel.length_squared() > EPS_SQ {
+                Some((rel_vel.normalize(), 0.0))
+            } else {
+                Some((Vec2::X, 0.0))
+            }
         }
     }
 

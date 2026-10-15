@@ -1,5 +1,26 @@
 use glam::{Mat3, Quat, Vec2, Vec3};
 
+pub const EPS: f32 = 1e-6;
+pub const EPS_SQ: f32 = 1e-12;
+pub const EPS_LINE: f32 = 1e-9;
+pub const EPS_PLANE: f32 = 1e-3;
+pub const EPA_TOL: f32 = 1e-4;
+pub const GJK_EPS: f32 = 1e-6;
+pub const MAX_BIAS_VELOCITY: f32 = 2.0;
+pub const DEFAULT_SLOP: f32 = 0.005;
+pub const DEFAULT_BAUMGARTE: f32 = 0.2;
+pub const DEFAULT_ITERATIONS: u32 = 8;
+pub const EARLY_EXIT_TOL: f32 = 1e-6;
+pub const LINEAR_SLEEP_THRESHOLD: f32 = 0.05;
+pub const ANGULAR_SLEEP_THRESHOLD: f32 = 0.05;
+pub const CONTACT_MATCH_DIST_SQ: f32 = 0.04;
+pub const RESTITUTION_THRESHOLD: f32 = 1.0;
+
+#[inline]
+pub const fn scaled_eps(len: f32) -> f32 {
+    EPS * len.max(1.0)
+}
+
 /// 2D Transform: position + rotation
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform2 {

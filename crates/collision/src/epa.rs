@@ -1,8 +1,9 @@
 use crate::gjk3d::{support_minkowski, GjkResult, Simplex};
 use glam::Vec3;
+use phieng_math::{EPA_TOL, EPS};
 
 const EPA_MAX_ITERATIONS: usize = 64;
-const EPA_TOLERANCE: f32 = 1e-4;
+const EPA_TOLERANCE: f32 = EPA_TOL;
 
 #[derive(Debug, Clone)]
 pub struct EpaResult {
@@ -109,6 +110,22 @@ pub fn gjk_epa_with_buffers(
 /// shallower than this are solver-irrelevant (slop = 0.005).
 const STRICT_TET_MARGIN: f32 = 1e-4;
 
+/// Scale the strict margin by characteristic length for multi-scale
+/// scenes. Derived from the seed candidates' own AABB diagonal (the
+/// shape scale, not their distance from the origin), so tiny shapes are
+/// not rejected by an absolute margin exceeding their extent, and
+/// large scenes keep the margin proportional.
+fn scaled_margin(points: &[Vec3]) -> f32 {
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+    for p in points {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    let diag = (max - min).length();
+    STRICT_TET_MARGIN * diag.max(EPS)
+}
+
 /// Strict containment: origin bounded away from every face by at least
 /// `margin`, with non-zero volume AND every opposite vertex bounded away
 /// from its face plane by `margin`. The altitude requirement is the load-
@@ -205,6 +222,10 @@ fn seed_tetrahedron(
         }
     }
     let mut best: Option<(Simplex, f32)> = None;
+    // Margin scales with the candidate set's own extent (see
+    // `scaled_margin`): fixed absolute margins reject seeds for shapes
+    // smaller than the margin itself.
+    let margin = scaled_margin(&pts[..n_pts]);
     for i in 0..n_pts {
         for j in (i + 1)..n_pts {
             for k in (j + 1)..n_pts {
@@ -212,11 +233,11 @@ fn seed_tetrahedron(
                     let clearance = tet_clearance(pts[i], pts[j], pts[k], pts[l]);
                     let better = match &best {
                         Some((_, c)) => clearance > *c,
-                        None => clearance > STRICT_TET_MARGIN,
+                        None => clearance > margin,
                     };
                     // Strict `>` (not `>=`): first-best wins ties,
                     // keeping the search deterministic.
-                    if clearance > STRICT_TET_MARGIN && better {
+                    if clearance > margin && better {
                         let mut tet = Simplex::new();
                         tet.push(pts[i]);
                         tet.push(pts[j]);

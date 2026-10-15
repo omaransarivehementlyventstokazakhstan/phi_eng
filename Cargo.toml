@@ -18,3 +18,17 @@ repository = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
 
 [workspace.dependencies]
 glam = "0.29"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+overflow-checks = true
+debug-assertions = false
+panic = "abort"
+opt-level = 3
+
+[profile.dev]
+overflow-checks = true
+
+[profile.test]
+overflow-checks = true

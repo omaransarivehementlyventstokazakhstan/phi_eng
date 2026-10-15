@@ -7,7 +7,8 @@
 
 /// Minimum sane density: guards against zero/negative mass (which would
 /// produce infinite inverse mass and poison velocities with inf/NaN).
-pub const MIN_DENSITY: f32 = 1e-6;
+/// Single source of truth with the rest of the engine (`phieng_math::EPS`).
+pub const MIN_DENSITY: f32 = phieng_math::EPS;
 
 /// Surface and mass properties of a rigid body.
 #[derive(Debug, Clone, Copy, PartialEq)]

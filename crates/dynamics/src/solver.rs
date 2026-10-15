@@ -1,5 +1,6 @@
 use super::body::RigidBody2;
 use glam::Vec2;
+use phieng_math::{DEFAULT_BAUMGARTE, DEFAULT_SLOP, EARLY_EXIT_TOL, EPS};
 
 /// Contact constraint for the solver (2D sequential impulse with Coulomb friction).
 #[derive(Debug, Clone)]
@@ -75,14 +76,14 @@ impl Solver {
     /// ejected bodies outrun discrete collision (no CCD) and tunnel.
     /// Contacts shallower than ~17 cm at 60 Hz are unaffected, so settled
     /// stacks behave bit-identically with or without the cap.
-    pub const MAX_BIAS_VELOCITY: f32 = 2.0;
+    pub const MAX_BIAS_VELOCITY: f32 = phieng_math::MAX_BIAS_VELOCITY;
 
     pub fn new() -> Self {
         Self {
             iterations: 8,
-            slop: 0.005,
-            baumgarte: 0.2,
-            early_exit_tolerance: 1e-6,
+            slop: DEFAULT_SLOP,
+            baumgarte: DEFAULT_BAUMGARTE,
+            early_exit_tolerance: EARLY_EXIT_TOL,
             parallel: false,
         }
     }
@@ -381,7 +382,7 @@ impl Solver {
         let vn = relative_velocity.dot(constraint.normal);
 
         let mass_n = constraint.mass_normal;
-        if mass_n == 0.0 {
+        if mass_n < EPS * EPS {
             return 0.0;
         }
 

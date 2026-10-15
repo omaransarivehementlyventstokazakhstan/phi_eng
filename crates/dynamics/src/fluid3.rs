@@ -12,12 +12,13 @@
 //! Boundary coverage: sphere / box / capsule shapes are analytic;
 //! convex hulls and meshes use a nearest-vertex-sphere approximation
 //! (documented gap: bumpy response on coarse hulls, same policy as the
-//! 2D polygon impulse-only path — no silently wrong smooth normals).
+//! 2D polygon impulse-only path â€” no silently wrong smooth normals).
 //! Buoyancy sampling covers sphere / box / capsule; hulls and meshes
 //! are impulse-coupled only.
 
 use super::body::{RigidBody3, Shape3};
 use glam::Vec3;
+use phieng_math::{EPS, EPS_SQ};
 use std::collections::HashMap;
 
 /// Hard cap on stored particles per 3D fluid state (creation-time guard
@@ -43,7 +44,7 @@ pub struct Particle3 {
 pub struct FluidConfig3 {
     /// Uniform particle mass. Calibrated so a settled lattice at the
     /// default spacing (0.25) and support (0.5) sums to `rest_density`
-    /// (measured kernel sum ≈ 16 per unit mass). Rescale proportionally
+    /// (measured kernel sum â‰ˆ 16 per unit mass). Rescale proportionally
     /// if you change spacing or support radius.
     pub particle_mass: f32,
     /// Rest density of the fluid.
@@ -148,7 +149,7 @@ impl FluidState3 {
     /// 3D spiky gradient: `-45 / (pi h^6) (h - r)^2 * (r_vec / r)`.
     /// Zero at and beyond support and at `r == 0` (no direction).
     fn spiky_grad(r_vec: Vec3, r: f32, h: f32) -> Vec3 {
-        if r >= h || r < 1e-6 {
+        if r >= h || r < EPS {
             return Vec3::ZERO;
         }
         use std::f32::consts::PI;
@@ -210,7 +211,7 @@ impl FluidState3 {
     /// Zero outside the fluid. Callers must have rebuilt the grid after
     /// the latest advection.
     fn sample_pressure(&self, point: Vec3) -> f32 {
-        let h = self.config.smoothing_length.max(1e-6);
+        let h = self.config.smoothing_length.max(EPS);
         let m = self.config.particle_mass.max(0.0);
         let cx = (point.x / h).floor() as i32;
         let cy = (point.y / h).floor() as i32;
@@ -224,7 +225,7 @@ impl FluidState3 {
                             let pj = self.particles[j];
                             let r2 = (pj.position - point).length_squared();
                             if r2 < h * h {
-                                p += m * (pj.pressure / pj.density.max(1e-6)) * Self::poly6(r2, h);
+                                p += m * (pj.pressure / pj.density.max(EPS)) * Self::poly6(r2, h);
                             }
                         }
                     }
@@ -347,7 +348,7 @@ impl FluidState3 {
                 if dist >= radius + pr {
                     return None;
                 }
-                let normal = if dist > 1e-6 { delta / dist } else { Vec3::X };
+                let normal = if dist > EPS { delta / dist } else { Vec3::X };
                 let depth = radius + pr - dist;
                 let point = body.transform.position + normal * radius;
                 Some((normal, depth, point))
@@ -363,7 +364,7 @@ impl FluidState3 {
                     local.z.clamp(-he.z, he.z),
                 );
                 let diff = local - clamped;
-                if diff.length_squared() > 1e-12 {
+                if diff.length_squared() > EPS_SQ {
                     let dist = diff.length();
                     if dist >= pr {
                         return None;
@@ -402,7 +403,7 @@ impl FluidState3 {
                 let sy = local.y.clamp(-hl, hl);
                 let seg = Vec3::new(0.0, sy, 0.0);
                 let diff = local - seg;
-                if diff.length_squared() > 1e-12 {
+                if diff.length_squared() > EPS_SQ {
                     let dist = diff.length();
                     if dist >= r + pr {
                         return None;
@@ -417,7 +418,7 @@ impl FluidState3 {
                     // Center on the segment axis: push radially out.
                     // Pick the horizontal direction of least travel.
                     let radial = Vec3::new(local.x, 0.0, local.z);
-                    let dir = if radial.length_squared() > 1e-12 {
+                    let dir = if radial.length_squared() > EPS_SQ {
                         radial.normalize_or_zero()
                     } else {
                         Vec3::X
@@ -436,7 +437,7 @@ impl FluidState3 {
                     let delta = particle - w;
                     let dist = delta.length();
                     if dist < pr {
-                        let normal = if dist > 1e-6 { delta / dist } else { Vec3::X };
+                        let normal = if dist > EPS { delta / dist } else { Vec3::X };
                         let depth = pr - dist;
                         match best {
                             Some((_, best_depth, _)) if best_depth >= depth => {}
@@ -459,7 +460,7 @@ impl FluidState3 {
             return;
         }
         let cfg = self.config;
-        let h = cfg.smoothing_length.max(1e-6);
+        let h = cfg.smoothing_length.max(EPS);
         let m = cfg.particle_mass.max(0.0);
 
         self.rebuild_grid();
@@ -475,7 +476,7 @@ impl FluidState3 {
                 let r2 = (self.particles[j].position - pi).length_squared();
                 rho += m * Self::poly6(r2, h);
             }
-            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(1e-6));
+            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
 
         // 2. Pressures (linear equation of state, tension-free).
@@ -489,7 +490,7 @@ impl FluidState3 {
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
             let pi = self.particles[i].position;
-            let rho_i = self.particles[i].density.max(1e-6);
+            let rho_i = self.particles[i].density.max(EPS);
             let p_i = self.particles[i].pressure;
             let mut f = Vec3::ZERO;
             for &j in nbrs.iter() {
@@ -497,7 +498,7 @@ impl FluidState3 {
                     continue;
                 }
                 let pj = self.particles[j];
-                let rho_j = pj.density.max(1e-6);
+                let rho_j = pj.density.max(EPS);
                 let delta = pi - pj.position;
                 let dist = delta.length();
                 let grad = Self::spiky_grad(delta, dist, h);
@@ -510,7 +511,7 @@ impl FluidState3 {
         // speed cap, advect.
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
-            let rho_i = self.particles[i].density.max(1e-6);
+            let rho_i = self.particles[i].density.max(EPS);
             let mut v = self.particles[i].velocity + (gravity + self.forces[i] / rho_i) * dt;
             if cfg.viscosity > 0.0 {
                 let pi = self.particles[i].position;
@@ -520,7 +521,7 @@ impl FluidState3 {
                         continue;
                     }
                     let pj = self.particles[j];
-                    let rho_bar = 0.5 * (rho_i + pj.density.max(1e-6));
+                    let rho_bar = 0.5 * (rho_i + pj.density.max(EPS));
                     smooth += (pj.velocity - self.particles[i].velocity)
                         * (m / rho_bar)
                         * Self::poly6((pj.position - pi).length_squared(), h);
@@ -593,7 +594,7 @@ impl FluidState3 {
                 let v_rel = body.velocity + body.angular_velocity.cross(r);
                 let speed = v_rel.length();
                 let mut force = -*normal * (p * area);
-                if speed > 1e-6 {
+                if speed > EPS {
                     force -= v_rel * (drag * area * speed);
                 }
                 body.apply_force(force, *point, dt);

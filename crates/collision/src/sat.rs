@@ -1,8 +1,8 @@
 use glam::Vec2;
-use phieng_math::AABB2;
+use phieng_math::{AABB2, EPS_PLANE, EPS_SQ};
 
 /// Separating Axis Theorem for convex polygons in 2D.
-/// Returns the separation axis (unit length, orientation undefined — caller
+/// Returns the separation axis (unit length, orientation undefined â€” caller
 /// must orient it A->B via `orient_normal`) and penetration depth,
 /// or None if separated.
 pub fn sat_polygon_polygon(a: &[Vec2], b: &[Vec2]) -> Option<(Vec2, f32)> {
@@ -16,7 +16,7 @@ pub fn sat_polygon_polygon(a: &[Vec2], b: &[Vec2]) -> Option<(Vec2, f32)> {
     for i in 0..a.len() {
         let j = (i + 1) % a.len();
         let edge = a[j] - a[i];
-        if edge.length_squared() < 1e-12 {
+        if edge.length_squared() < EPS_SQ {
             continue;
         }
         let normal = Vec2::new(-edge.y, edge.x).normalize_or_zero();
@@ -39,7 +39,7 @@ pub fn sat_polygon_polygon(a: &[Vec2], b: &[Vec2]) -> Option<(Vec2, f32)> {
     for i in 0..b.len() {
         let j = (i + 1) % b.len();
         let edge = b[j] - b[i];
-        if edge.length_squared() < 1e-12 {
+        if edge.length_squared() < EPS_SQ {
             continue;
         }
         let normal = Vec2::new(-edge.y, edge.x).normalize_or_zero();
@@ -99,7 +99,7 @@ fn project_polygon(polygon: &[Vec2], axis: Vec2) -> (f32, f32) {
 /// SAT for circle vs polygon.
 /// Projects both shapes onto each polygon edge normal (matching the C#
 /// implementation), so the axis/penetration agree across languages.
-/// Normal orientation is undefined — orient A->B with `orient_normal`
+/// Normal orientation is undefined â€” orient A->B with `orient_normal`
 /// using the circle center and polygon centroid.
 pub fn sat_circle_polygon(center: Vec2, radius: f32, polygon: &[Vec2]) -> Option<(Vec2, f32)> {
     if polygon.len() < 3 || radius <= 0.0 {
@@ -111,7 +111,7 @@ pub fn sat_circle_polygon(center: Vec2, radius: f32, polygon: &[Vec2]) -> Option
     for i in 0..polygon.len() {
         let j = (i + 1) % polygon.len();
         let edge = polygon[j] - polygon[i];
-        if edge.length_squared() < 1e-12 {
+        if edge.length_squared() < EPS_SQ {
             continue;
         }
         let normal = Vec2::new(-edge.y, edge.x).normalize_or_zero();
@@ -145,7 +145,7 @@ pub fn sat_circle_polygon(center: Vec2, radius: f32, polygon: &[Vec2]) -> Option
         for i in 0..polygon.len() {
             let j = (i + 1) % polygon.len();
             let edge = polygon[j] - polygon[i];
-            if edge.length_squared() < 1e-12 {
+            if edge.length_squared() < EPS_SQ {
                 continue;
             }
             let normal = Vec2::new(-edge.y, edge.x).normalize_or_zero();
@@ -220,7 +220,7 @@ pub fn sat_aabb_aabb(a: &AABB2, b: &AABB2) -> Option<(Vec2, f32)> {
 
 /// Generate contact points for polygon-polygon collision.
 ///
-/// Uses reference/incident face clipping (Sutherland–Hodgman against the
+/// Uses reference/incident face clipping (Sutherlandâ€“Hodgman against the
 /// side planes of the reference edge, then filtering to points behind the
 /// reference face). Tries A-as-reference first, falls back to B-as-reference
 /// so rotated boxes and generic convex polygons both yield contacts.
@@ -243,7 +243,7 @@ pub fn polygon_polygon_contact_points_into(
     out: &mut Vec<Vec2>,
     tmp: &mut Vec<Vec2>,
 ) {
-    if a.len() < 3 || b.len() < 3 || normal.length_squared() < 1e-12 {
+    if a.len() < 3 || b.len() < 3 || normal.length_squared() < EPS_SQ {
         return;
     }
     // Ensure the normal points from A to B.
@@ -260,7 +260,7 @@ pub fn polygon_polygon_contact_points_into(
     }
 }
 
-/// Allocation-free Sutherland–Hodgman clip of an incident edge against
+/// Allocation-free Sutherlandâ€“Hodgman clip of an incident edge against
 /// a reference edge: appends clipped points to `out`, using `tmp` as
 /// scratch. `out` is left untouched when the clip yields nothing.
 fn clip_contacts_into(
@@ -281,7 +281,7 @@ fn clip_contacts_into(
     // Reference face normal, oriented to agree with the collision normal
     // (handles both CW and CCW windings).
     let edge = r2 - r1;
-    if edge.length_squared() < 1e-12 {
+    if edge.length_squared() < EPS_SQ {
         return;
     }
     let mut face_normal = Vec2::new(edge.y, -edge.x).normalize_or_zero(); // outward for CCW
@@ -315,7 +315,7 @@ fn clip_contacts_into(
     let ref_offset = face_normal.dot(r1);
     let mut kept = 0;
     for i in before..out.len() {
-        if face_normal.dot(out[i]) - ref_offset <= 0.001 {
+        if face_normal.dot(out[i]) - ref_offset <= EPS_PLANE {
             out[before + kept] = out[i];
             kept += 1;
         }
@@ -323,7 +323,7 @@ fn clip_contacts_into(
     out.truncate(before + kept);
 }
 
-/// Allocation-free Sutherland–Hodgman clip of a point list against a
+/// Allocation-free Sutherlandâ€“Hodgman clip of a point list against a
 /// single half-plane `dot(n, p) <= offset`: appends clipped points to
 /// `out`.
 fn clip_to_plane_into(points: &[Vec2], n: Vec2, offset: f32, out: &mut Vec<Vec2>) {
@@ -370,7 +370,7 @@ fn find_best_edge(polygon: &[Vec2], dir: Vec2) -> (usize, Vec2) {
     for i in 0..polygon.len() {
         let j = (i + 1) % polygon.len();
         let edge = polygon[j] - polygon[i];
-        if edge.length_squared() < 1e-12 {
+        if edge.length_squared() < EPS_SQ {
             continue;
         }
         let outward = Vec2::new(edge.y, -edge.x).normalize_or_zero();

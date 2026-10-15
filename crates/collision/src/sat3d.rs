@@ -1,4 +1,5 @@
 use glam::{Quat, Vec3};
+use phieng_math::EPS_SQ;
 
 /// Which feature pair produced the minimum-penetration axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +20,7 @@ pub enum ObbContactKind {
 /// face-on-face contact, and that tilt feeds a torque feedback loop
 /// (growing stack jitter, eventual tunneling). Returns the normal
 /// pointing from A to B, the penetration depth, and which features to
-/// build the manifold from — or None when separated.
+/// build the manifold from â€” or None when separated.
 pub fn sat_obb_obb(
     center_a: Vec3,
     he_a: Vec3,
@@ -81,7 +82,7 @@ pub fn sat_obb_obb(
     for i in 0..3 {
         for j in 0..3 {
             let axis = ax[i].cross(bx[j]);
-            if axis.length_squared() < 1e-12 {
+            if axis.length_squared() < EPS_SQ {
                 continue;
             }
             let axis = axis.normalize();
