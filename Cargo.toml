@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/math",
+    "crates/collision",
+    "crates/broadphase",
+    "crates/dynamics",
+    "crates/engine",
+]
+exclude = ["target"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "Unlicense"
+authors = ["Omar"]
+repository = "https://github.com/omaransarivehementlyventstokazakhstan/phieng"
+
+[workspace.dependencies]
+glam = "0.29"

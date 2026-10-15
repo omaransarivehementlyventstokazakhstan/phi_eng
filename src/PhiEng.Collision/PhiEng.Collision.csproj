@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Collision</PackageId>
+    <Title>PhiEng.Collision</Title>
+    <Description>Collision detection primitives (GJK, EPA, SAT, broadphase).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+  </ItemGroup>
+
+</Project>

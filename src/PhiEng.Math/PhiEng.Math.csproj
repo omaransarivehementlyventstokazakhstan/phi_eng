@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Math</PackageId>
+    <Title>PhiEng.Math</Title>
+    <Description>Math primitives for PhiEng (Vec2, Vec3, Mat2, Mat3, Quat, Transform2, Transform3).</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Broadphase</PackageId>
+    <Title>PhiEng.Broadphase</Title>
+    <description>Broadphase collision detection (spatial hash, AABB tree).</description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+  </ItemGroup>
+
+</Project>

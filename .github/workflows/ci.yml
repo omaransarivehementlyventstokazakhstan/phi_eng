@@ -1,0 +1,135 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Doc links
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  csharp:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-gnu' }}
+      - name: Build native (ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --release -p phieng
+      - name: Stage native linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p src/PhiEng.Native/runtimes/linux-x64/native
+          cp target/x86_64-unknown-linux-gnu/release/libphieng.so src/PhiEng.Native/runtimes/linux-x64/native/
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Tests
+        run: dotnet test tests/PhiEng.Tests/PhiEng.Tests.csproj
+      - name: Parity check
+        run: python tools/check_test_parity.py
+
+  # Version alignment: the Cargo workspace version and the .NET shared
+  # version must agree (single release version across both ecosystems).
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo and MSBuild versions agree
+        run: |
+          cargo_ver=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          props_ver=$(grep -m1 '<Version>' Directory.Build.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/')
+          echo "Cargo: $cargo_ver, MSBuild: $props_ver"
+          test "$cargo_ver" = "$props_ver"
+
+  # Minimum supported Rust version (1.78).
+  # Only the library targets are checked: examples/benches may use newer sugar.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.78
+      - name: MSRV build (libs only)
+        run: cargo build --workspace --lib
+
+  # Portable bench smoke: trajectory hash + allocation census must match
+  # the recorded profile. Timing is NOT gated (CI runners are noisy).
+  bench-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bench smoke (hash + allocs)
+        run: cargo run -p phieng --example bench_large --release
+
+  # Native-CPU bench: informational only, never gating (runner noise).
+  bench-native:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native bench (informational)
+        run: ./tools/build-native.sh --bench
+
+  # From-scratch host example: a broken example is a broken build.
+  host-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Host headless smoke
+        run: dotnet run --project examples/host/PhiEng.Host.csproj -- --smoke --steps 600
+
+  # README smoke: validate hello samples compile and run (5-min hello-worlds).
+  readme-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Build native (ubuntu)
+        run: cargo build --release -p phieng
+      - name: Stage native linux
+        run: |
+          mkdir -p src/PhiEng.Native/runtimes/linux-x64/native
+          cp target/x86_64-unknown-linux-gnu/release/libphieng.so src/PhiEng.Native/runtimes/linux-x64/native/
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: hello-2d
+        run: dotnet run --project samples/hello-2d/hello-2d.csproj
+      - name: hello-3d
+        run: dotnet run --project samples/hello-3d/hello-3d.csproj
+      - name: hello-joint
+        run: dotnet run --project samples/hello-joint/hello-joint.csproj
+      - name: hello-snapshot
+        run: dotnet run --project samples/hello-snapshot/hello-snapshot.csproj
+      - name: hello-native
+        run: dotnet run --project samples/hello-native/hello-native.csproj

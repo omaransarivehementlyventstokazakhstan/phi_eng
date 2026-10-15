@@ -1,0 +1,57 @@
+name: Publish NuGet Packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.3.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Build native for all RIDs
+        run: |
+          powershell -ExecutionPolicy Bypass -File tools/build-native-all.ps1 -Rids win-x64,linux-x64,osx-x64,osx-arm64
+
+      - name: Restore .NET dependencies
+        run: dotnet restore PhiEng.slnx
+
+      - name: Build .NET projects (Release)
+        run: dotnet build PhiEng.slnx -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test PhiEng.slnx -c Release --no-build
+
+      - name: Pack NuGet packages
+        run: dotnet pack PhiEng.slnx -c Release --no-build -o ./artifacts
+
+      - name: Publish to NuGet
+        if: github.event_name == 'release' || github.event.inputs.version != ''
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push ./artifacts/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

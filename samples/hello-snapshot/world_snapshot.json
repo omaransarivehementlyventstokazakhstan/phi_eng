@@ -1,0 +1,121 @@
+{
+  "schema": 1,
+  "gravity": {
+    "x": 0,
+    "y": -9.81
+  },
+  "dt": 0.016666668,
+  "linear_sleep_threshold": 0.01,
+  "angular_sleep_threshold": 0.01,
+  "solver": {
+    "iterations": 8,
+    "slop": 0.005,
+    "baumgarte": 0.2,
+    "early_exit_tolerance": 1E-06
+  },
+  "validation": {
+    "check_finite": false,
+    "max_penetration": 1,
+    "max_mass_ratio": 1000,
+    "max_coordinate": 10000,
+    "max_velocity": 1000,
+    "max_angular_velocity": 1000,
+    "log_warnings": false,
+    "auto_correct": true
+  },
+  "next_body_id": 2,
+  "next_joint_id": 0,
+  "cell_size": 1,
+  "bodies": [
+    {
+      "id": 0,
+      "is_static": true,
+      "is_sleeping": false,
+      "linear_damping": 0.01,
+      "angular_damping": 0.01,
+      "material": {
+        "friction": 0.4,
+        "restitution": 0.1,
+        "density": 1
+      },
+      "shape": {
+        "type": "box",
+        "radius": 0,
+        "half_extents": {
+          "x": 10,
+          "y": 0.5
+        },
+        "vertices": null
+      },
+      "position": {
+        "x": 0,
+        "y": -1
+      },
+      "rotation": [
+        1,
+        0,
+        -0,
+        1
+      ],
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "angular_velocity": 0
+    },
+    {
+      "id": 1,
+      "is_static": false,
+      "is_sleeping": true,
+      "linear_damping": 0.01,
+      "angular_damping": 0.01,
+      "material": {
+        "friction": 0.4,
+        "restitution": 0.1,
+        "density": 1
+      },
+      "shape": {
+        "type": "circle",
+        "radius": 0.5,
+        "half_extents": null,
+        "vertices": null
+      },
+      "position": {
+        "x": 0,
+        "y": -0.0050001284
+      },
+      "rotation": [
+        1,
+        0,
+        -0,
+        1
+      ],
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "angular_velocity": 0
+    }
+  ],
+  "joints": [],
+  "contacts": [
+    {
+      "body_a": 1,
+      "body_b": 0,
+      "entries": [
+        {
+          "point": {
+            "x": 0,
+            "y": -0.5050002
+          },
+          "normal": {
+            "x": 0,
+            "y": -1
+          },
+          "normal_impulse": 0.12841426,
+          "tangent_impulse": 0
+        }
+      ]
+    }
+  ]
+}

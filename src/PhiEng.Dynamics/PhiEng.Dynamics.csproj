@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Dynamics</PackageId>
+    <Title>PhiEng.Dynamics</Title>
+    <Description>Rigid-body dynamics (2D/3D worlds, solver, joints, snapshots).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+    <ProjectReference Include="..\PhiEng.Collision\PhiEng.Collision.csproj" />
+    <ProjectReference Include="..\PhiEng.Broadphase\PhiEng.Broadphase.csproj" />
+  </ItemGroup>
+
+</Project>

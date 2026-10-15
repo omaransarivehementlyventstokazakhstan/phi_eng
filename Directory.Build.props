@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <!-- Shared package metadata -->
+    <Authors>Omar</Authors>
+    <Company>PhiEng</Company>
+    <Product>PhiEng</Product>
+    <PackageLicenseExpression>Unlicense</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/omaransarivehementlyventstokazakhstan/phieng</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/omaransarivehementlyventstokazakhstan/phieng</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>physics engine simulation rigid-body</PackageTags>
+    <Description>High-performance deterministic rigid-body physics engine with 2D/3D support, joints, snapshots, and FFI bridge.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Version: must match the Cargo workspace version (see CI version check) -->
+    <Version>0.3.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

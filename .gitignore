@@ -1,0 +1,40 @@
+# Cargo / Rust
+target/
+Cargo.lock
+
+# .NET build outputs
+bin/
+obj/
+artifacts/
+*.nupkg
+*.snupkg
+
+# IDE / editor
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Test results
+TestResults/
+*.trx
+
+# OS / local
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Local-only legacy native dir (we stage runtimes/ instead)
+native/
+
+# Secrets / env
+.env
+.env.local
+*.pem
+*.key
+
+# Local scratch / tool outputs
+*.pyc
+__pycache__/

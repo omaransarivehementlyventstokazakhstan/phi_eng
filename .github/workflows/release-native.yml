@@ -1,0 +1,76 @@
+name: Release with Native Artifacts
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            target: x86_64-pc-windows-gnu
+            output: phieng.dll
+          - rid: linux-x64
+            target: x86_64-unknown-linux-gnu
+            output: libphieng.so
+          - rid: osx-x64
+            target: x86_64-apple-darwin
+            output: libphieng.dylib
+          - rid: osx-arm64
+            target: aarch64-apple-darwin
+            output: libphieng.dylib
+        fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.target }}
+      - name: Build native
+        run: cargo build --manifest-path Cargo.toml --target ${{ matrix.target }} --release -p phieng
+      - name: Stage artifact
+        run: |
+          mkdir -p artifacts/${{ matrix.rid }}
+          cp target/${{ matrix.target }}/release/${{ matrix.output }} artifacts/${{ matrix.rid }}/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: artifacts/${{ matrix.rid }}/
+          retention-days: 90
+
+  create-release-assets:
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release archives
+        run: |
+          cd artifacts
+          for dir in win-x64 linux-x64 osx-x64 osx-arm64; do
+            if [ -d "$dir" ]; then
+              cd $dir
+              if [[ "$dir" == win-x64 ]]; then
+                zip -r ../${{ github.repository }}-${{ github.event.release.tag_name }}-$dir.zip .
+              else
+                tar -czf ../${{ github.repository }}-${{ github.event.release.tag_name }}-$dir.tar.gz .
+              fi
+              cd ..
+            fi
+          done
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip artifacts/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

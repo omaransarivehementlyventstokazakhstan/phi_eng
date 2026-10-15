@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng</PackageId>
+    <Title>PhiEng</Title>
+    <Description>High-performance deterministic rigid-body physics engine (facade package).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+    <ProjectReference Include="..\PhiEng.Collision\PhiEng.Collision.csproj" />
+    <ProjectReference Include="..\PhiEng.Broadphase\PhiEng.Broadphase.csproj" />
+    <ProjectReference Include="..\PhiEng.Dynamics\PhiEng.Dynamics.csproj" />
+  </ItemGroup>
+
+</Project>

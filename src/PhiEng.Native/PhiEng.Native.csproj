@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageId>PhiEng.Native</PackageId>
+    <Title>PhiEng.Native</Title>
+    <Description>Native FFI bridge for PhiEng (P/Invoke to phieng.dll/.so/.dylib).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Dynamics\PhiEng.Dynamics.csproj" />
+  </ItemGroup>
+
+  <!-- Include native binaries from runtimes/{rid}/native/ for NuGet packaging -->
+  <ItemGroup>
+    <None Include="runtimes/**/*.dll;runtimes/**/*.so;runtimes/**/*.dylib"
+          Pack="true"
+          PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Copy native binaries to output directory for local development -->
+  <ItemGroup>
+    <Content Include="runtimes\**\*.dll;runtimes\**\*.so;runtimes\**\*.dylib"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="runtimes\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
