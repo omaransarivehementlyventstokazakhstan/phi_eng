@@ -1,0 +1,18 @@
+[package]
+name = "phieng-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Math utilities for physics engine"
+documentation = "https://docs.rs/phieng-math"
+homepage = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
+keywords = ["physics", "math", "game-development"]
+categories = ["physics", "math", "game-development"]
+
+[dependencies]
+glam = { workspace = true }
+
+[features]
+default = []

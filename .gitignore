@@ -26,8 +26,10 @@ TestResults/
 .DS_Store
 Thumbs.db
 
-# Local-only legacy native dir (we stage runtimes/ instead)
-native/
+# Local-only legacy native dir at repo root (we stage runtimes/ instead).
+# Anchored with leading slash: a bare "native/" would also match
+# src/PhiEng.Native/runtimes/<rid>/native/, which MUST stay tracked.
+/native/
 
 # Secrets / env
 .env

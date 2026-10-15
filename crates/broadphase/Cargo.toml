@@ -1,0 +1,16 @@
+[package]
+name = "phieng-broadphase"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Broad phase collision detection for physics engine"
+documentation = "https://docs.rs/phieng-broadphase"
+homepage = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
+keywords = ["physics", "broadphase", "game-development"]
+categories = ["physics", "game-development"]
+
+[dependencies]
+phieng-math = { path = "../math", version = "0.3.0" }
+glam = { workspace = true }

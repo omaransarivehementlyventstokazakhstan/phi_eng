@@ -1,0 +1,13 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 04a48c1f7863e85d1a6a23925056bbddac13e52c7126c0560784438437ea5d4f # shrinks to positions = [Vec2(0.0, 0.0), Vec2(0.0, 0.0), Vec2(0.0, 0.0)], shapes = [Circle { radius: 0.01 }], densities = [0.01], velocities = [Vec2(0.0, 0.0)], dampings = [0.0], gravity = Vec2(0.0, 0.0)
+cc f2d5fe4fa853d3fd163a8a7b53a6ff0d9fdd1297cda286800a1dd6f48245f47f # shrinks to positions = [Vec2(0.0, 0.0), Vec2(0.0, 0.0)], shapes = [Circle { radius: 0.01 }], densities = [0.1], velocities = [Vec2(0.0, 0.0)]
+cc 5ed4ee5b4a921f5134b54f2e2ef79c33160cd2d562d88906959a7b3583083c08 # shrinks to positions = [Vec2(0.0, 0.0), Vec2(0.0, 0.0)], shapes = [Polygon { vertices: [Vec2(0.0, 0.0), Vec2(0.0, -6.7831283), Vec2(0.23567265, 0.0)] }, Polygon { vertices: [Vec2(8.426042, 0.0), Vec2(0.0, 0.0), Vec2(0.0, -1.0287566)] }], densities = [0.1, 0.1], velocities = [Vec2(8.279695, 0.0), Vec2(0.0, -4.1262784)]
+cc dc1e2416e13505a9976e2dfcffe36f3ccb245a07804bb41559c1e61ab78c3c93 # shrinks to bodies = [(Vec2(0.0, 0.0), Circle { radius: 3.3557265 }, 0.1, Vec2(0.0, 0.0)), (Vec2(0.0, 0.0), Circle { radius: 0.01 }, 0.1, Vec2(0.0, -8.246461))]
+cc 4f52d4fb2194a4988999b8954249d86d7e3577cc20875fb249b8011e9c668f9f # shrinks to bodies = [(Vec2(0.0, -9.827568), Circle { radius: 2.8562322 }, 0.1, Vec2(0.0, 0.0)), (Vec2(0.0, -7.563857), Circle { radius: 2.0527232 }, 0.1, Vec2(-3.7351644, 0.0))]
+cc 5185fc58e76f51c3893b7837b955cd816925296acf8494c994dd670a9269dcec # shrinks to bodies = [(Vec2(0.0, -5.9596834), Circle { radius: 4.5996766 }, 0.1, Vec2(0.0, 0.0)), (Vec2(0.0, 0.0), Circle { radius: 2.5533302 }, 0.1, Vec2(0.0, -1.2558602))]
+cc fa23bfe9a3e22ff628079742a5bf17c67c4fb3434f0a0fe40ca9e2f3fef5d6f4 # shrinks to bodies = [(Vec2(-3.3219452, -5.122625), Box { half_extents: Vec2(1.9760066, 3.636607) }, 0.1, Vec2(0.0, 0.0), 0.01), (Vec2(-4.0777993, 0.0), Circle { radius: 3.1949217 }, 0.1, Vec2(0.0, 8.420357), 0.01)]
