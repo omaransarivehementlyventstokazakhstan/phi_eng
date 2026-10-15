@@ -10,6 +10,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -31,6 +34,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -56,6 +62,9 @@ jobs:
   # version must agree (single release version across both ecosystems).
   version-check:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - name: Cargo and MSBuild versions agree
@@ -69,6 +78,9 @@ jobs:
   # Only the library targets are checked: examples/benches may use newer sugar.
   msrv:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.78
@@ -79,6 +91,9 @@ jobs:
   # the recorded profile. Timing is NOT gated (CI runners are noisy).
   bench-smoke:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,6 +104,9 @@ jobs:
   bench-native:
     runs-on: ubuntu-latest
     continue-on-error: true
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -98,6 +116,9 @@ jobs:
   # From-scratch host example: a broken example is a broken build.
   host-smoke:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -109,6 +130,9 @@ jobs:
   # README smoke: validate hello samples compile and run (5-min hello-worlds).
   readme-smoke:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
