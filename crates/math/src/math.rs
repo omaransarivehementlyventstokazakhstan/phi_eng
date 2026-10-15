@@ -16,8 +16,12 @@ pub const ANGULAR_SLEEP_THRESHOLD: f32 = 0.05;
 pub const CONTACT_MATCH_DIST_SQ: f32 = 0.04;
 pub const RESTITUTION_THRESHOLD: f32 = 1.0;
 
+/// Scale tolerance by characteristic length (see [`EPS`]).
+///
+/// Not `const`: float arithmetic in `const fn` requires a newer rustc
+/// than the crate MSRV (1.78). Runtime cost is one `max` + one mul.
 #[inline]
-pub const fn scaled_eps(len: f32) -> f32 {
+pub fn scaled_eps(len: f32) -> f32 {
     EPS * len.max(1.0)
 }
 
