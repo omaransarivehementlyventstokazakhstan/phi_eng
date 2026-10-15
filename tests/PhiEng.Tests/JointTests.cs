@@ -85,7 +85,7 @@ public class JointTests
     {
         var (world, ball) = BallOnRod();
         world.AddJoint(new DistanceJoint(0, ball, Vector2.Zero, Vector2.Zero, 2.0f, 0.0f, world.Bodies.Count));
-        Assert.Equal(1, world.Joints.Count);
+        Assert.Single(world.Joints);
         world.RemoveBody(ball);
         Assert.Empty(world.Joints);
         for (int i = 0; i < 10; i++) world.Step(Dt);

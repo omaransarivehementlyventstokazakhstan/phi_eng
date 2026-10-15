@@ -292,7 +292,7 @@ public class NativeInteropTests
     }
 
     [Fact]
-    public void F30_DisposeUnderConcurrentStep()
+    public async Task F30_DisposeUnderConcurrentStep()
     {
         // The gate lock serializes native calls (Rust step takes &mut) and
         // closes the Dispose/Step check-then-use race. Under hammering,
@@ -328,7 +328,7 @@ public class NativeInteropTests
             for (int d = 0; d < 3; d++) world.Dispose(); // concurrent + repeated dispose
         }));
         go.Set();
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks);
         foreach (var ex in errors)
             Assert.IsType<ObjectDisposedException>(ex);
         Assert.Throws<ObjectDisposedException>(() => world.Step(1.0f / 60.0f));

@@ -23,11 +23,8 @@
     <ProjectReference Include="..\..\src\PhiEng.Native\PhiEng.Native.csproj" />
   </ItemGroup>
 
-  <!-- Stage the Rust-built native library next to the test binaries so
-       P/Invoke resolves phieng at runtime. Rebuild it with
-       cargo build using the windows-gnu target, then copy the DLL here. -->
-  <ItemGroup>
-    <None Include="..\..\native\win-x64\phieng.dll" Link="phieng.dll" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
+  <!-- Native libraries reach the test output via the PhiEng.Native
+       project reference (runtimes/{rid}/native/), which is exactly what
+       the DllImportResolver probes. No per-test copy needed. -->
 
 </Project>
