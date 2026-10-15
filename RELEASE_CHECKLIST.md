@@ -72,5 +72,5 @@ plus a line in this section.
       (Current policy: version files always hold the *next* release
       number; see `API_STABILITY.md`.)
 - [ ] Rename the GitHub repository itself if not yet done
-      (`github.com/omaransarivehementlyventstokazakhstan/phieng`);
+      (`github.com/omaransarivehementlyventstokazakhstan/phi_eng`);
       code URLs already point at the new name.

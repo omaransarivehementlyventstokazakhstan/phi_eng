@@ -31,7 +31,7 @@ cmake --version          # 3.25+
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/omaransarivehementlyventstokazakhstan/phieng.git
+git clone https://github.com/omaransarivehementlyventstokazakhstan/phi_eng.git
 cd phieng
 ```
 
@@ -234,7 +234,7 @@ All jobs must pass before merge.
 
 ### Prerequisites
 - `NUGET_API_KEY` secret configured in GitHub repository settings
-- Write access to `omaransarivehementlyventstokazakhstan/phieng`
+- Write access to `omaransarivehementlyventstokazakhstan/phi_eng`
 
 ### Steps
 

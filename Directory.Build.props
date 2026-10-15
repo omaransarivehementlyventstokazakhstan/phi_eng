@@ -5,8 +5,8 @@
     <Company>PhiEng</Company>
     <Product>PhiEng</Product>
     <PackageLicenseExpression>Unlicense</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/omaransarivehementlyventstokazakhstan/phieng</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/omaransarivehementlyventstokazakhstan/phieng</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/omaransarivehementlyventstokazakhstan/phi_eng</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/omaransarivehementlyventstokazakhstan/phi_eng</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>physics engine simulation rigid-body</PackageTags>
     <Description>High-performance deterministic rigid-body physics engine with 2D/3D support, joints, snapshots, and FFI bridge.</Description>

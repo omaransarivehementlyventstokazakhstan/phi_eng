@@ -14,7 +14,7 @@ version = "0.3.0"
 edition = "2021"
 license = "Unlicense"
 authors = ["Omar"]
-repository = "https://github.com/omaransarivehementlyventstokazakhstan/phieng"
+repository = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
 
 [workspace.dependencies]
 glam = "0.29"
