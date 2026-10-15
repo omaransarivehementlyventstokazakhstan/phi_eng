@@ -4,7 +4,17 @@ using PhiEng.Math;
 namespace PhiEng.Dynamics;
 
 /// <summary>3D shape discriminator.</summary>
-public enum Shape3Type { Sphere, Box, Capsule, ConvexHull }
+public enum Shape3Type
+{
+    /// <summary>Sphere collider.</summary>
+    Sphere,
+    /// <summary>Axis-aligned box collider.</summary>
+    Box,
+    /// <summary>Capsule collider.</summary>
+    Capsule,
+    /// <summary>Convex hull collider.</summary>
+    ConvexHull,
+}
 
 /// <summary>3D shape base class.</summary>
 public abstract class Shape3

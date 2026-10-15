@@ -127,6 +127,12 @@ public sealed class DistanceJoint : Joint2
     /// on unknown/stale bodies, shared endpoints, non-finite anchors, negative
     /// rest length, or non-zero compliance (rigid-only v1).
     /// </summary>
+    /// <param name="bodyA">First body id.</param>
+    /// <param name="bodyB">Second body id.</param>
+    /// <param name="anchorA">Anchor on A in A's local frame.</param>
+    /// <param name="anchorB">Anchor on B in B's local frame.</param>
+    /// <param name="restLength">Maintained anchor separation.</param>
+    /// <param name="compliance">Must be zero (rigid joints only).</param>
     /// <param name="bodyCount">Current body count, for endpoint validation.</param>
     public DistanceJoint(int bodyA, int bodyB, Vector2 anchorA, Vector2 anchorB,
         float restLength, float compliance, int bodyCount)
@@ -220,6 +226,13 @@ public sealed class HingeJoint : Joint2
     /// Throws <see cref="ArgumentException"/> on bad endpoints, non-finite
     /// anchors/limits, or non-zero compliance.
     /// </summary>
+    /// <param name="bodyA">First body id.</param>
+    /// <param name="bodyB">Second body id.</param>
+    /// <param name="anchorA">Anchor on A in A's local frame.</param>
+    /// <param name="anchorB">Anchor on B in B's local frame.</param>
+    /// <param name="limitMin">Twist lower bound (radians).</param>
+    /// <param name="limitMax">Twist upper bound (radians).</param>
+    /// <param name="compliance">Must be zero (rigid joints only).</param>
     /// <param name="bodyCount">Current body count, for endpoint validation.</param>
     public HingeJoint(int bodyA, int bodyB, Vector2 anchorA, Vector2 anchorB,
         float limitMin, float limitMax, float compliance, int bodyCount)
@@ -349,6 +362,14 @@ public sealed class PrismaticJoint : Joint2
     /// <see cref="ArgumentException"/> on bad endpoints, non-finite/zero axis,
     /// non-finite limits, or non-zero compliance.
     /// </summary>
+    /// <param name="bodyA">First body id.</param>
+    /// <param name="bodyB">Second body id.</param>
+    /// <param name="anchorA">Anchor on A in A's local frame.</param>
+    /// <param name="anchorB">Anchor on B in B's local frame.</param>
+    /// <param name="axisA">Slide axis in A's local frame.</param>
+    /// <param name="limitMin">Travel lower bound.</param>
+    /// <param name="limitMax">Travel upper bound.</param>
+    /// <param name="compliance">Must be zero (rigid joints only).</param>
     /// <param name="bodyCount">Current body count, for endpoint validation.</param>
     public PrismaticJoint(int bodyA, int bodyB, Vector2 anchorA, Vector2 anchorB,
         Vector2 axisA, float limitMin, float limitMax, float compliance, int bodyCount)
@@ -499,6 +520,11 @@ public sealed class FixedJoint : Joint2
     /// solve. Throws <see cref="ArgumentException"/> on bad endpoints,
     /// non-finite anchors, or non-zero compliance.
     /// </summary>
+    /// <param name="bodyA">First body id.</param>
+    /// <param name="bodyB">Second body id.</param>
+    /// <param name="anchorA">Anchor on A in A's local frame.</param>
+    /// <param name="anchorB">Anchor on B in B's local frame.</param>
+    /// <param name="compliance">Must be zero (rigid joints only).</param>
     /// <param name="bodyCount">Current body count, for endpoint validation.</param>
     public FixedJoint(int bodyA, int bodyB, Vector2 anchorA, Vector2 anchorB,
         float compliance, int bodyCount)

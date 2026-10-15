@@ -131,7 +131,17 @@ public struct FixedJoint3
 /// Mirrors Rust <c>Joint3</c>.
 /// </summary>
 /// <summary>3D joint discriminator.</summary>
-public enum Joint3Type { Distance3, Hinge3, Prismatic3, Fixed3 }
+public enum Joint3Type
+{
+    /// <summary>Distance rod.</summary>
+    Distance3,
+    /// <summary>Revolute hinge.</summary>
+    Hinge3,
+    /// <summary>Linear slider.</summary>
+    Prismatic3,
+    /// <summary>Rigid weld.</summary>
+    Fixed3,
+}
 
 /// <summary>
 /// 3D joint container with type dispatch. Mirrors Rust <c>Joint3</c> enum.

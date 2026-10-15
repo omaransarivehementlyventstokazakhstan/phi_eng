@@ -8,6 +8,7 @@ jobs:
   rust:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     defaults:
@@ -32,6 +33,7 @@ jobs:
   csharp:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     defaults:
@@ -44,7 +46,7 @@ jobs:
           target: ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-gnu' }}
       - name: Build native (ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo build --release -p phieng
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p phieng
       - name: Stage native linux
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -139,7 +141,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
       - name: Build native (ubuntu)
-        run: cargo build --release -p phieng
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p phieng
       - name: Stage native linux
         run: |
           mkdir -p src/PhiEng.Native/runtimes/linux-x64/native
