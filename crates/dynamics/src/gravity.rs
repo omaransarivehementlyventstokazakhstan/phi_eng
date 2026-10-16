@@ -473,8 +473,10 @@ mod tests {
     fn test_config_defaults() {
         assert!(GravityConfig2::default().is_default());
         assert!(GravityConfig3::default().is_default());
-        let mut c = GravityConfig2::default();
-        c.mode = GravityMode::NBody;
+        let c = GravityConfig2 {
+            mode: GravityMode::NBody,
+            ..Default::default()
+        };
         assert!(!c.is_default());
         assert_eq!(GravityMode::NBody as u32, 2);
         assert_eq!(GravityMode::BarnesHut as u32, 3);

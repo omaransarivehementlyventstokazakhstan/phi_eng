@@ -178,7 +178,7 @@ fn orbital_min_separation_2d(world: &World2) -> f32 {
 /// Bodies are tiny (r=0.05) point-mass proxies so contacts never fire.
 #[test]
 fn orbital_figure8_choreography() {
-    const T: f32 = 6.32591398;
+    const T: f32 = 6.325914;
     const PERIODS: usize = 5;
     let steps = (T * PERIODS as f32 / ORBITAL_DT).round() as usize;
 
@@ -187,14 +187,14 @@ fn orbital_figure8_choreography() {
     // (pos, vel) initial conditions, body 3 last.
     let ics = [
         (
-            Vec2::new(0.97000436, -0.24308753),
-            Vec2::new(0.4662036850, 0.4323657300),
+            Vec2::new(0.9700044, -0.24308753),
+            Vec2::new(0.4662037, 0.43236572),
         ),
         (
-            Vec2::new(-0.97000436, 0.24308753),
-            Vec2::new(0.4662036850, 0.4323657300),
+            Vec2::new(-0.9700044, 0.24308753),
+            Vec2::new(0.4662037, 0.43236572),
         ),
-        (Vec2::new(0.0, 0.0), Vec2::new(-0.93240737, -0.86473146)),
+        (Vec2::new(0.0, 0.0), Vec2::new(-0.9324074, -0.86473146)),
     ];
 
     for (label, verlet) in [("euler", false), ("verlet", true)] {
@@ -642,12 +642,6 @@ fn orbital_burrau_pythagorean() {
     }
 }
 
-/// Plummer sphere cluster (N=1000, G=1, M=1, a=1): the standard
-/// equilibrium N-body test. Positions sampled from the Plummer density,
-/// velocities from the Plummer velocity distribution (rejection).
-/// Asserts virial ratio Q≈0.5, energy drift bound, finite; compares
-/// exact vs BH timing and accuracy.
-#[test]
 /// Plummer sphere cluster (N=1000, G=1, M=1, a=10): the standard
 /// equilibrium N-body test. Scale radius a=10 (not 1) keeps the central
 /// density low enough that fixed-dt integration is meaningful — with a=1

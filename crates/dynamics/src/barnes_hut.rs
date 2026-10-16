@@ -622,8 +622,10 @@ mod tests {
         for theta in [0.0, 0.3, 0.5, 1.0, 5.0] {
             let mut exact = two_bodies_2d();
             let mut approx = two_bodies_2d();
-            let mut cfg = GravityConfig2::default();
-            cfg.mode = GravityMode::NBody;
+            let cfg = GravityConfig2 {
+                mode: GravityMode::NBody,
+                ..Default::default()
+            };
             gravity_kick_2(&mut exact, &cfg, Vec2::ZERO, 1.0 / 60.0, false);
             apply_bh_forces_2(&mut approx, 1.0, 0.0, theta, 1.0 / 60.0, false);
             assert_eq!(exact[0].velocity, approx[0].velocity);
@@ -683,8 +685,10 @@ mod tests {
         }
         let mut exact = bodies.clone();
         let mut approx = bodies.clone();
-        let mut cfg = GravityConfig2::default();
-        cfg.mode = GravityMode::NBody;
+        let cfg = GravityConfig2 {
+            mode: GravityMode::NBody,
+            ..Default::default()
+        };
         gravity_kick_2(&mut exact, &cfg, Vec2::ZERO, 1.0, false);
         apply_bh_forces_2(&mut approx, 1.0, 0.0, 1.0, 1.0, false);
         // Exact pull on the query: ~4 * 1/400 = 0.01. Relative error
@@ -736,8 +740,10 @@ mod tests {
         };
         let mut exact = vec![mk(0, Vec3::ZERO, 2.0), mk(1, Vec3::new(1.0, 2.0, 3.0), 5.0)];
         let mut approx = exact.clone();
-        let mut cfg = GravityConfig3::default();
-        cfg.mode = GravityMode::NBody;
+        let cfg = GravityConfig3 {
+            mode: GravityMode::NBody,
+            ..Default::default()
+        };
         gravity_kick_3(&mut exact, &cfg, Vec3::ZERO, 1.0 / 60.0, false);
         apply_bh_forces_3(&mut approx, 1.0, 0.0, 0.7, 1.0 / 60.0, false);
         assert_eq!(exact[0].velocity, approx[0].velocity);
