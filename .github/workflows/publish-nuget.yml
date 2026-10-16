@@ -1,4 +1,4 @@
-name: Publish NuGet Packages
+﻿name: Publish NuGet Packages
 
 on:
   release:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.3.1)'
+        description: 'Version to publish (e.g., 0.4.0)'
         required: true
         type: string
 

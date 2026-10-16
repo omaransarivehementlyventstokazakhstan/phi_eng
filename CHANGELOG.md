@@ -7,14 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-16
+
 ### Added
 - **Gravitational physics core (Rust)**: `GravityMode` (uniform /
   central attractor / full N-body pairwise with softening),
   per-body `gravity_scale`, and a velocity-Verlet integrator option,
   in a new `phieng_dynamics::gravity` module. Snapshot schema is now
   v4 (conditional: default-gravity worlds still write byte-identical
-  v3; loaders accept both). FFI surface, managed C# mirror, and
-  cross-language parity tests land in a later phase.
+  v3; loaders accept both).
 - **Barnes-Hut approximation (Rust)**: `GravityMode::BarnesHut`
   with per-world `theta` replaces the O(n^2) pairwise loop with a
   deterministic quadtree/octree (index-order insertion, fixed-order
@@ -25,14 +26,23 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Gravity FFI surface**: `set/get_gravity_config` (mode, integrator,
   G, softening, attractor, mu, theta), per-body
   `set/get_body_gravity_scale`, and `set/get_sleep_thresholds` (2D +
-  3D, same null-tolerant status-code conventions, per-slot `-1`/NaN
-  semantics for bulk paths unchanged).
+  3D, same null-tolerant status-code conventions).
 - **Managed C# gravity mirror**: `GravityMode`/`Integrator`/
   `GravityConfig2/3`, per-body `GravityScale`, mode-aware kicks +
   velocity-Verlet drift and a deterministic Barnes-Hut port in
   `PhiEng.Dynamics`, with snapshot schema v4 support (conditional
   versions, range-checked) in `Snapshot.cs`. Managed/native agreement
   is within tolerances (bit-equality never claimed cross-language).
+- **Bulk FFI transfers**: `add_bodies` / `get_transforms_bulk`
+  (2D + 3D) move whole arrays in one transition (per-slot `-1`/NaN
+  failure semantics, no rollback); `Try*` getter overloads and
+  `SuppressGCTransition` on trivial calls cut polling overhead.
+- **Gravity parity block G01–G10** (mirrored Rust↔C#, enforced):
+  orbit stability, N-body determinism, Verlet energy order,
+  softening safety, probe exemption, snapshot round-trips, BH
+  determinism, plus a compact 3D set.
+- **`bench_gravity` example**: exact-vs-BH crossover harness
+  (deterministic hashes, portable profile).
 
 ## [0.3.1] - 2026-10-15
 

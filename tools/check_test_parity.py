@@ -18,6 +18,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     V01-V11  runtime validation layer (mirrored both languages)
     J31-J44  joint constraints (mirrored both languages)
     E01-E07  snapshots save/load (mirrored both languages)
+    G01-G10  gravitational physics (mirrored both languages: G01-G07
+             2D contract — orbit, determinism, Verlet energy order,
+             softening safety, probes, snapshot round-trip, BH
+             determinism; G08-G10 compact 3D set — orbit, determinism,
+             snapshot)
 
 This script extracts IDs from Rust test fns (crates/**/*.rs) and C# test
 methods (tests/**/*.cs) and fails (exit 1) on any drift outside the

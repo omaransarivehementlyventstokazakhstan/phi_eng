@@ -689,3 +689,324 @@ fn gravity3_bh_deterministic() {
     }
     assert_worlds_equal_3d(&a, &b);
 }
+
+// ---------------------------------------------------------------------------
+// G parity block (mirrored by G01-G10 in tests/PhiEng.Tests/GravityTests.cs;
+// enforced by tools/check_test_parity.py). Cross-language bit-equality is
+// NOT claimed — each side asserts run-twice determinism plus
+// tolerance-bounded physics behavior on mirrored scenes.
+// ---------------------------------------------------------------------------
+
+/// G01: central circular orbit holds its radius, deterministically.
+#[test]
+fn g01_central_orbit_stable() {
+    fn scene() -> World2 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::Central;
+        w.gravity_config.attractor_mu = 100.0;
+        let v = (100.0f32 / 10.0).sqrt();
+        let id = w
+            .add_dynamic_body(Vec2::new(10.0, 0.0), Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        w.bodies[id].velocity = Vec2::new(0.0, v);
+        no_damping_no_sleep_2d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let mut b = scene();
+    for _ in 0..600 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_2d(&a, &b);
+    let r = a.bodies[0].transform.position.length();
+    assert!((r - 10.0).abs() / 10.0 < 0.10, "orbit decayed: r={r}");
+}
+
+/// G02: N-body momentum conservation + determinism.
+#[test]
+fn g02_nbody_deterministic() {
+    fn scene() -> World2 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::NBody;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        for (p, r) in [
+            (Vec2::new(-20.0, 0.0), 0.5),
+            (Vec2::new(15.0, 5.0), 0.7),
+            (Vec2::new(0.0, -15.0), 1.0),
+        ] {
+            w.add_dynamic_body(p, Shape2::Circle { radius: r }, 1.0)
+                .expect("valid shape");
+        }
+        no_damping_no_sleep_2d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let p0 = total_momentum_2d(&a);
+    let mut b = scene();
+    for _ in 0..300 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_2d(&a, &b);
+    let p1 = total_momentum_2d(&a);
+    assert!((p1 - p0).length() < 1e-2, "momentum drifted");
+}
+
+/// G03: Verlet energy drift is clearly smaller than Euler's.
+#[test]
+fn g03_verlet_energy_order() {
+    fn max_drift(verlet: bool) -> f32 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::Central;
+        w.gravity_config.attractor_mu = 100.0;
+        if verlet {
+            w.gravity_config.integrator = Integrator::VelocityVerlet;
+        }
+        let v = (100.0f32 / 10.0).sqrt();
+        let id = w
+            .add_dynamic_body(Vec2::new(10.0, 0.0), Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        w.bodies[id].velocity = Vec2::new(0.0, v);
+        no_damping_no_sleep_2d(&mut w);
+        let b = &w.bodies[id];
+        let e0 = specific_energy_2d(b.transform.position, b.velocity, 100.0);
+        let mut worst = 0.0f32;
+        for step in 0..600 {
+            w.step(DT);
+            if step % 60 == 0 {
+                let b = &w.bodies[id];
+                let e = specific_energy_2d(b.transform.position, b.velocity, 100.0);
+                worst = worst.max((e - e0).abs() / e0.abs());
+            }
+        }
+        worst
+    }
+    assert!(max_drift(true) < max_drift(false) * 0.5);
+}
+
+/// G04: coincident bodies stay finite (softening skip guard).
+#[test]
+fn g04_softening_coincident_safe() {
+    let mut w = World2::new();
+    w.gravity = Vec2::ZERO;
+    w.gravity_config.mode = GravityMode::NBody;
+    w.gravity_config.big_g = 1.0;
+    w.gravity_config.softening = 0.0;
+    for _ in 0..2 {
+        w.add_dynamic_body(Vec2::ZERO, Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+    }
+    no_damping_no_sleep_2d(&mut w);
+    for _ in 0..60 {
+        w.step(DT);
+    }
+    for body in &w.bodies {
+        assert!(body.transform.position.x.is_finite());
+        assert!(body.velocity.x.is_finite());
+    }
+}
+
+/// G05: immune probe never moves; tiny-density probe follows the field.
+#[test]
+fn g05_probe_exempt() {
+    let mut w = World2::new();
+    w.gravity = Vec2::ZERO;
+    w.gravity_config.mode = GravityMode::NBody;
+    w.gravity_config.big_g = 1.0;
+    w.gravity_config.softening = 0.1;
+    w.add_static_body(
+        Vec2::ZERO,
+        Shape2::Box {
+            half_extents: Vec2::new(5.0, 5.0),
+        },
+    )
+    .expect("valid shape");
+    let immune = w
+        .add_dynamic_body(Vec2::new(60.0, 0.0), Shape2::Circle { radius: 0.5 }, 1.0)
+        .expect("valid shape");
+    w.bodies[immune].gravity_scale = 0.0;
+    let probe = w
+        .add_dynamic_body(Vec2::new(-60.0, 0.0), Shape2::Circle { radius: 0.5 }, 1e-7)
+        .expect("valid shape");
+    for _ in 0..120 {
+        w.step(DT);
+    }
+    assert_eq!(w.bodies[immune].transform.position, Vec2::new(60.0, 0.0));
+    assert!(w.bodies[probe].transform.position.x > -60.0);
+}
+
+/// G06: N-body + Verlet + scales snapshot round-trip with continuation.
+#[test]
+fn g06_snapshot_roundtrip() {
+    fn scene() -> World2 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::NBody;
+        w.gravity_config.integrator = Integrator::VelocityVerlet;
+        w.gravity_config.big_g = 2.0;
+        w.gravity_config.softening = 0.1;
+        for (p, s) in [(Vec2::new(-8.0, 0.0), 1.0), (Vec2::new(8.0, 0.0), 0.5)] {
+            let id = w
+                .add_dynamic_body(p, Shape2::Circle { radius: 0.5 }, 1.0)
+                .expect("valid shape");
+            w.bodies[id].gravity_scale = s;
+        }
+        no_damping_no_sleep_2d(&mut w);
+        w
+    }
+    let mut direct = scene();
+    for _ in 0..30 {
+        direct.step(DT);
+    }
+    let json = world2_to_json(&direct, LoadMode::Exact).expect("serializes");
+    let bytes = world2_to_binary(&direct, LoadMode::Exact).expect("serializes");
+    let mut from_json = world2_from_json(&json, LoadMode::Exact).expect("json loads");
+    let mut from_bin = world2_from_binary(&bytes, LoadMode::Exact).expect("bin loads");
+    assert_eq!(from_json.gravity_config.mode, GravityMode::NBody);
+    assert_eq!(from_bin.bodies[1].gravity_scale, 0.5);
+    for _ in 0..30 {
+        direct.step(DT);
+        from_json.step(DT);
+        from_bin.step(DT);
+    }
+    assert_worlds_equal_2d(&direct, &from_json);
+    assert_worlds_equal_2d(&direct, &from_bin);
+}
+
+/// G07: Barnes-Hut determinism on a 20-body scene.
+#[test]
+fn g07_bh_deterministic() {
+    fn scene() -> World2 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::BarnesHut;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        w.gravity_config.theta = 0.5;
+        for i in 0..20 {
+            w.add_dynamic_body(
+                Vec2::new(
+                    (i as f32 * 1.7) % 20.0 - 10.0,
+                    (i as f32 * 2.3) % 20.0 - 10.0,
+                ),
+                Shape2::Circle { radius: 0.5 },
+                1.0,
+            )
+            .expect("valid shape");
+        }
+        no_damping_no_sleep_2d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let mut b = scene();
+    for _ in 0..60 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_2d(&a, &b);
+}
+
+/// G08: 3D central orbit holds its radius, deterministically.
+#[test]
+fn g08_central_orbit_stable_3d() {
+    fn scene() -> World3 {
+        let mut w = World3::new();
+        w.gravity = Vec3::ZERO;
+        w.gravity_config.mode = GravityMode::Central;
+        w.gravity_config.attractor_mu = 100.0;
+        let v = (100.0f32 / 10.0).sqrt();
+        let id = w
+            .add_dynamic_body(
+                Vec3::new(10.0, 0.0, 0.0),
+                Shape3::Sphere { radius: 0.5 },
+                1.0,
+            )
+            .expect("valid shape");
+        w.bodies[id].velocity = Vec3::new(0.0, v, 0.0);
+        no_damping_no_sleep_3d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let mut b = scene();
+    for _ in 0..600 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_3d(&a, &b);
+    let p = a.bodies[0].transform.position;
+    let r = Vec2::new(p.x, p.y).length();
+    assert!((r - 10.0).abs() / 10.0 < 0.10, "orbit decayed: r={r}");
+}
+
+/// G09: 3D N-body momentum conservation + determinism.
+#[test]
+fn g09_nbody_deterministic_3d() {
+    fn scene() -> World3 {
+        let mut w = World3::new();
+        w.gravity = Vec3::ZERO;
+        w.gravity_config.mode = GravityMode::NBody;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        for (p, r) in [
+            (Vec3::new(-20.0, 0.0, 1.0), 0.5),
+            (Vec3::new(15.0, 5.0, -1.0), 0.8),
+        ] {
+            w.add_dynamic_body(p, Shape3::Sphere { radius: r }, 1.0)
+                .expect("valid shape");
+        }
+        no_damping_no_sleep_3d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let p0 = total_momentum_3d(&a);
+    let mut b = scene();
+    for _ in 0..300 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_3d(&a, &b);
+    let p1 = total_momentum_3d(&a);
+    assert!((p1 - p0).length() < 1e-2, "momentum drifted");
+}
+
+/// G10: 3D N-body + Verlet + scales snapshot round-trip.
+#[test]
+fn g10_snapshot_roundtrip_3d() {
+    let mut direct = World3::new();
+    direct.gravity = Vec3::ZERO;
+    direct.gravity_config.mode = GravityMode::NBody;
+    direct.gravity_config.integrator = Integrator::VelocityVerlet;
+    direct.gravity_config.big_g = 1.5;
+    direct.gravity_config.softening = 0.2;
+    for (p, s) in [
+        (Vec3::new(-6.0, 0.0, 0.0), 1.0),
+        (Vec3::new(6.0, 0.0, 0.0), 0.25),
+    ] {
+        let id = direct
+            .add_dynamic_body(p, Shape3::Sphere { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        direct.bodies[id].gravity_scale = s;
+    }
+    no_damping_no_sleep_3d(&mut direct);
+    for _ in 0..30 {
+        direct.step(DT);
+    }
+    let json = world3_to_json(&direct, LoadMode::Exact).expect("serializes");
+    let bytes = world3_to_binary(&direct, LoadMode::Exact).expect("serializes");
+    let mut from_json = world3_from_json(&json, LoadMode::Exact).expect("json loads");
+    let mut from_bin = world3_from_binary(&bytes, LoadMode::Exact).expect("bin loads");
+    assert_eq!(from_json.gravity_config.mode, GravityMode::NBody);
+    assert_eq!(from_bin.bodies[1].gravity_scale, 0.25);
+    for _ in 0..30 {
+        direct.step(DT);
+        from_json.step(DT);
+        from_bin.step(DT);
+    }
+    assert_worlds_equal_3d(&direct, &from_json);
+    assert_worlds_equal_3d(&direct, &from_bin);
+}

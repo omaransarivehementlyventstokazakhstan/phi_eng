@@ -481,4 +481,443 @@ public class GravityTests
             try { System.IO.File.Delete(pj); } catch { }
         }
     }
+
+    // ------------------------------------------------------------------
+    // G parity block (mirrored by g01-g10 in crates/engine/tests/gravity.rs;
+    // enforced by tools/check_test_parity.py). Cross-language bit-equality
+    // is NOT claimed — each side asserts run-twice determinism plus
+    // tolerance-bounded physics behavior on mirrored scenes.
+    // ------------------------------------------------------------------
+
+    private static World2 OrbitScene(out int probe)
+    {
+        var w = new World2();
+        w.Gravity = Vector2.Zero;
+        w.GravityConfig = new GravityConfig2
+        {
+            Mode = GravityMode.Central,
+            Integrator = Integrator.SemiImplicitEuler,
+            BigG = 1.0f,
+            Softening = 0.0f,
+            Attractor = Vector2.Zero,
+            AttractorMu = 100.0f,
+            Theta = 0.5f,
+        };
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        float v = MathF.Sqrt(100.0f / 10.0f);
+        probe = w.AddDynamicBody(new Vector2(10.0f, 0.0f), new CircleShape(0.5f), 1.0f);
+        w.Bodies[probe].Velocity = new Vector2(0.0f, v);
+        w.Bodies[probe].LinearDamping = 0.0f;
+        w.Bodies[probe].AngularDamping = 0.0f;
+        return w;
+    }
+
+    private static void AssertWorldsEqual(World2 a, World2 b)
+    {
+        Assert.Equal(a.Bodies.Count, b.Bodies.Count);
+        for (int i = 0; i < a.Bodies.Count; i++)
+        {
+            Assert.Equal(a.Bodies[i].Transform.Position, b.Bodies[i].Transform.Position);
+            Assert.Equal(a.Bodies[i].Velocity, b.Bodies[i].Velocity);
+            Assert.Equal(a.Bodies[i].AngularVelocity, b.Bodies[i].AngularVelocity);
+        }
+    }
+
+    private static void AssertWorldsEqual(World3 a, World3 b)
+    {
+        Assert.Equal(a.Bodies.Count, b.Bodies.Count);
+        for (int i = 0; i < a.Bodies.Count; i++)
+        {
+            Assert.Equal(a.Bodies[i].Transform.Position, b.Bodies[i].Transform.Position);
+            Assert.Equal(a.Bodies[i].Velocity, b.Bodies[i].Velocity);
+            Assert.Equal(a.Bodies[i].AngularVelocity, b.Bodies[i].AngularVelocity);
+        }
+    }
+
+    private static Vector2 TotalMomentum(World2 w)
+    {
+        var p = Vector2.Zero;
+        foreach (var b in w.Bodies) p += b.Velocity * b.Mass;
+        return p;
+    }
+
+    private static float SpecificEnergy(Vector2 pos, Vector2 vel, float mu)
+    {
+        return 0.5f * vel.LengthSquared() - mu / MathF.Max(pos.Length(), 1e-6f);
+    }
+
+    /// <summary>G01: central circular orbit holds its radius, deterministically.</summary>
+    [Fact]
+    public void G01_CentralOrbitStable()
+    {
+        var a = OrbitScene(out _);
+        var b = OrbitScene(out _);
+        for (int i = 0; i < 600; i++)
+        {
+            a.Step(Dt);
+            b.Step(Dt);
+        }
+        AssertWorldsEqual(a, b);
+        float r = a.Bodies[0].Transform.Position.Length();
+        Assert.True(MathF.Abs(r - 10.0f) / 10.0f < 0.10f, $"orbit decayed: r={r}");
+    }
+
+    /// <summary>G02: N-body momentum conservation + determinism.</summary>
+    [Fact]
+    public void G02_NBodyDeterministic()
+    {
+        World2 Scene()
+        {
+            var w = new World2();
+            w.Gravity = Vector2.Zero;
+            w.GravityConfig = new GravityConfig2
+            {
+                Mode = GravityMode.NBody,
+                Integrator = Integrator.SemiImplicitEuler,
+                BigG = 1.0f,
+                Softening = 0.1f,
+                Attractor = Vector2.Zero,
+                AttractorMu = 0.0f,
+                Theta = 0.5f,
+            };
+            w.LinearSleepThreshold = 0.0f;
+            w.AngularSleepThreshold = 0.0f;
+            foreach (var (p, r) in new[]
+            {
+                (new Vector2(-20.0f, 0.0f), 0.5f),
+                (new Vector2(15.0f, 5.0f), 0.7f),
+                (new Vector2(0.0f, -15.0f), 1.0f),
+            })
+            {
+                int id = w.AddDynamicBody(p, new CircleShape(r), 1.0f);
+                w.Bodies[id].LinearDamping = 0.0f;
+                w.Bodies[id].AngularDamping = 0.0f;
+            }
+            return w;
+        }
+        var a = Scene();
+        Vector2 p0 = TotalMomentum(a);
+        var b = Scene();
+        for (int i = 0; i < 300; i++)
+        {
+            a.Step(Dt);
+            b.Step(Dt);
+        }
+        AssertWorldsEqual(a, b);
+        Vector2 p1 = TotalMomentum(a);
+        Assert.True((p1 - p0).Length() < 1e-2f, "momentum drifted");
+    }
+
+    /// <summary>G03: Verlet energy drift is clearly smaller than Euler's.</summary>
+    [Fact]
+    public void G03_VerletEnergyOrder()
+    {
+        float MaxDrift(bool verlet)
+        {
+            var w = OrbitScene(out int id);
+            if (verlet)
+            {
+                var cfg = w.GravityConfig;
+                cfg.Integrator = Integrator.VelocityVerlet;
+                w.GravityConfig = cfg;
+            }
+            var bb = w.Bodies[id];
+            float e0 = SpecificEnergy(bb.Transform.Position, bb.Velocity, 100.0f);
+            float worst = 0.0f;
+            for (int step = 0; step < 600; step++)
+            {
+                w.Step(Dt);
+                if (step % 60 == 0)
+                {
+                    var cur = w.Bodies[id];
+                    float e = SpecificEnergy(cur.Transform.Position, cur.Velocity, 100.0f);
+                    worst = MathF.Max(worst, MathF.Abs(e - e0) / MathF.Abs(e0));
+                }
+            }
+            return worst;
+        }
+        Assert.True(MaxDrift(true) < MaxDrift(false) * 0.5f);
+    }
+
+    /// <summary>G04: coincident bodies stay finite (softening skip guard).</summary>
+    [Fact]
+    public void G04_SofteningCoincidentSafe()
+    {
+        var w = new World2();
+        w.Gravity = Vector2.Zero;
+        w.GravityConfig = new GravityConfig2
+        {
+            Mode = GravityMode.NBody,
+            Integrator = Integrator.SemiImplicitEuler,
+            BigG = 1.0f,
+            Softening = 0.0f,
+            Attractor = Vector2.Zero,
+            AttractorMu = 0.0f,
+            Theta = 0.5f,
+        };
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        for (int i = 0; i < 2; i++)
+        {
+            int id = w.AddDynamicBody(Vector2.Zero, new CircleShape(0.5f), 1.0f);
+            w.Bodies[id].LinearDamping = 0.0f;
+            w.Bodies[id].AngularDamping = 0.0f;
+        }
+        for (int i = 0; i < 60; i++) w.Step(Dt);
+        foreach (var body in w.Bodies)
+        {
+            Assert.True(float.IsFinite(body.Transform.Position.X));
+            Assert.True(float.IsFinite(body.Velocity.X));
+        }
+    }
+
+    /// <summary>G05: immune probe never moves; tiny-density probe follows the field.</summary>
+    [Fact]
+    public void G05_ProbeExempt()
+    {
+        var w = new World2();
+        w.Gravity = Vector2.Zero;
+        w.GravityConfig = new GravityConfig2
+        {
+            Mode = GravityMode.NBody,
+            Integrator = Integrator.SemiImplicitEuler,
+            BigG = 1.0f,
+            Softening = 0.1f,
+            Attractor = Vector2.Zero,
+            AttractorMu = 0.0f,
+            Theta = 0.5f,
+        };
+        w.AddStaticBody(Vector2.Zero, new BoxShape2(new Vector2(5.0f, 5.0f)));
+        int immune = w.AddDynamicBody(new Vector2(60.0f, 0.0f), new CircleShape(0.5f), 1.0f);
+        w.Bodies[immune].GravityScale = 0.0f;
+        int probe = w.AddDynamicBody(new Vector2(-60.0f, 0.0f), new CircleShape(0.5f), 1e-7f);
+        for (int i = 0; i < 120; i++) w.Step(Dt);
+        Assert.Equal(new Vector2(60.0f, 0.0f), w.Bodies[immune].Transform.Position);
+        Assert.True(w.Bodies[probe].Transform.Position.X > -60.0f);
+    }
+
+    /// <summary>G06: N-body + Verlet + scales snapshot round-trip with continuation.</summary>
+    [Fact]
+    public void G06_SnapshotRoundtrip()
+    {
+        World2 Scene()
+        {
+            var w = new World2();
+            w.Gravity = Vector2.Zero;
+            w.GravityConfig = new GravityConfig2
+            {
+                Mode = GravityMode.NBody,
+                Integrator = Integrator.VelocityVerlet,
+                BigG = 2.0f,
+                Softening = 0.1f,
+                Attractor = Vector2.Zero,
+                AttractorMu = 0.0f,
+                Theta = 0.5f,
+            };
+            w.LinearSleepThreshold = 0.0f;
+            w.AngularSleepThreshold = 0.0f;
+            foreach (var (p, s) in new[]
+            {
+                (new Vector2(-8.0f, 0.0f), 1.0f),
+                (new Vector2(8.0f, 0.0f), 0.5f),
+            })
+            {
+                int id = w.AddDynamicBody(p, new CircleShape(0.5f), 1.0f);
+                w.Bodies[id].GravityScale = s;
+                w.Bodies[id].LinearDamping = 0.0f;
+                w.Bodies[id].AngularDamping = 0.0f;
+            }
+            return w;
+        }
+        var direct = Scene();
+        for (int i = 0; i < 30; i++) direct.Step(Dt);
+        string json = Snapshot.World2ToJson(direct, SnapshotLoadMode.Exact);
+        byte[] bin = Snapshot.World2ToBinary(direct, SnapshotLoadMode.Exact);
+        var fromJson = Snapshot.World2FromJson(json, SnapshotLoadMode.Exact);
+        var fromBin = Snapshot.World2FromBinary(bin, SnapshotLoadMode.Exact);
+        Assert.Equal(GravityMode.NBody, fromJson.GravityConfig.Mode);
+        Assert.Equal(0.5f, fromBin.Bodies[1].GravityScale);
+        for (int i = 0; i < 30; i++)
+        {
+            direct.Step(Dt);
+            fromJson.Step(Dt);
+            fromBin.Step(Dt);
+        }
+        AssertWorldsEqual(direct, fromJson);
+        AssertWorldsEqual(direct, fromBin);
+    }
+
+    /// <summary>G07: Barnes-Hut determinism on a 20-body scene.</summary>
+    [Fact]
+    public void G07_BhDeterministic()
+    {
+        World2 Scene()
+        {
+            var w = new World2();
+            w.Gravity = Vector2.Zero;
+            w.GravityConfig = new GravityConfig2
+            {
+                Mode = GravityMode.BarnesHut,
+                Integrator = Integrator.SemiImplicitEuler,
+                BigG = 1.0f,
+                Softening = 0.1f,
+                Attractor = Vector2.Zero,
+                AttractorMu = 0.0f,
+                Theta = 0.5f,
+            };
+            w.LinearSleepThreshold = 0.0f;
+            w.AngularSleepThreshold = 0.0f;
+            for (int i = 0; i < 20; i++)
+            {
+                int id = w.AddDynamicBody(
+                    new Vector2((i * 1.7f) % 20.0f - 10.0f, (i * 2.3f) % 20.0f - 10.0f),
+                    new CircleShape(0.5f), 1.0f);
+                w.Bodies[id].LinearDamping = 0.0f;
+                w.Bodies[id].AngularDamping = 0.0f;
+            }
+            return w;
+        }
+        var a = Scene();
+        var b = Scene();
+        for (int i = 0; i < 60; i++)
+        {
+            a.Step(Dt);
+            b.Step(Dt);
+        }
+        AssertWorldsEqual(a, b);
+    }
+
+    /// <summary>G08: 3D central orbit holds its radius, deterministically.</summary>
+    [Fact]
+    public void G08_CentralOrbitStable3D()
+    {
+        World3 Scene()
+        {
+            var w = new World3();
+            w.Gravity = Vector3.Zero;
+            w.GravityConfig = new GravityConfig3
+            {
+                Mode = GravityMode.Central,
+                Integrator = Integrator.SemiImplicitEuler,
+                BigG = 1.0f,
+                Softening = 0.0f,
+                Attractor = Vector3.Zero,
+                AttractorMu = 100.0f,
+                Theta = 0.5f,
+            };
+            w.LinearSleepThreshold = 0.0f;
+            w.AngularSleepThreshold = 0.0f;
+            float v = MathF.Sqrt(100.0f / 10.0f);
+            int id = w.AddDynamicBody(new Vector3(10.0f, 0.0f, 0.0f), new SphereShape3(0.5f), 1.0f);
+            w.Bodies[id].Velocity = new Vector3(0.0f, v, 0.0f);
+            w.Bodies[id].LinearDamping = 0.0f;
+            w.Bodies[id].AngularDamping = 0.0f;
+            return w;
+        }
+        var a = Scene();
+        var b = Scene();
+        for (int i = 0; i < 600; i++)
+        {
+            a.Step(Dt);
+            b.Step(Dt);
+        }
+        AssertWorldsEqual(a, b);
+        var p = a.Bodies[0].Transform.Position;
+        float r = new Vector2(p.X, p.Y).Length();
+        Assert.True(MathF.Abs(r - 10.0f) / 10.0f < 0.10f, $"orbit decayed: r={r}");
+    }
+
+    /// <summary>G09: 3D N-body momentum conservation + determinism.</summary>
+    [Fact]
+    public void G09_NBodyDeterministic3D()
+    {
+        World3 Scene()
+        {
+            var w = new World3();
+            w.Gravity = Vector3.Zero;
+            w.GravityConfig = new GravityConfig3
+            {
+                Mode = GravityMode.NBody,
+                Integrator = Integrator.SemiImplicitEuler,
+                BigG = 1.0f,
+                Softening = 0.1f,
+                Attractor = Vector3.Zero,
+                AttractorMu = 0.0f,
+                Theta = 0.5f,
+            };
+            w.LinearSleepThreshold = 0.0f;
+            w.AngularSleepThreshold = 0.0f;
+            foreach (var (p, r) in new[]
+            {
+                (new Vector3(-20.0f, 0.0f, 1.0f), 0.5f),
+                (new Vector3(15.0f, 5.0f, -1.0f), 0.8f),
+            })
+            {
+                int id = w.AddDynamicBody(p, new SphereShape3(r), 1.0f);
+                w.Bodies[id].LinearDamping = 0.0f;
+                w.Bodies[id].AngularDamping = 0.0f;
+            }
+            return w;
+        }
+        var a = Scene();
+        Vector3 p0 = Vector3.Zero;
+        foreach (var b in a.Bodies) p0 += b.Velocity * b.Mass;
+        var b2 = Scene();
+        for (int i = 0; i < 300; i++)
+        {
+            a.Step(Dt);
+            b2.Step(Dt);
+        }
+        AssertWorldsEqual(a, b2);
+        Vector3 p1 = Vector3.Zero;
+        foreach (var b in a.Bodies) p1 += b.Velocity * b.Mass;
+        Assert.True((p1 - p0).Length() < 1e-2f, "momentum drifted");
+    }
+
+    /// <summary>G10: 3D N-body + Verlet + scales snapshot round-trip.</summary>
+    [Fact]
+    public void G10_SnapshotRoundtrip3D()
+    {
+        var direct = new World3();
+        direct.Gravity = Vector3.Zero;
+        direct.GravityConfig = new GravityConfig3
+        {
+            Mode = GravityMode.NBody,
+            Integrator = Integrator.VelocityVerlet,
+            BigG = 1.5f,
+            Softening = 0.2f,
+            Attractor = Vector3.Zero,
+            AttractorMu = 0.0f,
+            Theta = 0.5f,
+        };
+        direct.LinearSleepThreshold = 0.0f;
+        direct.AngularSleepThreshold = 0.0f;
+        foreach (var (p, s) in new[]
+        {
+            (new Vector3(-6.0f, 0.0f, 0.0f), 1.0f),
+            (new Vector3(6.0f, 0.0f, 0.0f), 0.25f),
+        })
+        {
+            int id = direct.AddDynamicBody(p, new SphereShape3(0.5f), 1.0f);
+            direct.Bodies[id].GravityScale = s;
+            direct.Bodies[id].LinearDamping = 0.0f;
+            direct.Bodies[id].AngularDamping = 0.0f;
+        }
+        for (int i = 0; i < 30; i++) direct.Step(Dt);
+        string json = Snapshot.World3ToJson(direct, SnapshotLoadMode.Exact);
+        byte[] bin = Snapshot.World3ToBinary(direct, SnapshotLoadMode.Exact);
+        var fromJson = Snapshot.World3FromJson(json, SnapshotLoadMode.Exact);
+        var fromBin = Snapshot.World3FromBinary(bin, SnapshotLoadMode.Exact);
+        Assert.Equal(GravityMode.NBody, fromJson.GravityConfig.Mode);
+        Assert.Equal(0.25f, fromBin.Bodies[1].GravityScale);
+        for (int i = 0; i < 30; i++)
+        {
+            direct.Step(Dt);
+            fromJson.Step(Dt);
+            fromBin.Step(Dt);
+        }
+        AssertWorldsEqual(direct, fromJson);
+        AssertWorldsEqual(direct, fromBin);
+    }
 }

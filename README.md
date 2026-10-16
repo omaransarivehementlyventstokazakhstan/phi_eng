@@ -1,4 +1,4 @@
-# PhiEng
+﻿# PhiEng
 
 Deterministic 2D + 3D rigid-body physics with SPH fluids: a Rust core
 with a mirroring C# implementation and a C ABI for P/Invoke.
@@ -12,13 +12,13 @@ wall-clock inside the simulation).
 ```bash
 # Add to your Cargo.toml
 [dependencies]
-phieng = "0.3.1"
+phieng = "0.4.0"
 
 # Or use the full workspace for all crates
-phieng-math = "0.3.1"
-phieng-collision = "0.3.1"
-phieng-broadphase = "0.3.1"
-phieng-dynamics = "0.3.1"
+phieng-math = "0.4.0"
+phieng-collision = "0.4.0"
+phieng-broadphase = "0.4.0"
+phieng-dynamics = "0.4.0"
 ```
 
 ```rust
@@ -99,8 +99,8 @@ counts, tolerances, and policy decisions).
 
 | Surface | Version / requirement |
 |---|---|
-| Rust crates (`phieng-*`) | 0.3.1, MSRV 1.78, edition 2021 |
-| NuGet packages (`PhiEng.*`) | 0.3.1, .NET 10 |
+| Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
+| NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
 | Snapshot schema | v3 (v1/v2 files are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
@@ -227,6 +227,25 @@ contact for that frame rather than a guessed depth.
   Mirtich-style mass properties. Fluid state persists in snapshots
   (schema v3) and crosses FFI; C# carries fluid state but does not step
   it yet.
+- **Gravitational physics (2D and 3D, both languages):** uniform field
+  (status quo, bit-identical when untouched), central attractor
+  (`mu` at a fixed point, O(n)), full N-body pairwise Newtonian
+  gravity with softening (symmetric ±F, momentum conserved to float
+  rounding, O(n²)), and a deterministic Barnes–Hut approximation
+  (`theta`, O(n log n), crossover ~700 bodies at θ=0.5, exact stays
+  default). Per-body `gravity_scale` (1.0 coupled, 0.0 immune,
+  negative repels); massless probes need no exemption (tiny density +
+  scale). Optional velocity-Verlet kick-drift-kick wraps the unchanged
+  contact solver (linear damping rides the kicks as symmetric drag).
+  Same-mode runs are bit-identical; exact-vs-BH trajectories differ by
+  design, never compared. Orbital scenes must zero damping and disable
+  sleep (thresholds to 0.0); the uniform vector still applies as a
+  background field in every mode, and the fluid keeps using it only.
+  Bulk FFI (`add_bodies`, `get_transforms_bulk`) plus per-frame-safe
+  `Try*` getters and `SuppressGCTransition` on trivial calls keep
+  managed↔native polling to one transition per frame; gravity config,
+  scales, and sleep thresholds all cross FFI with the same
+  null-tolerant status-code conventions.
 - **Runtime validation:** every step guards against NaN/Inf state and
   clamps runaway penetration, coordinates, and velocities
   (`ValidationConfig`: `Default`/`Strict`/`Permissive`; per-step
@@ -234,8 +253,10 @@ contact for that frame rather than a guessed depth.
   when the world holds no issues to correct; joint-less worlds step
   exactly as before (proven by unchanged determinism hashes).
 - **Snapshots:** save/load 2D and 3D worlds as JSON or versioned binary
-  (`snapshot.rs`, schema v3: v2 added convex-mesh shapes, v3 added fluid
-  state). `Exact` mode restores warm-start caches, joint impulses,
+  (`snapshot.rs`, schema v4: v2 added convex-mesh shapes, v3 added fluid
+  state, v4 added the gravity block + per-body scales with conditional
+  versions — default-gravity worlds still write byte-identical v3,
+  loaders accept both). `Exact` mode restores warm-start caches, joint impulses,
   latched angles, and fluid particles for bit-identical continuation;
   `Fresh` mode restores structure + config with cold solver state.
   Mass is recomputed through the validated constructors on load, never
@@ -294,7 +315,7 @@ noise-sensitive (±40%); hashes are the determinism gate.
 
 Hashes: pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`
 (serial == parallel), pile3d `0x3c0815ebe61347f4`. Hashes moved in
-0.3.1 (3D friction cone is now a true cone clamp, default sleep
+0.4.0 (3D friction cone is now a true cone clamp, default sleep
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
 seed-margin scaling). C# hashes are run-local (worlds keep evolving
 across windows); the gate is serial == parallel within a run.
@@ -353,14 +374,17 @@ chase-dominated stalls — not on speculation.
   needle-overlap pair, strict-seed cases).
 - C#: same coverage via xUnit, including its own 1000-case fuzz with an
   independent xorshift implementation (stable across .NET versions).
-- Robustness suite (IDs S/W/N/D/F/V/J/E/P, mirrored both languages,
+- Robustness suite (IDs S/W/N/D/F/V/J/E/P/G, mirrored both languages,
   parity enforced by `tools/check_test_parity.py`): sleep semantics,
   warm-start/cache eviction, never-guess self-heal proofs, solver
   numerical limits, shape-edge validation, FFI boundary + dispose stress,
   runtime validation layer (V01–V11), joint constraints (J31–J44) plus the
   native joint bridge (F31–F33), snapshots (E01–E07) plus the native
-  save/load bridge (F34–F36), parallel island solver (P31–P34,
-  bit-identical to serial; `Solver.Parallel`, off by default).
+  save/load bridge (F34–F36), gravitational physics (G01–G10: orbit,
+  determinism, Verlet energy order, softening safety, probes, snapshot
+  round-trip, BH determinism, plus a compact 3D set), parallel island
+  solver (P31–P34, bit-identical to serial; `Solver.Parallel`, off by
+  default).
 - Cross-language equivalence (F28): identical fixed scenes through the
   managed engine and the Rust core via FFI, agreeing within tolerance
   (bit-parity not claimed; behavior parity proven). Known gaps live in
