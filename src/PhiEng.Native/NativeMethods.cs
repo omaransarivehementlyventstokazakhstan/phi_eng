@@ -89,7 +89,7 @@ internal static partial class NativeMethods
     [LibraryImport("phieng")]
     internal static partial void phieng_world_set_gravity(IntPtr world, float gx, float gy);
 
-    [LibraryImport("phieng")]
+    [LibraryImport("phieng"), SuppressGCTransition]
     internal static partial int phieng_world_body_count(IntPtr world);
 
     /// <returns>Body id, or -1 on invalid input.</returns>
@@ -107,7 +107,7 @@ internal static partial class NativeMethods
         float restitution);
 
     /// <returns>1 on success, 0 on invalid input.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world_get_body_transform(
         IntPtr world,
         uint bodyId,
@@ -115,7 +115,7 @@ internal static partial class NativeMethods
         float* outRot);
 
     /// <returns>1 on success, 0 on invalid input.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world_get_body_velocity(
         IntPtr world,
         uint bodyId,
@@ -130,8 +130,39 @@ internal static partial class NativeMethods
         float density,
         float restitution);
 
-    /// <returns>1 on success, 0 on any invalid input.</returns>
+    /// <summary>
+    /// Bulk body creation: <paramref name="n"/> descriptors at
+    /// <paramref name="descs"/> (see <c>BodyDesc2D</c> layout) are validated
+    /// exactly like <c>phieng_world_add_body</c>. <paramref name="outIds"/>[i]
+    /// gets the new body id, or -1 for a rejected descriptor (no rollback).
+    /// </summary>
+    /// <returns>Number of bodies added, 0 on null world/descs/ids.</returns>
     [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_add_bodies(
+        IntPtr world,
+        BodyDesc2D* descs,
+        uint n,
+        int* outIds);
+
+    /// <summary>
+    /// Bulk transform read: <paramref name="n"/> ids at <paramref name="ids"/>
+    /// resolve in one transition. Slot i of every output belongs to ids[i]:
+    /// <paramref name="outPos"/> holds 2*n (x, y), <paramref name="outRot"/>
+    /// holds n angles, <paramref name="outVel"/> holds 2*n or may be null to
+    /// skip velocities. Stale ids write NaN into their slot.
+    /// </summary>
+    /// <returns>Number of ids that resolved to a live body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_get_transforms_bulk(
+        IntPtr world,
+        uint* ids,
+        uint n,
+        float* outPos,
+        float* outRot,
+        float* outVel);
+
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world_get_body_material(
         IntPtr world,
         uint bodyId,
@@ -149,7 +180,7 @@ internal static partial class NativeMethods
         uint count);
 
     /// <returns>Particle count, 0 on null world.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial uint phieng_world_fluid_count(IntPtr world);
 
     /// <returns>1 on success, 0 on null world.</returns>
@@ -186,7 +217,7 @@ internal static partial class NativeMethods
     internal static partial int phieng_world_remove_joint(IntPtr world, uint jointId);
 
     /// <returns>Joint count, or -1 for null world.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial int phieng_world_joint_count(IntPtr world);
 
     // ---- Snapshots (mirrors the phieng_world_save/load functions in ffi.rs) ----
@@ -244,7 +275,7 @@ internal static partial class NativeMethods
     internal static partial int phieng_world3_remove_joint(IntPtr world, uint jointId);
 
     /// <returns>Joint count, or -1 for null world.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial int phieng_world3_joint_count(IntPtr world);
 
     [LibraryImport(LibraryName)]
@@ -259,7 +290,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     internal static partial void phieng_world3_set_gravity(IntPtr world, float gx, float gy, float gz);
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial int phieng_world3_body_count(IntPtr world);
 
     /// <returns>Body id, or -1 on invalid input.</returns>
@@ -275,7 +306,7 @@ internal static partial class NativeMethods
         float restitution);
 
     /// <returns>1 on success, 0 on any invalid input.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world3_get_body_transform(
         IntPtr world,
         uint bodyId,
@@ -283,7 +314,7 @@ internal static partial class NativeMethods
         Quaternion* outQuat);
 
     /// <returns>1 on success, 0 on any invalid input.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world3_get_body_velocity(
         IntPtr world,
         uint bodyId,
@@ -292,6 +323,35 @@ internal static partial class NativeMethods
     /// <returns>1 on success, 0 for null world or unknown body.</returns>
     [LibraryImport(LibraryName)]
     internal static partial int phieng_world3_remove_body(IntPtr world, uint bodyId);
+
+    /// <summary>
+    /// Bulk 3D body creation: same contract as
+    /// <c>phieng_world_add_bodies</c> with <c>BodyDesc3D</c> descriptors
+    /// (sphere tag 0, box tag 1, capsule tag 2).
+    /// </summary>
+    /// <returns>Number of bodies added, 0 on null world/descs/ids.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_add_bodies(
+        IntPtr world,
+        BodyDesc3D* descs,
+        uint n,
+        int* outIds);
+
+    /// <summary>
+    /// Bulk 3D transform read: same contract as
+    /// <c>phieng_world_get_transforms_bulk</c> with 3D strides —
+    /// <paramref name="outPos"/> holds 3*n, <paramref name="outQuat"/> holds
+    /// 4*n (x, y, z, w), <paramref name="outVel"/> holds 3*n or may be null.
+    /// </summary>
+    /// <returns>Number of ids that resolved to a live body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_get_transforms_bulk(
+        IntPtr world,
+        uint* ids,
+        uint n,
+        float* outPos,
+        float* outQuat,
+        float* outVel);
 
     /// <returns>1 on success, 0 for null world or unknown body.</returns>
     [LibraryImport(LibraryName)]
@@ -303,7 +363,7 @@ internal static partial class NativeMethods
         float restitution);
 
     /// <returns>1 on success, 0 on any invalid input.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static unsafe partial int phieng_world3_get_body_material(
         IntPtr world,
         uint bodyId,
@@ -320,7 +380,7 @@ internal static partial class NativeMethods
         uint count);
 
     /// <returns>Particle count, 0 on null world.</returns>
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial uint phieng_world3_fluid_count(IntPtr world);
 
     /// <returns>1 on success, 0 on null world.</returns>

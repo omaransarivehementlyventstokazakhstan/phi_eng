@@ -112,6 +112,32 @@ public sealed class PhiNativeWorld : IDisposable
     public int AddDynamicBox(Vector2 position, Vector2 halfExtents, float density)
         => AddBoxBody(position, halfExtents, density, isStatic: false);
 
+    /// <summary>
+    /// Bulk body creation: <paramref name="descs"/> are validated exactly
+    /// like the scalar adders, in a single native transition. Returns one
+    /// id per descriptor (<c>-1</c> for a rejected descriptor; valid
+    /// siblings are still added — no rollback).
+    /// </summary>
+    public unsafe int[] AddBodies(BodyDesc2D[] descs)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(descs);
+            var ids = new int[descs.Length];
+            if (descs.Length == 0)
+            {
+                return ids;
+            }
+            fixed (BodyDesc2D* p = descs)
+            fixed (int* q = ids)
+            {
+                NativeMethods.phieng_world_add_bodies(_handle, p, (uint)descs.Length, q);
+            }
+            return ids;
+        }
+    }
+
     /// <summary>Advance the native simulation by <paramref name="dt"/> seconds.</summary>
     public void Step(float dt)
     {
@@ -152,6 +178,92 @@ public sealed class PhiNativeWorld : IDisposable
                 throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
             }
             return vel;
+        }
+    }
+
+    /// <summary>
+    /// Read a body's (position, rotationRadians) without throwing: returns
+    /// <c>false</c> for unknown/stale ids. Hot polling loops should prefer
+    /// this (or <see cref="GetTransformsBulk"/>) over catching exceptions.
+    /// </summary>
+    public unsafe bool TryGetBodyTransform(int bodyId, out Vector2 position, out float rotation)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            Vector2 pos;
+            float rot;
+            int ok = NativeMethods.phieng_world_get_body_transform(_handle, (uint)bodyId, &pos, &rot);
+            position = pos;
+            rotation = rot;
+            return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Read a body's linear velocity without throwing: returns <c>false</c>
+    /// for unknown/stale ids.
+    /// </summary>
+    public unsafe bool TryGetBodyVelocity(int bodyId, out Vector2 velocity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            Vector2 vel;
+            int ok = NativeMethods.phieng_world_get_body_velocity(_handle, (uint)bodyId, &vel);
+            velocity = vel;
+            return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Bulk transform read: <paramref name="ids"/> resolve in a single
+    /// native transition instead of N getter calls. Slot <c>i</c> of every
+    /// output belongs to <c>ids[i]</c> (index alignment is preserved, never
+    /// compacted). Stale/unknown ids write <see cref="float.NaN"/> into
+    /// their slot instead of aborting the batch. Pass <c>null</c> for
+    /// <paramref name="velocities"/> to skip velocity readback.
+    /// </summary>
+    /// <returns>Number of ids that resolved to a live body.</returns>
+    public unsafe int GetTransformsBulk(uint[] ids, Vector2[] positions, float[] rotations, Vector2[]? velocities = null)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(ids);
+            ArgumentNullException.ThrowIfNull(positions);
+            ArgumentNullException.ThrowIfNull(rotations);
+            if (positions.Length < ids.Length)
+            {
+                throw new ArgumentException("positions is shorter than ids.", nameof(positions));
+            }
+            if (rotations.Length < ids.Length)
+            {
+                throw new ArgumentException("rotations is shorter than ids.", nameof(rotations));
+            }
+            if (velocities != null && velocities.Length < ids.Length)
+            {
+                throw new ArgumentException("velocities is shorter than ids.", nameof(velocities));
+            }
+            if (ids.Length == 0)
+            {
+                return 0;
+            }
+            fixed (uint* pIds = ids)
+            fixed (Vector2* pPos = positions)
+            fixed (float* pRot = rotations)
+            {
+                if (velocities == null)
+                {
+                    return (int)NativeMethods.phieng_world_get_transforms_bulk(
+                        _handle, pIds, (uint)ids.Length, (float*)pPos, pRot, null);
+                }
+                fixed (Vector2* pVel = velocities)
+                {
+                    return (int)NativeMethods.phieng_world_get_transforms_bulk(
+                        _handle, pIds, (uint)ids.Length, (float*)pPos, pRot, (float*)pVel);
+                }
+            }
         }
     }
 

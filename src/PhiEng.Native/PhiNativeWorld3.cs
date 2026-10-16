@@ -116,6 +116,32 @@ public sealed class PhiNativeWorld3 : IDisposable
         return id;
     }
 
+    /// <summary>
+    /// Bulk 3D body creation: <paramref name="descs"/> are validated exactly
+    /// like the scalar adders, in a single native transition. Returns one
+    /// id per descriptor (<c>-1</c> for a rejected descriptor; valid
+    /// siblings are still added — no rollback).
+    /// </summary>
+    public unsafe int[] AddBodies(BodyDesc3D[] descs)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(descs);
+            var ids = new int[descs.Length];
+            if (descs.Length == 0)
+            {
+                return ids;
+            }
+            fixed (BodyDesc3D* p = descs)
+            fixed (int* q = ids)
+            {
+                NativeMethods.phieng_world3_add_bodies(_handle, p, (uint)descs.Length, q);
+            }
+            return ids;
+        }
+    }
+
     public void Step(float dt)
     {
         lock (_gate)
@@ -149,6 +175,90 @@ public sealed class PhiNativeWorld3 : IDisposable
             if (ok == 0)
                 throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native 3D body id {bodyId}.");
             return vel;
+        }
+    }
+
+    /// <summary>
+    /// Read a 3D body's (position, rotation) without throwing: returns
+    /// <c>false</c> for unknown/stale ids.
+    /// </summary>
+    public unsafe bool TryGetBodyTransform(int bodyId, out Vector3 position, out Quaternion rotation)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            Vector3 pos;
+            Quaternion rot;
+            int ok = NativeMethods.phieng_world3_get_body_transform(_handle, (uint)bodyId, &pos, &rot);
+            position = pos;
+            rotation = rot;
+            return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Read a 3D body's linear velocity without throwing: returns
+    /// <c>false</c> for unknown/stale ids.
+    /// </summary>
+    public unsafe bool TryGetBodyVelocity(int bodyId, out Vector3 velocity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            Vector3 vel;
+            int ok = NativeMethods.phieng_world3_get_body_velocity(_handle, (uint)bodyId, &vel);
+            velocity = vel;
+            return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Bulk 3D transform read: <paramref name="ids"/> resolve in a single
+    /// native transition. Slot <c>i</c> of every output belongs to
+    /// <c>ids[i]</c> (index alignment preserved). Stale ids write
+    /// <see cref="float.NaN"/> into their slot. Pass <c>null</c> for
+    /// <paramref name="velocities"/> to skip velocity readback.
+    /// </summary>
+    /// <returns>Number of ids that resolved to a live body.</returns>
+    public unsafe int GetTransformsBulk(uint[] ids, Vector3[] positions, Quaternion[] rotations, Vector3[]? velocities = null)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(ids);
+            ArgumentNullException.ThrowIfNull(positions);
+            ArgumentNullException.ThrowIfNull(rotations);
+            if (positions.Length < ids.Length)
+            {
+                throw new ArgumentException("positions is shorter than ids.", nameof(positions));
+            }
+            if (rotations.Length < ids.Length)
+            {
+                throw new ArgumentException("rotations is shorter than ids.", nameof(rotations));
+            }
+            if (velocities != null && velocities.Length < ids.Length)
+            {
+                throw new ArgumentException("velocities is shorter than ids.", nameof(velocities));
+            }
+            if (ids.Length == 0)
+            {
+                return 0;
+            }
+            fixed (uint* pIds = ids)
+            fixed (Vector3* pPos = positions)
+            fixed (Quaternion* pRot = rotations)
+            {
+                if (velocities == null)
+                {
+                    return (int)NativeMethods.phieng_world3_get_transforms_bulk(
+                        _handle, pIds, (uint)ids.Length, (float*)pPos, (float*)pRot, null);
+                }
+                fixed (Vector3* pVel = velocities)
+                {
+                    return (int)NativeMethods.phieng_world3_get_transforms_bulk(
+                        _handle, pIds, (uint)ids.Length, (float*)pPos, (float*)pRot, (float*)pVel);
+                }
+            }
         }
     }
 

@@ -9,6 +9,10 @@
 //! - Transforms are copied out through caller-owned pointers (`out_pos` points
 //!   at 2 `f32`s, `out_rot`/`out_vel` follow the same pattern), so no
 //!   allocation happens on the FFI boundary.
+//! - Bulk transfers (`phieng_world_add_bodies`,
+//!   `phieng_world_get_transforms_bulk` and their `world3` mirrors) move
+//!   whole arrays in one transition; per-slot failures are reported
+//!   in-band (id `-1`, NaN sentinel) without aborting the batch.
 
 use glam::{Vec2, Vec3};
 use phieng_dynamics::{PhysicsMaterial, Shape2, World2};
@@ -173,6 +177,101 @@ pub unsafe extern "C" fn phieng_world_add_body(
     }
 }
 
+/// Blittable 2D body descriptor for [`phieng_world_add_bodies`].
+/// `#[repr(C)]` layout (36 bytes) must match the C# `BodyDesc2D`
+/// struct field-for-field (`src/PhiEng.Native/BodyDescriptors.cs`):
+/// pos(2×f32), tag(u32), a/b(2×f32), density(f32), is_static(u8),
+/// 3 pad bytes, friction/restitution(2×f32).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BodyDesc2D {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub shape_tag: u32,
+    pub a: f32,
+    pub b: f32,
+    pub density: f32,
+    pub is_static: u8,
+    pub _pad: [u8; 3],
+    pub friction: f32,
+    pub restitution: f32,
+}
+
+// Guard the cross-language layout contract: any field change that
+// alters the size breaks the C# mirror silently. Update both sides.
+const _: () = assert!(std::mem::size_of::<BodyDesc2D>() == 36);
+
+/// Bulk body creation: `n` descriptors at `descs` are validated and
+/// added exactly like [`phieng_world_add_body`] (same tags, same
+/// rejection rules), one transition instead of N. `out_ids[i]` gets
+/// the new body id, or -1 when descriptor `i` is rejected; other
+/// bodies are unaffected (non-atomic by design — no partial rollback).
+/// Returns the number of bodies added, or 0 for null world/descs/ids.
+/// `n` is capped at 1,000,000 like [`phieng_world_fluid_add`].
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `descs` must be null (clean `0`) or valid for reads of
+/// `n` [`BodyDesc2D`]s; `out_ids` null (clean `0`) or valid for writes
+/// of `n` `i32`s. Both must be properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_add_bodies(
+    world: *mut World2,
+    descs: *const BodyDesc2D,
+    n: u32,
+    out_ids: *mut i32,
+) -> u32 {
+    if world.is_null() || descs.is_null() || out_ids.is_null() {
+        return 0;
+    }
+    let n = (n as usize).min(1_000_000);
+    if n == 0 {
+        return 0;
+    }
+    let src = unsafe { std::slice::from_raw_parts(descs, n) };
+    let world = unsafe { &mut *world };
+    let mut added: u32 = 0;
+    for (i, d) in src.iter().enumerate() {
+        if !valid(d.pos_x) || !valid(d.pos_y) {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        let shape = match d.shape_tag {
+            SHAPE_CIRCLE if valid_positive(d.a) => Shape2::Circle { radius: d.a },
+            SHAPE_BOX if valid_positive(d.a) && valid_positive(d.b) => Shape2::Box {
+                half_extents: Vec2::new(d.a, d.b),
+            },
+            _ => {
+                unsafe { *out_ids.add(i) = -1 };
+                continue;
+            }
+        };
+        if !valid_positive(d.density) {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        let position = Vec2::new(d.pos_x, d.pos_y);
+        let material = PhysicsMaterial::new(d.friction, d.restitution, d.density);
+        let mut body = if d.is_static != 0 {
+            phieng_dynamics::RigidBody2::static_body(world.next_body_id)
+        } else {
+            phieng_dynamics::RigidBody2::new(world.next_body_id)
+        };
+        body.transform = Transform2::from_position_angle(position, 0.0);
+        if body.set_shape(shape, d.density).is_err() || body.set_material(material).is_err() {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        match world.add_body(body) {
+            Ok(id) => {
+                unsafe { *out_ids.add(i) = id as i32 };
+                added += 1;
+            }
+            Err(_) => unsafe { *out_ids.add(i) = -1 },
+        }
+    }
+    added
+}
+
 /// Replace a body's material (friction, restitution, density), recomputing
 /// mass/inertia from its current shape. Returns 1 on success, 0 for null
 /// world or unknown body. Invalid components fall back to safe defaults
@@ -289,6 +388,71 @@ pub unsafe extern "C" fn phieng_world_get_body_velocity(
     *out_vel.add(0) = body.velocity.x;
     *out_vel.add(1) = body.velocity.y;
     1
+}
+
+/// Bulk transform + velocity read: `n` body ids at `ids` are resolved in
+/// one transition instead of N getter calls. Slot `i` of every output
+/// array corresponds to `ids[i]` (index alignment is preserved, never
+/// compacted): `out_pos[2*i, 2*i+1]` = (x, y), `out_rot[i]` = rotation
+/// angle in radians, and — when `out_vel` is non-null —
+/// `out_vel[2*i, 2*i+1]` = (vx, vy). Stale/unknown ids write NaN into
+/// their slot (all of pos/rot/vel) instead of aborting the batch.
+/// `out_vel` may be null to skip velocity readback; `out_pos` and
+/// `out_rot` must be valid. Returns the number of ids that resolved
+/// to a live body, or 0 for null world/ids/pos/rot.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `ids` must be null (clean `0`) or valid for reads of
+/// `n` `u32`s; `out_pos`/`out_rot` null (clean `0`) or valid for writes
+/// of `2*n` / `n` `f32`s; `out_vel` null (skip) or valid for `2*n`
+/// `f32`s. All must be properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_transforms_bulk(
+    world: *mut World2,
+    ids: *const u32,
+    n: u32,
+    out_pos: *mut f32,
+    out_rot: *mut f32,
+    out_vel: *mut f32,
+) -> u32 {
+    if world.is_null() || ids.is_null() || out_pos.is_null() || out_rot.is_null() {
+        return 0;
+    }
+    let n = n as usize;
+    if n == 0 {
+        return 0;
+    }
+    let id_slice = unsafe { std::slice::from_raw_parts(ids, n) };
+    let world_ref: &World2 = unsafe { &*world };
+    let write_vel = !out_vel.is_null();
+    let mut valid: u32 = 0;
+    for (i, &body_id) in id_slice.iter().enumerate() {
+        match body_by_id(world_ref, body_id) {
+            Some(index) => {
+                let body = &world_ref.bodies[index];
+                unsafe {
+                    *out_pos.add(2 * i) = body.transform.position.x;
+                    *out_pos.add(2 * i + 1) = body.transform.position.y;
+                    *out_rot.add(i) = body.rotation_angle();
+                    if write_vel {
+                        *out_vel.add(2 * i) = body.velocity.x;
+                        *out_vel.add(2 * i + 1) = body.velocity.y;
+                    }
+                }
+                valid += 1;
+            }
+            None => unsafe {
+                *out_pos.add(2 * i) = f32::NAN;
+                *out_pos.add(2 * i + 1) = f32::NAN;
+                *out_rot.add(i) = f32::NAN;
+                if write_vel {
+                    *out_vel.add(2 * i) = f32::NAN;
+                    *out_vel.add(2 * i + 1) = f32::NAN;
+                }
+            },
+        }
+    }
+    valid
 }
 
 /// Add SPH fluid particles from interleaved `positions` (`count` pairs
@@ -1224,6 +1388,118 @@ pub unsafe extern "C" fn phieng_world3_add_body(
     }
 }
 
+/// Blittable 3D body descriptor for [`phieng_world3_add_bodies`].
+/// `#[repr(C)]` layout (44 bytes) must match the C# `BodyDesc3D`
+/// struct field-for-field (`src/PhiEng.Native/BodyDescriptors.cs`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BodyDesc3D {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub pos_z: f32,
+    pub shape_tag: u32,
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub density: f32,
+    pub is_static: u8,
+    pub _pad: [u8; 3],
+    pub friction: f32,
+    pub restitution: f32,
+}
+
+// Guard the cross-language layout contract: any field change that
+// alters the size breaks the C# mirror silently. Update both sides.
+const _: () = assert!(std::mem::size_of::<BodyDesc3D>() == 44);
+
+/// Bulk 3D body creation: same contract as [`phieng_world_add_bodies`]
+/// (per-descriptor validation identical to [`phieng_world3_add_body`]:
+/// `SHAPE3_SPHERE` = 0 (`a` = radius), `SHAPE3_BOX` = 1 (`a,b,c` =
+/// half extents), `SHAPE3_CAPSULE` = 2 (`a` = radius, `b` =
+/// half length); rejected descriptors write -1 into `out_ids` and do
+/// not roll back the rest). Returns the number added, or 0 for null
+/// world/descs/ids. `n` capped at 1,000,000.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `descs` must be null (clean `0`) or valid for reads of
+/// `n` [`BodyDesc3D`]s; `out_ids` null (clean `0`) or valid for writes
+/// of `n` `i32`s. Both must be properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_add_bodies(
+    world: *mut phieng_dynamics::World3,
+    descs: *const BodyDesc3D,
+    n: u32,
+    out_ids: *mut i32,
+) -> u32 {
+    if world.is_null() || descs.is_null() || out_ids.is_null() {
+        return 0;
+    }
+    let n = (n as usize).min(1_000_000);
+    if n == 0 {
+        return 0;
+    }
+    let src = unsafe { std::slice::from_raw_parts(descs, n) };
+    let world = unsafe { &mut *world };
+    let mut added: u32 = 0;
+    for (i, d) in src.iter().enumerate() {
+        if !d.pos_x.is_finite() || !d.pos_y.is_finite() || !d.pos_z.is_finite() {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        let shape = match d.shape_tag {
+            SHAPE3_SPHERE if d.a > 0.0 && d.a.is_finite() => {
+                phieng_dynamics::Shape3::Sphere { radius: d.a }
+            }
+            SHAPE3_BOX
+                if d.a > 0.0
+                    && d.b > 0.0
+                    && d.c > 0.0
+                    && d.a.is_finite()
+                    && d.b.is_finite()
+                    && d.c.is_finite() =>
+            {
+                phieng_dynamics::Shape3::Box {
+                    half_extents: glam::Vec3::new(d.a, d.b, d.c),
+                }
+            }
+            SHAPE3_CAPSULE if d.a > 0.0 && d.b > 0.0 && d.a.is_finite() && d.b.is_finite() => {
+                phieng_dynamics::Shape3::Capsule {
+                    radius: d.a,
+                    half_length: d.b,
+                }
+            }
+            _ => {
+                unsafe { *out_ids.add(i) = -1 };
+                continue;
+            }
+        };
+        if !d.density.is_finite() || d.density <= 0.0 {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        let position = glam::Vec3::new(d.pos_x, d.pos_y, d.pos_z);
+        let material = phieng_dynamics::PhysicsMaterial::new(d.friction, d.restitution, d.density);
+        let mut body = if d.is_static != 0 {
+            phieng_dynamics::RigidBody3::static_body(world.next_body_id)
+        } else {
+            phieng_dynamics::RigidBody3::new(world.next_body_id)
+        };
+        body.transform.position = position;
+        if body.set_shape(shape, d.density).is_err() || body.set_material(material).is_err() {
+            unsafe { *out_ids.add(i) = -1 };
+            continue;
+        }
+        match world.add_body(body) {
+            Ok(id) => {
+                unsafe { *out_ids.add(i) = id as i32 };
+                added += 1;
+            }
+            Err(_) => unsafe { *out_ids.add(i) = -1 },
+        }
+    }
+    added
+}
+
 /// Get 3D body transform
 /// # Safety
 /// `world` must be a live pointer from [`phieng_world3_new`] (or null,
@@ -1282,6 +1558,77 @@ pub unsafe extern "C" fn phieng_world3_get_body_velocity(
     *out_vel.add(1) = body.velocity.y;
     *out_vel.add(2) = body.velocity.z;
     1
+}
+
+/// Bulk 3D transform + velocity read: same contract as
+/// [`phieng_world_get_transforms_bulk`] with 3D strides — `out_pos`
+/// holds `3*n` floats (x, y, z), `out_quat` holds `4*n` (x, y, z, w),
+/// `out_vel` holds `3*n` or is null to skip velocities. Stale ids
+/// write NaN into their slot; returns the number of live ids, or 0
+/// for null world/ids/pos/quat.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `ids` must be null (clean `0`) or valid for reads of
+/// `n` `u32`s; `out_pos`/`out_quat` null (clean `0`) or valid for
+/// writes of `3*n` / `4*n` `f32`s; `out_vel` null (skip) or valid for
+/// `3*n` `f32`s. All must be properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_transforms_bulk(
+    world: *mut phieng_dynamics::World3,
+    ids: *const u32,
+    n: u32,
+    out_pos: *mut f32,
+    out_quat: *mut f32,
+    out_vel: *mut f32,
+) -> u32 {
+    if world.is_null() || ids.is_null() || out_pos.is_null() || out_quat.is_null() {
+        return 0;
+    }
+    let n = n as usize;
+    if n == 0 {
+        return 0;
+    }
+    let id_slice = unsafe { std::slice::from_raw_parts(ids, n) };
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let write_vel = !out_vel.is_null();
+    let mut valid: u32 = 0;
+    for (i, &body_id) in id_slice.iter().enumerate() {
+        match body3_by_id(world_ref, body_id) {
+            Some(index) => {
+                let body = &world_ref.bodies[index];
+                unsafe {
+                    *out_pos.add(3 * i) = body.transform.position.x;
+                    *out_pos.add(3 * i + 1) = body.transform.position.y;
+                    *out_pos.add(3 * i + 2) = body.transform.position.z;
+                    *out_quat.add(4 * i) = body.transform.rotation.x;
+                    *out_quat.add(4 * i + 1) = body.transform.rotation.y;
+                    *out_quat.add(4 * i + 2) = body.transform.rotation.z;
+                    *out_quat.add(4 * i + 3) = body.transform.rotation.w;
+                    if write_vel {
+                        *out_vel.add(3 * i) = body.velocity.x;
+                        *out_vel.add(3 * i + 1) = body.velocity.y;
+                        *out_vel.add(3 * i + 2) = body.velocity.z;
+                    }
+                }
+                valid += 1;
+            }
+            None => unsafe {
+                *out_pos.add(3 * i) = f32::NAN;
+                *out_pos.add(3 * i + 1) = f32::NAN;
+                *out_pos.add(3 * i + 2) = f32::NAN;
+                *out_quat.add(4 * i) = f32::NAN;
+                *out_quat.add(4 * i + 1) = f32::NAN;
+                *out_quat.add(4 * i + 2) = f32::NAN;
+                *out_quat.add(4 * i + 3) = f32::NAN;
+                if write_vel {
+                    *out_vel.add(3 * i) = f32::NAN;
+                    *out_vel.add(3 * i + 1) = f32::NAN;
+                    *out_vel.add(3 * i + 2) = f32::NAN;
+                }
+            },
+        }
+    }
+    valid
 }
 
 // ============================================================================
@@ -1519,6 +1866,173 @@ mod tests {
     }
 
     #[test]
+    fn bulk_add_matches_scalar_add() {
+        // Same descriptors through both paths must yield identical ids
+        // and identical world state (bulk validation == scalar validation).
+        unsafe {
+            let mk = |x: f32| BodyDesc2D {
+                pos_x: x,
+                pos_y: 2.0,
+                shape_tag: SHAPE_CIRCLE,
+                a: 0.5,
+                b: 0.0,
+                density: 1.0,
+                is_static: 0,
+                _pad: [0; 3],
+                friction: 0.5,
+                restitution: 0.0,
+            };
+            let w1 = phieng_world_new();
+            let i0 = phieng_world_add_body(w1, 0.0, 2.0, SHAPE_CIRCLE, 0.5, 0.0, 1.0, 0, 0.5, 0.0);
+            let i1 = phieng_world_add_body(w1, 1.0, 2.0, SHAPE_CIRCLE, 0.5, 0.0, 1.0, 0, 0.5, 0.0);
+            let w2 = phieng_world_new();
+            let descs = [mk(0.0), mk(1.0)];
+            let mut ids = [-9i32; 2];
+            let added = phieng_world_add_bodies(w2, descs.as_ptr(), 2, ids.as_mut_ptr());
+            assert_eq!(added, 2);
+            assert_eq!(ids, [i0, i1]);
+            assert_eq!(phieng_world_body_count(w2), 2);
+            // Null-safety and empty batch.
+            assert_eq!(
+                phieng_world_add_bodies(std::ptr::null_mut(), descs.as_ptr(), 2, ids.as_mut_ptr()),
+                0
+            );
+            assert_eq!(
+                phieng_world_add_bodies(w2, std::ptr::null(), 2, ids.as_mut_ptr()),
+                0
+            );
+            assert_eq!(
+                phieng_world_add_bodies(w2, descs.as_ptr(), 2, std::ptr::null_mut()),
+                0
+            );
+            assert_eq!(
+                phieng_world_add_bodies(w2, descs.as_ptr(), 0, ids.as_mut_ptr()),
+                0
+            );
+            phieng_world_free(w1);
+            phieng_world_free(w2);
+        }
+    }
+
+    #[test]
+    fn bulk_add_rejects_per_slot_without_rollback() {
+        // Bad descriptors write -1 into their own slot; valid siblings
+        // are still added (non-atomic by design).
+        unsafe {
+            let good = BodyDesc2D {
+                pos_x: 0.0,
+                pos_y: 0.0,
+                shape_tag: SHAPE_BOX,
+                a: 0.5,
+                b: 0.5,
+                density: 1.0,
+                is_static: 0,
+                _pad: [0; 3],
+                friction: 0.5,
+                restitution: 0.0,
+            };
+            let bad_tag = BodyDesc2D {
+                shape_tag: 99,
+                ..good
+            };
+            let bad_density = BodyDesc2D {
+                pos_x: 5.0,
+                density: -2.0,
+                ..good
+            };
+            let descs = [good, bad_tag, bad_density, good];
+            let world = phieng_world_new();
+            let mut ids = [-9i32; 4];
+            let added = phieng_world_add_bodies(world, descs.as_ptr(), 4, ids.as_mut_ptr());
+            assert_eq!(added, 2);
+            assert!(ids[0] >= 0 && ids[3] >= 0 && ids[0] != ids[3]);
+            assert_eq!(ids[1], -1);
+            assert_eq!(ids[2], -1);
+            assert_eq!(phieng_world_body_count(world), 2);
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn bulk_read_roundtrip_with_stale_sentinel() {
+        // Index alignment is preserved: output[i] always belongs to
+        // ids[i]; stale ids read NaN and do not abort the batch.
+        unsafe {
+            let (world, ball) = ball_drop();
+            let ids = [0u32, ball, 999];
+            let mut pos = [0.0f32; 6];
+            let mut rot = [0.0f32; 3];
+            let mut vel = [0.0f32; 6];
+            let valid = phieng_world_get_transforms_bulk(
+                world,
+                ids.as_ptr(),
+                3,
+                pos.as_mut_ptr(),
+                rot.as_mut_ptr(),
+                vel.as_mut_ptr(),
+            );
+            assert_eq!(valid, 2);
+            // Floor at (0,-1): slot 0 must match the scalar getter.
+            let mut p0 = [0.0f32; 2];
+            let mut r0 = 0.0f32;
+            assert_eq!(
+                phieng_world_get_body_transform(world, 0, p0.as_mut_ptr(), &mut r0),
+                1
+            );
+            assert_eq!([pos[0], pos[1]], p0);
+            assert_eq!(rot[0], r0);
+            // Stale slot: all NaN.
+            assert!(pos[4].is_nan() && pos[5].is_nan() && rot[2].is_nan());
+            assert!(vel[4].is_nan() && vel[5].is_nan());
+            // Null velocity pointer skips velocity readback.
+            let valid2 = phieng_world_get_transforms_bulk(
+                world,
+                ids.as_ptr(),
+                2,
+                pos.as_mut_ptr(),
+                rot.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(valid2, 2);
+            // Null-safety.
+            assert_eq!(
+                phieng_world_get_transforms_bulk(
+                    std::ptr::null_mut(),
+                    ids.as_ptr(),
+                    2,
+                    pos.as_mut_ptr(),
+                    rot.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_transforms_bulk(
+                    world,
+                    std::ptr::null(),
+                    2,
+                    pos.as_mut_ptr(),
+                    rot.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_transforms_bulk(
+                    world,
+                    ids.as_ptr(),
+                    2,
+                    std::ptr::null_mut(),
+                    rot.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
     fn test_ffi3_null_safety() {
         unsafe {
             use phieng_dynamics::World3;
@@ -1721,6 +2235,94 @@ mod tests {
                 0
             );
             phieng_world3_free(world);
+        }
+    }
+
+    #[test]
+    fn bulk3_add_and_read_roundtrip() {
+        // 3D bulk creation matches scalar ids; bulk read matches the
+        // scalar transform getter slot-for-slot, with NaN for stale ids.
+        unsafe {
+            use phieng_dynamics::World3;
+            let mk = |x: f32| BodyDesc3D {
+                pos_x: x,
+                pos_y: 2.0,
+                pos_z: 0.0,
+                shape_tag: SHAPE3_SPHERE,
+                a: 0.5,
+                b: 0.0,
+                c: 0.0,
+                density: 1.0,
+                is_static: 0,
+                _pad: [0; 3],
+                friction: 0.5,
+                restitution: 0.0,
+            };
+            let w1: *mut World3 = phieng_world3_new();
+            let i0 = phieng_world3_add_body(
+                w1,
+                0.0,
+                2.0,
+                0.0,
+                SHAPE3_SPHERE,
+                0.5,
+                0.0,
+                0.0,
+                1.0,
+                0,
+                0.5,
+                0.0,
+            );
+            let w2: *mut World3 = phieng_world3_new();
+            let descs = [mk(0.0), mk(1.0)];
+            let mut ids = [-9i32; 2];
+            let added = phieng_world3_add_bodies(w2, descs.as_ptr(), 2, ids.as_mut_ptr());
+            assert_eq!(added, 2);
+            assert_eq!(ids, [i0, i0 + 1]);
+            // Bulk read vs scalar read on the same body.
+            let q = [ids[1] as u32, 999];
+            let mut pos = [0.0f32; 6];
+            let mut quat = [0.0f32; 8];
+            let valid = phieng_world3_get_transforms_bulk(
+                w2,
+                q.as_ptr(),
+                2,
+                pos.as_mut_ptr(),
+                quat.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(valid, 1);
+            let mut sp = [0.0f32; 3];
+            let mut sq = [0.0f32; 4];
+            assert_eq!(
+                phieng_world3_get_body_transform(
+                    w2,
+                    ids[1] as u32,
+                    sp.as_mut_ptr(),
+                    sq.as_mut_ptr()
+                ),
+                1
+            );
+            assert_eq!([pos[0], pos[1], pos[2]], sp);
+            assert_eq!([quat[0], quat[1], quat[2], quat[3]], sq);
+            // Slot 0 (q[0] = live id) is finite; slot 1 (q[1] = 999)
+            // is the NaN stale sentinel.
+            assert!(pos[0].is_finite() && quat[0].is_finite());
+            assert!(pos[3].is_nan() && quat[4].is_nan());
+            // Null-safety.
+            assert_eq!(
+                phieng_world3_get_transforms_bulk(
+                    std::ptr::null_mut(),
+                    q.as_ptr(),
+                    2,
+                    pos.as_mut_ptr(),
+                    quat.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            phieng_world3_free(w1);
+            phieng_world3_free(w2);
         }
     }
 
