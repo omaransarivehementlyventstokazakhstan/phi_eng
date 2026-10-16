@@ -46,6 +46,81 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>
+    /// Set the 3D gravity force model + integration scheme (same
+    /// contract as <c>PhiNativeWorld.SetGravityConfig</c>).
+    /// </summary>
+    public void SetGravityConfig(Dynamics.GravityConfig3 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_gravity_config(
+                _handle, (uint)config.Mode, (uint)config.Integrator,
+                config.BigG, config.Softening,
+                config.Attractor.X, config.Attractor.Y, config.Attractor.Z,
+                config.AttractorMu, config.Theta);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected gravity config (check tags and ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the 3D gravity config from the native world.</summary>
+    public unsafe Dynamics.GravityConfig3 GetGravityConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint mode, integ;
+            float* values = stackalloc float[7];
+            int ok = NativeMethods.phieng_world3_get_gravity_config(
+                _handle, &mode, &integ, values);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native 3D gravity config read failed.");
+            }
+            return new Dynamics.GravityConfig3
+            {
+                Mode = (Dynamics.GravityMode)mode,
+                Integrator = (Dynamics.Integrator)integ,
+                BigG = values[0],
+                Softening = values[1],
+                Attractor = new Vector3(values[2], values[3], values[4]),
+                AttractorMu = values[5],
+                Theta = values[6],
+            };
+        }
+    }
+
+    /// <summary>
+    /// Read the 3D gravity config without throwing: returns <c>false</c>
+    /// on invalid input.
+    /// </summary>
+    public unsafe bool TryGetGravityConfig(out Dynamics.GravityConfig3 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint mode, integ;
+            float* values = stackalloc float[7];
+            int ok = NativeMethods.phieng_world3_get_gravity_config(
+                _handle, &mode, &integ, values);
+            config = new Dynamics.GravityConfig3
+            {
+                Mode = (Dynamics.GravityMode)mode,
+                Integrator = (Dynamics.Integrator)integ,
+                BigG = values[0],
+                Softening = values[1],
+                Attractor = new Vector3(values[2], values[3], values[4]),
+                AttractorMu = values[5],
+                Theta = values[6],
+            };
+            return ok != 0;
+        }
+    }
+
     public int BodyCount
     {
         get
@@ -360,6 +435,87 @@ public sealed class PhiNativeWorld3 : IDisposable
             // Packed as (friction, density, restitution); the constructor
             // sanitizes, mirroring the Rust side.
             return new Dynamics.PhysicsMaterial(packed.X, packed.Z, packed.Y);
+        }
+    }
+
+    /// <summary>
+    /// Set a 3D body's gravitational coupling multiplier (1.0 full
+    /// coupling, 0.0 immune, negative repels; finite only).
+    /// </summary>
+    public void SetBodyGravityScale(int bodyId, float scale)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_body_gravity_scale(_handle, (uint)bodyId, scale);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native 3D body id {bodyId} or non-finite scale.");
+            }
+        }
+    }
+
+    /// <summary>Read a 3D body's gravitational coupling multiplier.</summary>
+    public unsafe float GetBodyGravityScale(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float scale;
+            int ok = NativeMethods.phieng_world3_get_body_gravity_scale(_handle, (uint)bodyId, &scale);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native 3D body id {bodyId}.");
+            }
+            return scale;
+        }
+    }
+
+    /// <summary>
+    /// Read a 3D body's gravitational coupling multiplier without
+    /// throwing: returns <c>false</c> for unknown/stale ids.
+    /// </summary>
+    public unsafe bool TryGetBodyGravityScale(int bodyId, out float scale)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float s;
+            int ok = NativeMethods.phieng_world3_get_body_gravity_scale(_handle, (uint)bodyId, &s);
+            scale = s;
+            return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Set the 3D sleep velocity thresholds (0.0 disables sleeping).
+    /// </summary>
+    public void SetSleepThresholds(float linear, float angular)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_sleep_thresholds(_handle, linear, angular);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected sleep thresholds (must be finite, >= 0).");
+            }
+        }
+    }
+
+    /// <summary>Read the 3D sleep velocity thresholds (linear, angular).</summary>
+    public unsafe (float Linear, float Angular) GetSleepThresholds()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float* values = stackalloc float[2];
+            int ok = NativeMethods.phieng_world3_get_sleep_thresholds(_handle, values);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native 3D sleep threshold read failed.");
+            }
+            return (values[0], values[1]);
         }
     }
 

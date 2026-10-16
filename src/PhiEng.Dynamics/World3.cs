@@ -37,6 +37,12 @@ public class World3
     public Solver3D Solver { get; set; } = new();
     /// <summary>Gravity.</summary>
     public Vector3 Gravity { get; set; } = new Vector3(0, -9.81f, 0);
+    /// <summary>
+    /// Gravitational force model + integration scheme (see
+    /// <see cref="GravityConfig3"/>). Default is the legacy uniform field
+    /// with semi-implicit Euler — bit-identical to pre-gravity behavior.
+    /// </summary>
+    public GravityConfig3 GravityConfig { get; set; } = GravityConfig3.Default;
     /// <summary>Next body id.</summary>
     public int NextBodyId { get; set; }
     /// <summary>Fixed timestep.</summary>
@@ -213,9 +219,12 @@ public class World3
         // Reset validation report
         ValidationReport = new ValidationReport();
 
-        foreach (var body in Bodies)
-            if (!body.IsStatic)
-                body.Velocity += Gravity * dt;
+        // 1. Gravity kick (see GravityIntegration): uniform background
+        // field plus Central/N-body terms per GravityConfig, one
+        // full-step kick (Euler) or the first half-kick (Verlet).
+        bool verlet = GravityConfig.Integrator == Integrator.VelocityVerlet;
+        float h = verlet ? dt * 0.5f : dt;
+        GravityIntegration.Kick3(Bodies, GravityConfig, Gravity, h, verlet);
 
         UpdateBroadphase();
         _pairs.Clear();
@@ -295,7 +304,17 @@ public class World3
             foreach (var key in _staleKeys) ContactCache.Remove(key);
         }
 
-        foreach (var body in Bodies) body.Integrate(dt);
+        if (verlet)
+        {
+            // 5v. Verlet drift + second half-kick (forces recomputed at
+            // the new positions). The contact solver above ran unchanged.
+            foreach (var body in Bodies) body.IntegrateDrift(dt);
+            GravityIntegration.Kick3(Bodies, GravityConfig, Gravity, dt * 0.5f, true);
+        }
+        else
+        {
+            foreach (var body in Bodies) body.Integrate(dt);
+        }
 
         // Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; mirrors Rust).

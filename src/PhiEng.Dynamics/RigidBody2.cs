@@ -42,6 +42,12 @@ public class RigidBody2
     /// <summary>Angular damping.</summary>
     public float AngularDamping { get; set; }
     /// <summary>
+    /// Gravitational coupling multiplier (1.0 full coupling, 0.0 immune,
+    /// negative repels; must be finite). Mirrors Rust
+    /// <c>RigidBody2::gravity_scale</c>.
+    /// </summary>
+    public float GravityScale { get; set; }
+    /// <summary>
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     /// </summary>
@@ -66,6 +72,7 @@ public class RigidBody2
         InvInertia = 2.0f;
         LinearDamping = 0.01f;
         AngularDamping = 0.01f;
+        GravityScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;
@@ -239,16 +246,40 @@ public class RigidBody2
         // Update position
         Vector2 newPosition = Transform.Position + Velocity * dt;
 
-        // Update rotation - extract angle from matrix.
+        Transform = new Transform2(newPosition, IntegrateRotation(dt));
+    }
+
+    /// <summary>
+    /// Rotation update shared by <see cref="Integrate"/> and
+    /// <see cref="IntegrateDrift"/> (single source of truth for the
+    /// Atan2(-M21, M11) convention).
+    /// </summary>
+    private float IntegrateRotation(float dt)
+    {
         // Matrix3x2.CreateRotation(a) has M11=cos(a), M21=-sin(a), so the
         // angle is Atan2(-M21, M11). (Plain Atan2(M21, M11) returns -angle
         // and makes bodies ping-pong between +angle and -angle every frame.)
         float currentAngle = MathF.Atan2(-Transform.Rotation.M21, Transform.Rotation.M11);
-        float newAngle = currentAngle + AngularVelocity * dt;
-        Matrix3x2 newRotation = Matrix3x2.CreateRotation(newAngle);
+        return currentAngle + AngularVelocity * dt;
+    }
 
-        // Create new transform with updated values
-        Transform = new Transform2(newPosition, newAngle);
+    /// <summary>
+    /// Drift step for velocity-Verlet integration (see
+    /// <c>Gravity</c>): positions and rotation advance a full step with
+    /// the post-kick velocities. Linear damping is NOT applied here —
+    /// in Verlet mode it rides the gravity kicks as symmetric drag.
+    /// Angular damping matches <see cref="Integrate"/>.
+    /// </summary>
+    public void IntegrateDrift(float dt)
+    {
+        if (IsStatic) return;
+
+        float angDamping = MathF.Min(1.0f, AngularDamping * dt);
+        AngularVelocity *= 1.0f - angDamping;
+
+        Vector2 newPosition = Transform.Position + Velocity * dt;
+
+        Transform = new Transform2(newPosition, IntegrateRotation(dt));
     }
 
     /// <summary>Current rotation angle in radians.</summary>

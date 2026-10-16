@@ -22,6 +22,17 @@ This project follows [Semantic Versioning](https://semver.org/) and
   termination). Same-mode runs are bit-identical; exact-vs-BH
   trajectories differ by design. Measured crossover at theta 0.5 is
   ~700 bodies (2.5x faster at n=2000); exact stays the default.
+- **Gravity FFI surface**: `set/get_gravity_config` (mode, integrator,
+  G, softening, attractor, mu, theta), per-body
+  `set/get_body_gravity_scale`, and `set/get_sleep_thresholds` (2D +
+  3D, same null-tolerant status-code conventions, per-slot `-1`/NaN
+  semantics for bulk paths unchanged).
+- **Managed C# gravity mirror**: `GravityMode`/`Integrator`/
+  `GravityConfig2/3`, per-body `GravityScale`, mode-aware kicks +
+  velocity-Verlet drift and a deterministic Barnes-Hut port in
+  `PhiEng.Dynamics`, with snapshot schema v4 support (conditional
+  versions, range-checked) in `Snapshot.cs`. Managed/native agreement
+  is within tolerances (bit-equality never claimed cross-language).
 
 ## [0.3.1] - 2026-10-15
 

@@ -13,6 +13,10 @@
 //!   `phieng_world_get_transforms_bulk` and their `world3` mirrors) move
 //!   whole arrays in one transition; per-slot failures are reported
 //!   in-band (id `-1`, NaN sentinel) without aborting the batch.
+//! - Gravity configuration (`phieng_world_set/get_gravity_config`,
+//!   per-body `phieng_world_set/get_body_gravity_scale` and `world3`
+//!   mirrors) exposes `phieng_dynamics::gravity` without changing the
+//!   stepping contract.
 
 use glam::{Vec2, Vec3};
 use phieng_dynamics::{PhysicsMaterial, Shape2, World2};
@@ -87,6 +91,137 @@ pub unsafe extern "C" fn phieng_world_set_gravity(world: *mut World2, gx: f32, g
         return;
     }
     (*world).gravity = Vec2::new(gx, gy);
+}
+
+/// Set the gravity force model + integration scheme (see
+/// `phieng_dynamics::gravity`). `mode`: 0 uniform, 1 central,
+/// 2 N-body, 3 Barnes-Hut. `integrator`: 0 semi-implicit Euler,
+/// 1 velocity-Verlet. `big_g` must be finite; `softening` and
+/// `theta` must be finite and >= 0; attractor components and `mu`
+/// must be finite. Returns 1 on success, 0 for null world or any
+/// out-of-range input (world left unchanged).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_gravity_config(
+    world: *mut World2,
+    mode: u32,
+    integrator: u32,
+    big_g: f32,
+    softening: f32,
+    ax: f32,
+    ay: f32,
+    mu: f32,
+    theta: f32,
+) -> i32 {
+    use phieng_dynamics::{GravityConfig2, GravityMode, Integrator};
+    if world.is_null() {
+        return 0;
+    }
+    let mode = match mode {
+        0 => GravityMode::Uniform,
+        1 => GravityMode::Central,
+        2 => GravityMode::NBody,
+        3 => GravityMode::BarnesHut,
+        _ => return 0,
+    };
+    let integrator = match integrator {
+        0 => Integrator::SemiImplicitEuler,
+        1 => Integrator::VelocityVerlet,
+        _ => return 0,
+    };
+    if !valid(big_g)
+        || !valid(softening)
+        || softening < 0.0
+        || !valid(ax)
+        || !valid(ay)
+        || !valid(mu)
+        || !valid(theta)
+        || theta < 0.0
+    {
+        return 0;
+    }
+    (*world).gravity_config = GravityConfig2 {
+        mode,
+        integrator,
+        big_g,
+        softening,
+        attractor: Vec2::new(ax, ay),
+        attractor_mu: mu,
+        theta,
+    };
+    1
+}
+
+/// Set the sleep velocity thresholds (0.0 disables sleeping).
+/// Negative or non-finite values are rejected without mutating the
+/// world. Returns 1 on success, 0 for null world or bad input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_sleep_thresholds(
+    world: *mut World2,
+    linear: f32,
+    angular: f32,
+) -> i32 {
+    if world.is_null() || !valid(linear) || linear < 0.0 || !valid(angular) || angular < 0.0 {
+        return 0;
+    }
+    (*world).linear_sleep_threshold = linear;
+    (*world).angular_sleep_threshold = angular;
+    1
+}
+
+/// Copy the sleep velocity thresholds out.
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `out` must be either null (clean `0`) or valid for
+/// writes of 2 `f32`s (linear, angular) and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_sleep_thresholds(
+    world: *mut World2,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    unsafe {
+        *out.add(0) = (*world).linear_sleep_threshold;
+        *out.add(1) = (*world).angular_sleep_threshold;
+    }
+    1
+}
+
+/// Copy the gravity config out: `out_mode`/`out_integrator` get the
+/// tags, `out_values[0..6]` = (big_g, softening, ax, ay, mu, theta).
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Out-pointers must be either null (clean `0`) or valid
+/// for writes of 1 `u32` / 1 `u32` / 6 `f32`s and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_gravity_config(
+    world: *mut World2,
+    out_mode: *mut u32,
+    out_integrator: *mut u32,
+    out_values: *mut f32,
+) -> i32 {
+    if world.is_null() || out_mode.is_null() || out_integrator.is_null() || out_values.is_null() {
+        return 0;
+    }
+    let cfg = (*world).gravity_config;
+    *out_mode = cfg.mode as u32;
+    *out_integrator = cfg.integrator as u32;
+    *out_values.add(0) = cfg.big_g;
+    *out_values.add(1) = cfg.softening;
+    *out_values.add(2) = cfg.attractor.x;
+    *out_values.add(3) = cfg.attractor.y;
+    *out_values.add(4) = cfg.attractor_mu;
+    *out_values.add(5) = cfg.theta;
+    1
 }
 
 /// Number of bodies in the world, or -1 for null.
@@ -327,6 +462,53 @@ pub unsafe extern "C" fn phieng_world_get_body_material(
     *out_mat.add(0) = material.friction;
     *out_mat.add(1) = material.density;
     *out_mat.add(2) = material.restitution;
+    1
+}
+
+/// Set a body's gravitational coupling multiplier (`gravity_scale`:
+/// 1.0 full coupling, 0.0 immune, negative repels; finite only).
+/// Returns 1 on success, 0 for null world, unknown body, or
+/// non-finite scale.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_gravity_scale(
+    world: *mut World2,
+    body_id: u32,
+    scale: f32,
+) -> i32 {
+    if world.is_null() || !valid(scale) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].gravity_scale = scale;
+    1
+}
+
+/// Copy a body's gravitational coupling multiplier out.
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `out_scale` must be either null (clean `0`) or valid
+/// for writes of 1 `f32` and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_gravity_scale(
+    world: *mut World2,
+    body_id: u32,
+    out_scale: *mut f32,
+) -> i32 {
+    if world.is_null() || out_scale.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_scale = world_ref.bodies[index].gravity_scale;
     1
 }
 
@@ -1125,6 +1307,141 @@ pub unsafe extern "C" fn phieng_world3_set_gravity(
     (*world).gravity = glam::Vec3::new(gx, gy, gz);
 }
 
+/// Set the 3D gravity force model + integration scheme (same contract
+/// as [`phieng_world_set_gravity_config`], with `az` for the
+/// attractor's z component).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn phieng_world3_set_gravity_config(
+    world: *mut phieng_dynamics::World3,
+    mode: u32,
+    integrator: u32,
+    big_g: f32,
+    softening: f32,
+    ax: f32,
+    ay: f32,
+    az: f32,
+    mu: f32,
+    theta: f32,
+) -> i32 {
+    use phieng_dynamics::{GravityConfig3, GravityMode, Integrator};
+    if world.is_null() {
+        return 0;
+    }
+    let mode = match mode {
+        0 => GravityMode::Uniform,
+        1 => GravityMode::Central,
+        2 => GravityMode::NBody,
+        3 => GravityMode::BarnesHut,
+        _ => return 0,
+    };
+    let integrator = match integrator {
+        0 => Integrator::SemiImplicitEuler,
+        1 => Integrator::VelocityVerlet,
+        _ => return 0,
+    };
+    if !big_g.is_finite()
+        || !softening.is_finite()
+        || softening < 0.0
+        || !ax.is_finite()
+        || !ay.is_finite()
+        || !az.is_finite()
+        || !mu.is_finite()
+        || !theta.is_finite()
+        || theta < 0.0
+    {
+        return 0;
+    }
+    (*world).gravity_config = GravityConfig3 {
+        mode,
+        integrator,
+        big_g,
+        softening,
+        attractor: glam::Vec3::new(ax, ay, az),
+        attractor_mu: mu,
+        theta,
+    };
+    1
+}
+
+/// Set the 3D sleep velocity thresholds (same contract as
+/// [`phieng_world_set_sleep_thresholds`]).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_sleep_thresholds(
+    world: *mut phieng_dynamics::World3,
+    linear: f32,
+    angular: f32,
+) -> i32 {
+    if world.is_null()
+        || !linear.is_finite()
+        || linear < 0.0
+        || !angular.is_finite()
+        || angular < 0.0
+    {
+        return 0;
+    }
+    (*world).linear_sleep_threshold = linear;
+    (*world).angular_sleep_threshold = angular;
+    1
+}
+
+/// Copy the 3D sleep velocity thresholds out.
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `out` must be either null (clean `0`) or valid for
+/// writes of 2 `f32`s (linear, angular) and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_sleep_thresholds(
+    world: *mut phieng_dynamics::World3,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    unsafe {
+        *out.add(0) = (*world).linear_sleep_threshold;
+        *out.add(1) = (*world).angular_sleep_threshold;
+    }
+    1
+}
+
+/// Copy the 3D gravity config out: `out_mode`/`out_integrator` get the
+/// tags, `out_values[0..7]` = (big_g, softening, ax, ay, az, mu, theta).
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). Out-pointers must be either null (clean `0`) or valid
+/// for writes of 1 `u32` / 1 `u32` / 7 `f32`s and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_gravity_config(
+    world: *mut phieng_dynamics::World3,
+    out_mode: *mut u32,
+    out_integrator: *mut u32,
+    out_values: *mut f32,
+) -> i32 {
+    if world.is_null() || out_mode.is_null() || out_integrator.is_null() || out_values.is_null() {
+        return 0;
+    }
+    let cfg = (*world).gravity_config;
+    *out_mode = cfg.mode as u32;
+    *out_integrator = cfg.integrator as u32;
+    *out_values.add(0) = cfg.big_g;
+    *out_values.add(1) = cfg.softening;
+    *out_values.add(2) = cfg.attractor.x;
+    *out_values.add(3) = cfg.attractor.y;
+    *out_values.add(4) = cfg.attractor.z;
+    *out_values.add(5) = cfg.attractor_mu;
+    *out_values.add(6) = cfg.theta;
+    1
+}
+
 /// Get 3D body count
 /// # Safety
 /// `world` must be a live pointer from [`phieng_world3_new`] (or null,
@@ -1226,6 +1543,51 @@ pub unsafe extern "C" fn phieng_world3_get_body_material(
     *out_mat.add(0) = material.friction;
     *out_mat.add(1) = material.density;
     *out_mat.add(2) = material.restitution;
+    1
+}
+
+/// Set a 3D body's gravitational coupling multiplier (same contract
+/// as [`phieng_world_set_body_gravity_scale`]).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_gravity_scale(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    scale: f32,
+) -> i32 {
+    if world.is_null() || !scale.is_finite() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].gravity_scale = scale;
+    1
+}
+
+/// Copy a 3D body's gravitational coupling multiplier out.
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `out_scale` must be either null (clean `0`) or valid
+/// for writes of 1 `f32` and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_gravity_scale(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    out_scale: *mut f32,
+) -> i32 {
+    if world.is_null() || out_scale.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_scale = world_ref.bodies[index].gravity_scale;
     1
 }
 
@@ -2033,6 +2395,164 @@ mod tests {
     }
 
     #[test]
+    fn gravity_config_roundtrip() {
+        // Set/get round-trips every mode + integrator; bad inputs are
+        // rejected without mutating the world.
+        unsafe {
+            let world = phieng_world_new();
+            for mode in 0..=3u32 {
+                for integ in 0..=1u32 {
+                    assert_eq!(
+                        phieng_world_set_gravity_config(
+                            world, mode, integ, 2.0, 0.1, 1.0, 2.0, 3.0, 0.5
+                        ),
+                        1
+                    );
+                    let mut m = 99u32;
+                    let mut it = 99u32;
+                    let mut v = [0.0f32; 6];
+                    assert_eq!(
+                        phieng_world_get_gravity_config(world, &mut m, &mut it, v.as_mut_ptr()),
+                        1
+                    );
+                    assert_eq!((m, it), (mode, integ));
+                    assert_eq!(v, [2.0, 0.1, 1.0, 2.0, 3.0, 0.5]);
+                }
+            }
+            // Unknown tags, non-finite G, negative softening/theta: reject.
+            assert_eq!(
+                phieng_world_set_gravity_config(world, 99, 0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_gravity_config(world, 0, 7, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_gravity_config(world, 2, 0, f32::NAN, 0.0, 0.0, 0.0, 0.0, 0.5),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_gravity_config(world, 2, 0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.5),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_gravity_config(world, 3, 0, 1.0, 0.0, 0.0, 0.0, 0.0, -0.5),
+                0
+            );
+            // Rejected sets leave the last good config in place.
+            let mut m = 99u32;
+            let mut it = 99u32;
+            let mut v = [0.0f32; 6];
+            assert_eq!(
+                phieng_world_get_gravity_config(world, &mut m, &mut it, v.as_mut_ptr()),
+                1
+            );
+            assert_eq!((m, it), (3, 1));
+            // Null-safety.
+            assert_eq!(
+                phieng_world_set_gravity_config(
+                    std::ptr::null_mut(),
+                    2,
+                    0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.5
+                ),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_gravity_config(
+                    std::ptr::null_mut(),
+                    &mut m,
+                    &mut it,
+                    v.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_gravity_config(
+                    world,
+                    std::ptr::null_mut(),
+                    &mut it,
+                    v.as_mut_ptr()
+                ),
+                0
+            );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn gravity_scale_roundtrip() {
+        unsafe {
+            let (world, ball) = ball_drop();
+            // Default scale is full coupling.
+            let mut s = 0.0f32;
+            assert_eq!(phieng_world_get_body_gravity_scale(world, ball, &mut s), 1);
+            assert_eq!(s, 1.0);
+            // Set/get incl. immune (0) and repulsive (negative).
+            for scale in [0.0f32, 0.5, 2.0, -1.0] {
+                assert_eq!(phieng_world_set_body_gravity_scale(world, ball, scale), 1);
+                assert_eq!(phieng_world_get_body_gravity_scale(world, ball, &mut s), 1);
+                assert_eq!(s, scale);
+            }
+            // Unknown id, non-finite scale, nulls: reject.
+            assert_eq!(phieng_world_set_body_gravity_scale(world, 999, 1.0), 0);
+            assert_eq!(
+                phieng_world_set_body_gravity_scale(world, ball, f32::INFINITY),
+                0
+            );
+            assert_eq!(phieng_world_get_body_gravity_scale(world, 999, &mut s), 0);
+            assert_eq!(
+                phieng_world_get_body_gravity_scale(world, ball, std::ptr::null_mut()),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_body_gravity_scale(std::ptr::null_mut(), ball, 1.0),
+                0
+            );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn sleep_thresholds_roundtrip() {
+        unsafe {
+            let world = phieng_world_new();
+            // Defaults are the 0.3.1 sleep thresholds.
+            let mut t = [0.0f32; 2];
+            assert_eq!(phieng_world_get_sleep_thresholds(world, t.as_mut_ptr()), 1);
+            assert_eq!(t, [0.05, 0.05]);
+            // Zero disables sleeping; negatives and NaN reject.
+            assert_eq!(phieng_world_set_sleep_thresholds(world, 0.0, 0.0), 1);
+            assert_eq!(phieng_world_get_sleep_thresholds(world, t.as_mut_ptr()), 1);
+            assert_eq!(t, [0.0, 0.0]);
+            assert_eq!(phieng_world_set_sleep_thresholds(world, -1.0, 0.0), 0);
+            assert_eq!(phieng_world_set_sleep_thresholds(world, 0.0, f32::NAN), 0);
+            assert_eq!(phieng_world_get_sleep_thresholds(world, t.as_mut_ptr()), 1);
+            assert_eq!(t, [0.0, 0.0]);
+            // Null-safety.
+            assert_eq!(
+                phieng_world_set_sleep_thresholds(std::ptr::null_mut(), 0.0, 0.0),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_sleep_thresholds(std::ptr::null_mut(), t.as_mut_ptr()),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_sleep_thresholds(world, std::ptr::null_mut()),
+                0
+            );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
     fn test_ffi3_null_safety() {
         unsafe {
             use phieng_dynamics::World3;
@@ -2323,6 +2843,78 @@ mod tests {
             );
             phieng_world3_free(w1);
             phieng_world3_free(w2);
+        }
+    }
+
+    #[test]
+    fn gravity3_config_roundtrip() {
+        unsafe {
+            use phieng_dynamics::World3;
+            let world: *mut World3 = phieng_world3_new();
+            assert_eq!(
+                phieng_world3_set_gravity_config(world, 3, 1, 1.5, 0.2, 1.0, 2.0, 3.0, 0.0, 0.7),
+                1
+            );
+            let mut m = 99u32;
+            let mut it = 99u32;
+            let mut v = [0.0f32; 7];
+            assert_eq!(
+                phieng_world3_get_gravity_config(world, &mut m, &mut it, v.as_mut_ptr()),
+                1
+            );
+            assert_eq!((m, it), (3, 1));
+            assert_eq!(v, [1.5, 0.2, 1.0, 2.0, 3.0, 0.0, 0.7]);
+            // Rejections leave state unchanged; unknown ids fail clean.
+            assert_eq!(
+                phieng_world3_set_gravity_config(world, 9, 0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5),
+                0
+            );
+            assert_eq!(
+                phieng_world3_get_gravity_config(
+                    std::ptr::null_mut(),
+                    &mut m,
+                    &mut it,
+                    v.as_mut_ptr()
+                ),
+                0
+            );
+            // Scale round-trip incl. immune, negative, rejections.
+            let ball = phieng_world3_add_body(
+                world,
+                0.0,
+                2.0,
+                0.0,
+                SHAPE3_SPHERE,
+                0.5,
+                0.0,
+                0.0,
+                1.0,
+                0,
+                0.5,
+                0.0,
+            );
+            assert!(ball >= 0);
+            let mut s = 0.0f32;
+            assert_eq!(
+                phieng_world3_get_body_gravity_scale(world, ball as u32, &mut s),
+                1
+            );
+            assert_eq!(s, 1.0);
+            assert_eq!(
+                phieng_world3_set_body_gravity_scale(world, ball as u32, 0.0),
+                1
+            );
+            assert_eq!(
+                phieng_world3_get_body_gravity_scale(world, ball as u32, &mut s),
+                1
+            );
+            assert_eq!(s, 0.0);
+            assert_eq!(phieng_world3_set_body_gravity_scale(world, 999, 1.0), 0);
+            assert_eq!(
+                phieng_world3_set_body_gravity_scale(world, ball as u32, f32::NAN),
+                0
+            );
+            phieng_world3_free(world);
         }
     }
 

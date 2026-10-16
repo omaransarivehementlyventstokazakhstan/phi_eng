@@ -89,6 +89,69 @@ internal static partial class NativeMethods
     [LibraryImport("phieng")]
     internal static partial void phieng_world_set_gravity(IntPtr world, float gx, float gy);
 
+    /// <summary>
+    /// Sets the gravity force model + integration scheme (mirrors
+    /// <c>phieng_dynamics::gravity</c>). mode: 0 uniform, 1 central,
+    /// 2 N-body, 3 Barnes-Hut. integrator: 0 Euler, 1 Verlet.
+    /// </summary>
+    /// <returns>1 on success, 0 for null world or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_gravity_config(
+        IntPtr world,
+        uint mode,
+        uint integrator,
+        float bigG,
+        float softening,
+        float ax,
+        float ay,
+        float mu,
+        float theta);
+
+    /// <summary>
+    /// Reads the gravity config: mode/integrator tags plus 6 floats
+    /// (bigG, softening, ax, ay, mu, theta).
+    /// </summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_gravity_config(
+        IntPtr world,
+        uint* outMode,
+        uint* outIntegrator,
+        float* outValues);
+
+    /// <summary>Sets a body's gravitational coupling multiplier.</summary>
+    /// <returns>1 on success, 0 for null world, unknown body, or non-finite scale.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_gravity_scale(
+        IntPtr world,
+        uint bodyId,
+        float scale);
+
+    /// <summary>Reads a body's gravitational coupling multiplier.</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_gravity_scale(
+        IntPtr world,
+        uint bodyId,
+        float* outScale);
+
+    /// <summary>
+    /// Sets the sleep velocity thresholds (0.0 disables sleeping).
+    /// </summary>
+    /// <returns>1 on success, 0 for null world or negative/non-finite input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_sleep_thresholds(
+        IntPtr world,
+        float linear,
+        float angular);
+
+    /// <summary>Copies the sleep velocity thresholds out (linear, angular).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_sleep_thresholds(
+        IntPtr world,
+        float* @out);
+
     [LibraryImport("phieng"), SuppressGCTransition]
     internal static partial int phieng_world_body_count(IntPtr world);
 
@@ -289,6 +352,69 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     internal static partial void phieng_world3_set_gravity(IntPtr world, float gx, float gy, float gz);
+
+    /// <summary>
+    /// Sets the 3D gravity force model + integration scheme (same
+    /// contract as <c>phieng_world_set_gravity_config</c>, plus az).
+    /// </summary>
+    /// <returns>1 on success, 0 for null world or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_gravity_config(
+        IntPtr world,
+        uint mode,
+        uint integrator,
+        float bigG,
+        float softening,
+        float ax,
+        float ay,
+        float az,
+        float mu,
+        float theta);
+
+    /// <summary>
+    /// Reads the 3D gravity config: mode/integrator tags plus 7 floats
+    /// (bigG, softening, ax, ay, az, mu, theta).
+    /// </summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_gravity_config(
+        IntPtr world,
+        uint* outMode,
+        uint* outIntegrator,
+        float* outValues);
+
+    /// <summary>Sets a 3D body's gravitational coupling multiplier.</summary>
+    /// <returns>1 on success, 0 for null world, unknown body, or non-finite scale.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_gravity_scale(
+        IntPtr world,
+        uint bodyId,
+        float scale);
+
+    /// <summary>Reads a 3D body's gravitational coupling multiplier.</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_gravity_scale(
+        IntPtr world,
+        uint bodyId,
+        float* outScale);
+
+    /// <summary>
+    /// Sets the 3D sleep velocity thresholds (0.0 disables sleeping).
+    /// </summary>
+    /// <returns>1 on success, 0 for null world or negative/non-finite input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_sleep_thresholds(
+        IntPtr world,
+        float linear,
+        float angular);
+
+    /// <summary>Copies the 3D sleep velocity thresholds out (linear, angular).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_sleep_thresholds(
+        IntPtr world,
+        float* @out);
 
     [LibraryImport(LibraryName), SuppressGCTransition]
     internal static partial int phieng_world3_body_count(IntPtr world);

@@ -89,6 +89,11 @@ public class RigidBody3
     public float LinearDamping { get; set; }
     /// <summary>Angular damping.</summary>
     public float AngularDamping { get; set; }
+    /// <summary>
+    /// Gravitational coupling multiplier (see
+    /// <c>RigidBody2.GravityScale</c>).
+    /// </summary>
+    public float GravityScale { get; set; }
     /// <summary>Surface and mass properties (shapes inherit it).</summary>
     public PhysicsMaterial Material { get; set; }
     /// <summary>Whether the body is immovable.</summary>
@@ -111,6 +116,7 @@ public class RigidBody3
         InvInertia = Matrix3x3.Identity;
         LinearDamping = 0.01f;
         AngularDamping = 0.01f;
+        GravityScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;
@@ -237,15 +243,43 @@ public class RigidBody3
         AngularVelocity *= 1.0f - MathF.Min(1.0f, AngularDamping * dt);
         var t = Transform;
         t.Position += Velocity * dt;
-        float angSpeed = AngularVelocity.Length();
+        t.Rotation = IntegrateRotation(t.Rotation, AngularVelocity, dt);
+        Transform = t;
+    }
+
+    /// <summary>
+    /// Rotation update shared by <see cref="Integrate"/> and
+    /// <see cref="IntegrateDrift"/> (single source of truth for the
+    /// left-composition convention).
+    /// </summary>
+    private static Quaternion IntegrateRotation(Quaternion rotation, Vector3 angularVelocity, float dt)
+    {
+        float angSpeed = angularVelocity.Length();
         if (angSpeed > 1e-6f)
         {
             // Angular velocity is world-space, so the increment composes
             // on the left (mirrors the Rust integrate).
-            var axis = AngularVelocity / angSpeed;
+            var axis = angularVelocity / angSpeed;
             var dq = Quaternion.CreateFromAxisAngle(axis, angSpeed * dt);
-            t.Rotation = Quaternion.Normalize(Quaternion.Multiply(dq, t.Rotation));
+            return Quaternion.Normalize(Quaternion.Multiply(dq, rotation));
         }
+        return rotation;
+    }
+
+    /// <summary>
+    /// Drift step for velocity-Verlet integration (see
+    /// <c>Gravity</c>): positions and rotation advance a full step with
+    /// the post-kick velocities. Linear damping is NOT applied here —
+    /// in Verlet mode it rides the gravity kicks as symmetric drag.
+    /// Angular damping matches <see cref="Integrate"/>.
+    /// </summary>
+    public void IntegrateDrift(float dt)
+    {
+        if (IsStatic) return;
+        AngularVelocity *= 1.0f - MathF.Min(1.0f, AngularDamping * dt);
+        var t = Transform;
+        t.Position += Velocity * dt;
+        t.Rotation = IntegrateRotation(t.Rotation, AngularVelocity, dt);
         Transform = t;
     }
 

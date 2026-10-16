@@ -183,6 +183,13 @@ if (config.CheckFinite)
                 body.AngularVelocity = 0.0f;
                 hasNonFinite = true;
             }
+
+            // Check and fix gravity scale (non-finite coupling is meaningless)
+            if (!float.IsFinite(body.GravityScale))
+            {
+                body.GravityScale = 1.0f;
+                hasNonFinite = true;
+            }
             if (hasNonFinite) result = ValidationResult.NonFiniteCorrected;
         }
 
@@ -353,6 +360,12 @@ public static class Validation3D
             if (hasNonFinite)
             {
                 body.AngularVelocity = angVel;
+            }
+            // Check and fix gravity scale (non-finite coupling is meaningless)
+            if (!float.IsFinite(body.GravityScale))
+            {
+                body.GravityScale = 1.0f;
+                hasNonFinite = true;
             }
             if (hasNonFinite) result = ValidationResult.NonFiniteCorrected;
         }

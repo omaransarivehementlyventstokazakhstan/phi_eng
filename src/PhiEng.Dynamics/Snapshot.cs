@@ -30,8 +30,19 @@ public enum SnapshotFormat
 /// <summary>Save/load for 2D and 3D worlds in both formats.</summary>
 public static class Snapshot
 {
-    /// <summary>Snapshot schema version. Must match Rust SNAPSHOT_SCHEMA_VERSION.</summary>
-    public const uint SchemaVersion = 3;
+    /// <summary>
+    /// Snapshot schema version. Must match Rust SNAPSHOT_SCHEMA_VERSION.
+    /// v4 adds the gravity config block and per-body gravity scales;
+    /// writers emit v3 for default-gravity worlds (byte-compatible with
+    /// older files) and v4 otherwise.
+    /// </summary>
+    public const uint SchemaVersion = 4;
+
+    /// <summary>
+    /// Oldest schema this build can read. v3 predates gravity fields;
+    /// they load as defaults. Anything outside [3, 4] is rejected.
+    /// </summary>
+    public const uint MinReadableSchemaVersion = 3;
 
     private const byte KindWorld2 = 2;
     private const byte KindWorld3 = 3;
@@ -68,13 +79,14 @@ public static class Snapshot
     public static byte[] World2ToBinary(World2 world, SnapshotLoadMode mode)
     {
         var dto = World2Dto.From(world, mode);
-        return EncodeEnvelope(KindWorld2, w => WriteWorld2Payload(w, dto));
+        return EncodeEnvelope(KindWorld2, dto.Schema, w => WriteWorld2Payload(w, dto));
     }
 
     /// <summary>Deserializes a 2D world from a binary envelope (checks magic, version, CRC).</summary>
     public static World2 World2FromBinary(byte[] bytes, SnapshotLoadMode mode)
     {
-        var dto = ReadWorld2Payload(DecodeEnvelope(bytes, KindWorld2));
+        var (version, reader) = DecodeEnvelope(bytes, KindWorld2);
+        var dto = ReadWorld2Payload(reader, version);
         return World2FromDto(dto, mode);
     }
 
@@ -126,13 +138,14 @@ public static class Snapshot
     public static byte[] World3ToBinary(World3 world, SnapshotLoadMode mode)
     {
         var dto = World3Dto.From(world, mode);
-        return EncodeEnvelope(KindWorld3, w => WriteWorld3Payload(w, dto));
+        return EncodeEnvelope(KindWorld3, dto.Schema, w => WriteWorld3Payload(w, dto));
     }
 
     /// <summary>Deserializes a 3D world from a binary envelope (checks magic, version, CRC).</summary>
     public static World3 World3FromBinary(byte[] bytes, SnapshotLoadMode mode)
     {
-        var dto = ReadWorld3Payload(DecodeEnvelope(bytes, KindWorld3));
+        var (version, reader) = DecodeEnvelope(bytes, KindWorld3);
+        var dto = ReadWorld3Payload(reader, version);
         return World3FromDto(dto, mode);
     }
 
@@ -160,13 +173,13 @@ public static class Snapshot
 
     // ============ envelope ============
 
-    private static BinaryReader DecodeEnvelope(byte[] bytes, byte wantKind)
+    private static (uint Version, BinaryReader Reader) DecodeEnvelope(byte[] bytes, byte wantKind)
     {
         if (bytes.Length < 13) throw new ArgumentException("Snapshot too short.");
         if (bytes[0] != (byte)'P' || bytes[1] != (byte)'H' || bytes[2] != (byte)'E' || bytes[3] != (byte)'1')
             throw new ArgumentException("Bad snapshot magic.");
         uint version = BitConverter.ToUInt32(bytes, 4);
-        if (version != SchemaVersion)
+        if (version < MinReadableSchemaVersion || version > SchemaVersion)
             throw new ArgumentException($"Unsupported snapshot schema version: {version}.");
         if (bytes[8] != wantKind) throw new ArgumentException("Snapshot kind mismatch.");
         uint len = BitConverter.ToUInt32(bytes, 9);
@@ -175,7 +188,7 @@ public static class Snapshot
         uint want = BitConverter.ToUInt32(bytes, 13 + (int)len);
         if (Crc32(payload, 0, payload.Length) != want)
             throw new ArgumentException("Snapshot CRC mismatch.");
-        return new BinaryReader(new MemoryStream(payload));
+        return (version, new BinaryReader(new MemoryStream(payload)));
     }
 
     // CRC32 (IEEE, table-driven) to match Rust crc32fast on the same bytes.
@@ -254,6 +267,11 @@ public static class Snapshot
         [JsonPropertyName("rotation")] public float[] Rotation { get; set; } = new float[4];
         [JsonPropertyName("velocity")] public Vec2Dto Velocity { get; set; } = new();
         [JsonPropertyName("angular_velocity")] public float AngularVelocity { get; set; }
+        /// <summary>
+        /// Gravitational coupling multiplier. Initializer 1.0 so v3
+        /// files (no key) decode to full coupling, mirroring Rust.
+        /// </summary>
+        [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
     }
 
     private sealed class Body3Dto
@@ -269,6 +287,8 @@ public static class Snapshot
         [JsonPropertyName("rotation")] public float[] Rotation { get; set; } = new float[4];
         [JsonPropertyName("velocity")] public Vec3Dto Velocity { get; set; } = new();
         [JsonPropertyName("angular_velocity")] public Vec3Dto AngularVelocity { get; set; } = new();
+        /// <summary>See <c>Body2Dto.GravityScale</c>.</summary>
+        [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
     }
 
     private sealed class Joint2Dto
@@ -342,6 +362,45 @@ public static class Snapshot
         [JsonPropertyName("auto_correct")] public bool AutoCorrect { get; set; }
     }
 
+    /// <summary>
+    /// Gravity config DTO (schema v4). Property initializers equal the
+    /// engine defaults, so files predating the gravity block (v3 and
+    /// hand-written JSON) decode to defaults — the C# equivalent of
+    /// Rust's #[serde(default)].
+    /// </summary>
+    private sealed class GravityConfig2Dto
+    {
+        [JsonPropertyName("mode")] public uint Mode { get; set; } = 0;
+        [JsonPropertyName("integrator")] public uint Integrator { get; set; } = 0;
+        [JsonPropertyName("big_g")] public float BigG { get; set; } = 1.0f;
+        [JsonPropertyName("softening")] public float Softening { get; set; } = 0.0f;
+        [JsonPropertyName("attractor")] public Vec2Dto Attractor { get; set; } = new();
+        [JsonPropertyName("attractor_mu")] public float AttractorMu { get; set; } = 0.0f;
+        [JsonPropertyName("theta")] public float Theta { get; set; } = 0.5f;
+
+        public bool IsDefault() =>
+            Mode == 0 && Integrator == 0 && BigG == 1.0f && Softening == 0.0f &&
+            Attractor.X == 0.0f && Attractor.Y == 0.0f && AttractorMu == 0.0f &&
+            Theta == 0.5f;
+    }
+
+    /// <summary>3D counterpart of <see cref="GravityConfig2Dto"/>.</summary>
+    private sealed class GravityConfig3Dto
+    {
+        [JsonPropertyName("mode")] public uint Mode { get; set; } = 0;
+        [JsonPropertyName("integrator")] public uint Integrator { get; set; } = 0;
+        [JsonPropertyName("big_g")] public float BigG { get; set; } = 1.0f;
+        [JsonPropertyName("softening")] public float Softening { get; set; } = 0.0f;
+        [JsonPropertyName("attractor")] public Vec3Dto Attractor { get; set; } = new();
+        [JsonPropertyName("attractor_mu")] public float AttractorMu { get; set; } = 0.0f;
+        [JsonPropertyName("theta")] public float Theta { get; set; } = 0.5f;
+
+        public bool IsDefault() =>
+            Mode == 0 && Integrator == 0 && BigG == 1.0f && Softening == 0.0f &&
+            Attractor.X == 0.0f && Attractor.Y == 0.0f && Attractor.Z == 0.0f &&
+            AttractorMu == 0.0f && Theta == 0.5f;
+    }
+
     private sealed class FluidParticle2Dto
     {
         [JsonPropertyName("position")] public Vec2Dto Position { get; set; } = new();
@@ -396,6 +455,11 @@ public static class Snapshot
     {
         [JsonPropertyName("schema")] public uint Schema { get; set; }
         [JsonPropertyName("gravity")] public Vec2Dto Gravity { get; set; } = new();
+        /// <summary>
+        /// Gravity config (schema v4). Initializer default so v3 files
+        /// decode to the legacy uniform-field behavior.
+        /// </summary>
+        [JsonPropertyName("gravity_config")] public GravityConfig2Dto GravityConfig { get; set; } = new();
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -411,10 +475,25 @@ public static class Snapshot
 
         public static World2Dto From(World2 w, SnapshotLoadMode mode)
         {
+            // Conditional schema: default-gravity worlds stay v3
+            // (byte-compatible with older files); anything using gravity
+            // features needs v4. Mirrors the Rust writer rule.
+            bool gravityDefault = w.GravityConfig.IsDefault()
+                && w.Bodies.All(b => b.GravityScale == 1.0f);
             var dto = new World2Dto
             {
-                Schema = SchemaVersion,
+                Schema = gravityDefault ? MinReadableSchemaVersion : SchemaVersion,
                 Gravity = V2(w.Gravity),
+                GravityConfig = new GravityConfig2Dto
+                {
+                    Mode = (uint)w.GravityConfig.Mode,
+                    Integrator = (uint)w.GravityConfig.Integrator,
+                    BigG = w.GravityConfig.BigG,
+                    Softening = w.GravityConfig.Softening,
+                    Attractor = V2(w.GravityConfig.Attractor),
+                    AttractorMu = w.GravityConfig.AttractorMu,
+                    Theta = w.GravityConfig.Theta,
+                },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -476,6 +555,7 @@ public static class Snapshot
                     Rotation = new[] { r.M11, r.M12, r.M21, r.M22 },
                     Velocity = V2(b.Velocity),
                     AngularVelocity = b.AngularVelocity,
+                    GravityScale = b.GravityScale,
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -593,6 +673,8 @@ public static class Snapshot
     {
         [JsonPropertyName("schema")] public uint Schema { get; set; }
         [JsonPropertyName("gravity")] public Vec3Dto Gravity { get; set; } = new();
+        /// <summary>See <c>World2Dto.GravityConfig</c>.</summary>
+        [JsonPropertyName("gravity_config")] public GravityConfig3Dto GravityConfig { get; set; } = new();
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -607,10 +689,23 @@ public static class Snapshot
 
         public static World3Dto From(World3 w, SnapshotLoadMode mode)
         {
+            // Conditional schema: see World2Dto.From.
+            bool gravityDefault = w.GravityConfig.IsDefault()
+                && w.Bodies.All(b => b.GravityScale == 1.0f);
             var dto = new World3Dto
             {
-                Schema = SchemaVersion,
+                Schema = gravityDefault ? MinReadableSchemaVersion : SchemaVersion,
                 Gravity = V3(w.Gravity),
+                GravityConfig = new GravityConfig3Dto
+                {
+                    Mode = (uint)w.GravityConfig.Mode,
+                    Integrator = (uint)w.GravityConfig.Integrator,
+                    BigG = w.GravityConfig.BigG,
+                    Softening = w.GravityConfig.Softening,
+                    Attractor = V3(w.GravityConfig.Attractor),
+                    AttractorMu = w.GravityConfig.AttractorMu,
+                    Theta = w.GravityConfig.Theta,
+                },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -767,6 +862,7 @@ public static class Snapshot
                     Rotation = new[] { q.X, q.Y, q.Z, q.W },
                     Velocity = V3(b.Velocity),
                     AngularVelocity = V3(b.AngularVelocity),
+                    GravityScale = b.GravityScale,
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -822,12 +918,51 @@ public static class Snapshot
 
     private static void CheckSchema(uint schema)
     {
-        if (schema != SchemaVersion)
+        if (schema < MinReadableSchemaVersion || schema > SchemaVersion)
             throw new ArgumentException($"Unsupported snapshot schema version: {schema}.");
     }
 
     private static float Fin(float v, string what) =>
         float.IsFinite(v) ? v : throw new ArgumentException($"Non-finite snapshot {what}.");
+
+    private static GravityConfig2 GravityConfigFrom(GravityConfig2Dto c)
+    {
+        if (c.Mode > 3) throw new ArgumentException($"Unknown gravity mode: {c.Mode}.");
+        if (c.Integrator > 1) throw new ArgumentException($"Unknown integrator: {c.Integrator}.");
+        if (c.Softening < 0.0f) throw new ArgumentException("Gravity softening must be >= 0.");
+        if (c.Theta < 0.0f) throw new ArgumentException("Gravity theta must be >= 0.");
+        return new GravityConfig2
+        {
+            Mode = (GravityMode)c.Mode,
+            Integrator = (Integrator)c.Integrator,
+            BigG = Fin(c.BigG, "gravity.big_g"),
+            Softening = Fin(c.Softening, "gravity.softening"),
+            Attractor = new Vector2(Fin(c.Attractor.X, "gravity.ax"), Fin(c.Attractor.Y, "gravity.ay")),
+            AttractorMu = Fin(c.AttractorMu, "gravity.mu"),
+            Theta = Fin(c.Theta, "gravity.theta"),
+        };
+    }
+
+    private static GravityConfig3 GravityConfigFrom(GravityConfig3Dto c)
+    {
+        if (c.Mode > 3) throw new ArgumentException($"Unknown gravity mode: {c.Mode}.");
+        if (c.Integrator > 1) throw new ArgumentException($"Unknown integrator: {c.Integrator}.");
+        if (c.Softening < 0.0f) throw new ArgumentException("Gravity softening must be >= 0.");
+        if (c.Theta < 0.0f) throw new ArgumentException("Gravity theta must be >= 0.");
+        return new GravityConfig3
+        {
+            Mode = (GravityMode)c.Mode,
+            Integrator = (Integrator)c.Integrator,
+            BigG = Fin(c.BigG, "gravity.big_g"),
+            Softening = Fin(c.Softening, "gravity.softening"),
+            Attractor = new Vector3(
+                Fin(c.Attractor.X, "gravity.ax"),
+                Fin(c.Attractor.Y, "gravity.ay"),
+                Fin(c.Attractor.Z, "gravity.az")),
+            AttractorMu = Fin(c.AttractorMu, "gravity.mu"),
+            Theta = Fin(c.Theta, "gravity.theta"),
+        };
+    }
 
     private static Shape2 ShapeFrom(Shape2Dto? s)
     {
@@ -871,6 +1006,7 @@ public static class Snapshot
         var w = new World2
         {
             Gravity = UV2(dto.Gravity),
+            GravityConfig = GravityConfigFrom(dto.GravityConfig),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -929,6 +1065,7 @@ public static class Snapshot
             body.AngularVelocity = Fin(b.AngularVelocity, "spin");
             body.LinearDamping = Fin(b.LinearDamping, "damping");
             body.AngularDamping = Fin(b.AngularDamping, "damping");
+            body.GravityScale = Fin(b.GravityScale, "gravity_scale");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1045,6 +1182,7 @@ public static class Snapshot
         var w = new World3
         {
             Gravity = UV3(dto.Gravity),
+            GravityConfig = GravityConfigFrom(dto.GravityConfig),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1103,6 +1241,7 @@ public static class Snapshot
             body.AngularVelocity = UV3(b.AngularVelocity);
             body.LinearDamping = Fin(b.LinearDamping, "damping");
             body.AngularDamping = Fin(b.AngularDamping, "damping");
+            body.GravityScale = Fin(b.GravityScale, "gravity_scale");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1489,6 +1628,10 @@ public static class Snapshot
         w.Write(dto.AngularSleepThreshold);
         WriteSolver(w, dto.Solver);
         WriteValidation(w, dto.Validation);
+        // Schema v4: gravity config block. v3 payloads omit it (strict:
+        // a v4-tagged payload without it fails truncation, never misparses).
+        bool gravityV4 = dto.Schema == SchemaVersion;
+        if (gravityV4) WriteGravityConfig2(w, dto.GravityConfig);
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.CellSize);
@@ -1507,6 +1650,7 @@ public static class Snapshot
             foreach (var f in b.Rotation) w.Write(f);
             w.Write(b.Velocity.X); w.Write(b.Velocity.Y);
             w.Write(b.AngularVelocity);
+            if (gravityV4) w.Write(b.GravityScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -1635,21 +1779,25 @@ public static class Snapshot
         return f;
     }
 
-    private static World2Dto ReadWorld2Payload(BinaryReader r)
+    private static World2Dto ReadWorld2Payload(BinaryReader r, uint version)
     {
         var dto = new World2Dto
         {
-            Schema = SchemaVersion,
+            Schema = version,
             Gravity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
             Dt = r.ReadSingle(),
             LinearSleepThreshold = r.ReadSingle(),
             AngularSleepThreshold = r.ReadSingle(),
             Solver = ReadSolver(r),
             Validation = ReadValidation(r),
+            // v4 payloads carry the gravity block; older ones resolve
+            // to defaults (same values a v3 file implies).
+            GravityConfig = version == SchemaVersion ? ReadGravityConfig2(r) : new GravityConfig2Dto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
         };
+        bool gravityV4 = version == SchemaVersion;
         int nb = r.ReadInt32();
         if (nb < 0 || nb > 1_000_000) throw new ArgumentException("Body count out of range.");
         for (int i = 0; i < nb; i++)
@@ -1675,6 +1823,7 @@ public static class Snapshot
                 Rotation = new[] { r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle() },
                 Velocity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 AngularVelocity = r.ReadSingle(),
+                GravityScale = gravityV4 ? r.ReadSingle() : 1.0f,
             };
             dto.Bodies.Add(b);
         }
@@ -1714,6 +1863,50 @@ public static class Snapshot
         EarlyExitTolerance = r.ReadSingle(),
     };
 
+    private static void WriteGravityConfig2(BinaryWriter w, GravityConfig2Dto c)
+    {
+        w.Write(c.Mode);
+        w.Write(c.Integrator);
+        w.Write(c.BigG);
+        w.Write(c.Softening);
+        w.Write(c.Attractor.X); w.Write(c.Attractor.Y);
+        w.Write(c.AttractorMu);
+        w.Write(c.Theta);
+    }
+
+    private static GravityConfig2Dto ReadGravityConfig2(BinaryReader r) => new()
+    {
+        Mode = r.ReadUInt32(),
+        Integrator = r.ReadUInt32(),
+        BigG = r.ReadSingle(),
+        Softening = r.ReadSingle(),
+        Attractor = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
+        AttractorMu = r.ReadSingle(),
+        Theta = r.ReadSingle(),
+    };
+
+    private static void WriteGravityConfig3(BinaryWriter w, GravityConfig3Dto c)
+    {
+        w.Write(c.Mode);
+        w.Write(c.Integrator);
+        w.Write(c.BigG);
+        w.Write(c.Softening);
+        w.Write(c.Attractor.X); w.Write(c.Attractor.Y); w.Write(c.Attractor.Z);
+        w.Write(c.AttractorMu);
+        w.Write(c.Theta);
+    }
+
+    private static GravityConfig3Dto ReadGravityConfig3(BinaryReader r) => new()
+    {
+        Mode = r.ReadUInt32(),
+        Integrator = r.ReadUInt32(),
+        BigG = r.ReadSingle(),
+        Softening = r.ReadSingle(),
+        Attractor = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
+        AttractorMu = r.ReadSingle(),
+        Theta = r.ReadSingle(),
+    };
+
     private static ValidationDto ReadValidation(BinaryReader r) => new()
     {
         CheckFinite = r.ReadBoolean(),
@@ -1734,6 +1927,9 @@ public static class Snapshot
         w.Write(dto.AngularSleepThreshold);
         WriteSolver(w, dto.Solver);
         WriteValidation(w, dto.Validation);
+        // Schema v4: gravity config block (see WriteWorld2Payload).
+        bool gravityV4 = dto.Schema == SchemaVersion;
+        if (gravityV4) WriteGravityConfig3(w, dto.GravityConfig);
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.Bodies.Count);
@@ -1753,6 +1949,7 @@ public static class Snapshot
             w.Write(b.AngularVelocity.X);
             w.Write(b.AngularVelocity.Y);
             w.Write(b.AngularVelocity.Z);
+            if (gravityV4) w.Write(b.GravityScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -1774,17 +1971,18 @@ public static class Snapshot
         WriteFluid3(w, dto.Fluid);
     }
 
-    private static World3Dto ReadWorld3Payload(BinaryReader r)
+    private static World3Dto ReadWorld3Payload(BinaryReader r, uint version)
     {
         var dto = new World3Dto
         {
-            Schema = SchemaVersion,
+            Schema = version,
             Gravity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
             Dt = r.ReadSingle(),
             LinearSleepThreshold = r.ReadSingle(),
             AngularSleepThreshold = r.ReadSingle(),
             Solver = ReadSolver(r),
             Validation = ReadValidation(r),
+            GravityConfig = version == SchemaVersion ? ReadGravityConfig3(r) : new GravityConfig3Dto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
@@ -1813,6 +2011,7 @@ public static class Snapshot
                 Rotation = new[] { r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle() },
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 AngularVelocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
+                GravityScale = version == SchemaVersion ? r.ReadSingle() : 1.0f,
             });
         }
         int nj = r.ReadInt32();
@@ -1968,7 +2167,7 @@ public static class Snapshot
         }
     }
 
-    private static byte[] EncodeEnvelope(byte kind, Action<BinaryWriter> writePayload)
+    private static byte[] EncodeEnvelope(byte kind, uint version, Action<BinaryWriter> writePayload)
     {
         using var payload = new MemoryStream();
         using (var w = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
@@ -1977,7 +2176,7 @@ public static class Snapshot
         using var ms = new MemoryStream();
         using var w2 = new BinaryWriter(ms);
         w2.Write(Magic);
-        w2.Write(SchemaVersion);
+        w2.Write(version);
         w2.Write(kind);
         w2.Write(body.Length);
         w2.Write(body);

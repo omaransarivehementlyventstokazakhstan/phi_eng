@@ -38,6 +38,12 @@ public class World2
     public Solver Solver { get; set; }
     /// <summary>Gravity.</summary>
     public Vector2 Gravity { get; set; }
+    /// <summary>
+    /// Gravitational force model + integration scheme (see
+    /// <see cref="GravityConfig2"/>). Default is the legacy uniform field
+    /// with semi-implicit Euler — bit-identical to pre-gravity behavior.
+    /// </summary>
+    public GravityConfig2 GravityConfig { get; set; }
     /// <summary>Next body id.</summary>
     public int NextBodyId { get; set; }
     /// <summary>Previous frame's contact impulses, keyed by (bodyA, bodyB).</summary>
@@ -86,6 +92,7 @@ public class World2
         Broadphase = new SpatialHash2(1.0f);
         Solver = new Solver();
         Gravity = new Vector2(0.0f, -9.81f);
+        GravityConfig = GravityConfig2.Default;
         NextBodyId = 0;
         Dt = 1.0f / 60.0f;
         LinearSleepThreshold = 0.01f;
@@ -286,14 +293,13 @@ public class World2
         // Reset validation report
         ValidationReport = new ValidationReport();
 
-        // 1. Apply gravity
-        foreach (var body in Bodies)
-        {
-            if (!body.IsStatic)
-            {
-                body.Velocity += Gravity * dt;
-            }
-        }
+        // 1. Gravity kick (see GravityIntegration): uniform background
+        // field plus Central/N-body terms per GravityConfig, one
+        // full-step kick (Euler) or the first half-kick (Verlet, with
+        // linear damping riding as symmetric drag).
+        bool verlet = GravityConfig.Integrator == Integrator.VelocityVerlet;
+        float h = verlet ? dt * 0.5f : dt;
+        GravityIntegration.Kick2(Bodies, GravityConfig, Gravity, h, verlet);
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         UpdateBroadphase();
@@ -402,10 +408,24 @@ public class World2
             foreach (var key in _staleKeys) ContactCache.Remove(key);
         }
 
-        // 5. Integrate motion
-        foreach (var body in Bodies)
+        if (verlet)
         {
-            body.Integrate(dt);
+            // 5v. Verlet drift (positions only — no linear damping) plus
+            // the second half-kick with forces recomputed at the new
+            // positions. The contact solver above ran unchanged.
+            foreach (var body in Bodies)
+            {
+                body.IntegrateDrift(dt);
+            }
+            GravityIntegration.Kick2(Bodies, GravityConfig, Gravity, dt * 0.5f, true);
+        }
+        else
+        {
+            // 5. Integrate motion
+            foreach (var body in Bodies)
+            {
+                body.Integrate(dt);
+            }
         }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep
