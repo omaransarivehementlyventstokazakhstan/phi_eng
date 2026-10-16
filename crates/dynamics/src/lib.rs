@@ -1,3 +1,4 @@
+pub mod barnes_hut;
 pub mod body;
 pub mod fluid;
 pub mod fluid3;
@@ -19,6 +20,7 @@ pub mod world;
 // when the SoA solver backend is ready with differential tests.
 // pub mod world_soa;
 
+pub use barnes_hut::*;
 pub use body::*;
 pub use fluid::*;
 pub use fluid3::*;

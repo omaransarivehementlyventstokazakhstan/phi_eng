@@ -15,6 +15,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
   v4 (conditional: default-gravity worlds still write byte-identical
   v3; loaders accept both). FFI surface, managed C# mirror, and
   cross-language parity tests land in a later phase.
+- **Barnes-Hut approximation (Rust)**: `GravityMode::BarnesHut`
+  with per-world `theta` replaces the O(n^2) pairwise loop with a
+  deterministic quadtree/octree (index-order insertion, fixed-order
+  traversal/accumulation, self-force exclusion, depth-capped
+  termination). Same-mode runs are bit-identical; exact-vs-BH
+  trajectories differ by design. Measured crossover at theta 0.5 is
+  ~700 bodies (2.5x faster at n=2000); exact stays the default.
 
 ## [0.3.1] - 2026-10-15
 

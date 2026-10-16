@@ -426,6 +426,9 @@ struct GravityConfig2Dto {
     softening: f32,
     attractor: Vec2Dto,
     attractor_mu: f32,
+    /// Barnes-Hut opening criterion. Required in v4 files like every
+    /// other field (only the whole-config default covers v3 files).
+    theta: f32,
 }
 
 impl Default for GravityConfig2Dto {
@@ -437,6 +440,7 @@ impl Default for GravityConfig2Dto {
             softening: 0.0,
             attractor: Vec2Dto { x: 0.0, y: 0.0 },
             attractor_mu: 0.0,
+            theta: 0.5,
         }
     }
 }
@@ -450,6 +454,7 @@ impl GravityConfig2Dto {
             && self.attractor.x == 0.0
             && self.attractor.y == 0.0
             && self.attractor_mu == 0.0
+            && self.theta == 0.5
     }
 }
 
@@ -462,6 +467,8 @@ struct GravityConfig3Dto {
     softening: f32,
     attractor: Vec3Dto,
     attractor_mu: f32,
+    /// See `GravityConfig2Dto::theta`.
+    theta: f32,
 }
 
 impl Default for GravityConfig3Dto {
@@ -477,6 +484,7 @@ impl Default for GravityConfig3Dto {
                 z: 0.0,
             },
             attractor_mu: 0.0,
+            theta: 0.5,
         }
     }
 }
@@ -491,6 +499,7 @@ impl GravityConfig3Dto {
             && self.attractor.y == 0.0
             && self.attractor.z == 0.0
             && self.attractor_mu == 0.0
+            && self.theta == 0.5
     }
 }
 
@@ -747,6 +756,7 @@ fn gravity_config_dto_2(c: &super::gravity::GravityConfig2) -> GravityConfig2Dto
         softening: c.softening,
         attractor: v2(c.attractor),
         attractor_mu: c.attractor_mu,
+        theta: c.theta,
     }
 }
 
@@ -758,6 +768,7 @@ fn gravity_config_dto_3(c: &super::gravity::GravityConfig3) -> GravityConfig3Dto
         softening: c.softening,
         attractor: v3(c.attractor),
         attractor_mu: c.attractor_mu,
+        theta: c.theta,
     }
 }
 
@@ -773,6 +784,7 @@ fn gravity_config_from_2(
         0 => GravityMode::Uniform,
         1 => GravityMode::Central,
         2 => GravityMode::NBody,
+        3 => GravityMode::BarnesHut,
         _ => return corrupt(format!("unknown gravity mode {}", c.mode)),
     };
     let integrator = match c.integrator {
@@ -788,6 +800,10 @@ fn gravity_config_from_2(
     finite(c.attractor.x, "gravity.attractor.x")?;
     finite(c.attractor.y, "gravity.attractor.y")?;
     finite(c.attractor_mu, "gravity.attractor_mu")?;
+    finite(c.theta, "gravity.theta")?;
+    if c.theta < 0.0 {
+        return corrupt("gravity.theta must be >= 0");
+    }
     Ok(GravityConfig2 {
         mode,
         integrator,
@@ -795,6 +811,7 @@ fn gravity_config_from_2(
         softening: c.softening,
         attractor: Vec2::new(c.attractor.x, c.attractor.y),
         attractor_mu: c.attractor_mu,
+        theta: c.theta,
     })
 }
 
@@ -807,6 +824,7 @@ fn gravity_config_from_3(
         0 => GravityMode::Uniform,
         1 => GravityMode::Central,
         2 => GravityMode::NBody,
+        3 => GravityMode::BarnesHut,
         _ => return corrupt(format!("unknown gravity mode {}", c.mode)),
     };
     let integrator = match c.integrator {
@@ -823,6 +841,10 @@ fn gravity_config_from_3(
     finite(c.attractor.y, "gravity.attractor.y")?;
     finite(c.attractor.z, "gravity.attractor.z")?;
     finite(c.attractor_mu, "gravity.attractor_mu")?;
+    finite(c.theta, "gravity.theta")?;
+    if c.theta < 0.0 {
+        return corrupt("gravity.theta must be >= 0");
+    }
     Ok(GravityConfig3 {
         mode,
         integrator,
@@ -830,6 +852,7 @@ fn gravity_config_from_3(
         softening: c.softening,
         attractor: Vec3::new(c.attractor.x, c.attractor.y, c.attractor.z),
         attractor_mu: c.attractor_mu,
+        theta: c.theta,
     })
 }
 
@@ -2206,6 +2229,7 @@ fn encode_gravity_config_2(out: &mut Vec<u8>, g: &GravityConfig2Dto) {
     write_f32(out, g.attractor.x);
     write_f32(out, g.attractor.y);
     write_f32(out, g.attractor_mu);
+    write_f32(out, g.theta);
 }
 
 fn decode_gravity_config_2(r: &mut Reader) -> Result<GravityConfig2Dto, SnapshotError> {
@@ -2219,6 +2243,7 @@ fn decode_gravity_config_2(r: &mut Reader) -> Result<GravityConfig2Dto, Snapshot
             y: r.read_f32()?,
         },
         attractor_mu: r.read_f32()?,
+        theta: r.read_f32()?,
     })
 }
 
@@ -2232,6 +2257,7 @@ fn encode_gravity_config_3(out: &mut Vec<u8>, g: &GravityConfig3Dto) {
     write_f32(out, g.attractor.y);
     write_f32(out, g.attractor.z);
     write_f32(out, g.attractor_mu);
+    write_f32(out, g.theta);
 }
 
 fn decode_gravity_config_3(r: &mut Reader) -> Result<GravityConfig3Dto, SnapshotError> {
@@ -2246,6 +2272,7 @@ fn decode_gravity_config_3(r: &mut Reader) -> Result<GravityConfig3Dto, Snapshot
             z: r.read_f32()?,
         },
         attractor_mu: r.read_f32()?,
+        theta: r.read_f32()?,
     })
 }
 

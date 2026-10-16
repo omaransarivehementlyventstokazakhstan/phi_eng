@@ -50,6 +50,14 @@ pub enum GravityMode {
     Central = 1,
     /// Full pairwise Newtonian gravity over all body pairs. O(n^2).
     NBody = 2,
+    /// Barnes-Hut approximation of [`GravityMode::NBody`]: distant
+    /// groups collapse to their center of mass when the cell's
+    /// size-to-distance ratio is below `theta` (see
+    /// [`crate::barnes_hut`]). O(n log n). Approximate by design —
+    /// same-mode runs are bit-identical, but exact and BH trajectories
+    /// never match each other. Discriminant appended (never reorder:
+    /// discriminants are file format).
+    BarnesHut = 3,
 }
 
 /// Time-integration scheme for the gravity/free-flight part of the step.
@@ -85,6 +93,11 @@ pub struct GravityConfig2 {
     pub attractor: Vec2,
     /// `G*M` of the fixed attractor (Central mode only).
     pub attractor_mu: f32,
+    /// Barnes-Hut opening criterion (BarnesHut mode only): a cell
+    /// approximates as one mass when `size / distance < theta`.
+    /// Finite and >= 0; 0 degenerates to exact descent (slow but
+    /// correct). Classic default 0.5.
+    pub theta: f32,
 }
 
 impl Default for GravityConfig2 {
@@ -96,6 +109,7 @@ impl Default for GravityConfig2 {
             softening: 0.0,
             attractor: Vec2::ZERO,
             attractor_mu: 0.0,
+            theta: 0.5,
         }
     }
 }
@@ -112,6 +126,7 @@ impl GravityConfig2 {
             && self.softening == 0.0
             && self.attractor == Vec2::ZERO
             && self.attractor_mu == 0.0
+            && self.theta == 0.5
     }
 }
 
@@ -131,6 +146,9 @@ pub struct GravityConfig3 {
     pub attractor: Vec3,
     /// `G*M` of the fixed attractor (Central mode only).
     pub attractor_mu: f32,
+    /// Barnes-Hut opening criterion (BarnesHut mode only).
+    /// See [`GravityConfig2::theta`].
+    pub theta: f32,
 }
 
 impl Default for GravityConfig3 {
@@ -142,6 +160,7 @@ impl Default for GravityConfig3 {
             softening: 0.0,
             attractor: Vec3::ZERO,
             attractor_mu: 0.0,
+            theta: 0.5,
         }
     }
 }
@@ -155,6 +174,7 @@ impl GravityConfig3 {
             && self.softening == 0.0
             && self.attractor == Vec3::ZERO
             && self.attractor_mu == 0.0
+            && self.theta == 0.5
     }
 }
 
@@ -304,6 +324,23 @@ pub fn gravity_kick_2(
                 }
             }
         }
+        GravityMode::BarnesHut => {
+            // Approximate N-body via the deterministic Barnes-Hut tree
+            // (see `crate::barnes_hut`): the uniform pass above already
+            // ran; the tree replaces only the pairwise loop. Approximate
+            // by design — same-mode runs are bit-identical, but exact
+            // and BH trajectories never match each other.
+            if cfg.big_g != 0.0 {
+                super::barnes_hut::apply_bh_forces_2(
+                    bodies,
+                    cfg.big_g,
+                    cfg.softening,
+                    cfg.theta,
+                    h,
+                    drag,
+                );
+            }
+        }
     }
 }
 
@@ -378,6 +415,19 @@ pub fn gravity_kick_3(
                 }
             }
         }
+        GravityMode::BarnesHut => {
+            // Same contract as the 2D arm (see above).
+            if cfg.big_g != 0.0 {
+                super::barnes_hut::apply_bh_forces_3(
+                    bodies,
+                    cfg.big_g,
+                    cfg.softening,
+                    cfg.theta,
+                    h,
+                    drag,
+                );
+            }
+        }
     }
 }
 
@@ -427,6 +477,7 @@ mod tests {
         c.mode = GravityMode::NBody;
         assert!(!c.is_default());
         assert_eq!(GravityMode::NBody as u32, 2);
+        assert_eq!(GravityMode::BarnesHut as u32, 3);
         assert_eq!(Integrator::VelocityVerlet as u32, 1);
     }
 }

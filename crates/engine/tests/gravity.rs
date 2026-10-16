@@ -505,3 +505,187 @@ fn gravity3_snapshot_v4_roundtrip() {
     assert_worlds_equal_3d(&direct, &from_json);
     assert_worlds_equal_3d(&direct, &from_bin);
 }
+
+// ---------------------------------------------------------------------------
+// Barnes-Hut mode (approximate by design: same-mode runs are
+// bit-identical, but exact and BH trajectories never match).
+// ---------------------------------------------------------------------------
+
+/// BH determinism: 50 bodies, fresh trees every kick, two identical
+/// runs agree bit-exactly.
+#[test]
+fn gravity_bh_deterministic() {
+    fn scene() -> World2 {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::BarnesHut;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        w.gravity_config.theta = 0.5;
+        for i in 0..50 {
+            let id = w
+                .add_dynamic_body(
+                    Vec2::new(
+                        (i as f32 * 1.7) % 40.0 - 20.0,
+                        (i as f32 * 2.3) % 40.0 - 20.0,
+                    ),
+                    Shape2::Circle { radius: 0.5 },
+                    1.0,
+                )
+                .expect("valid shape");
+            w.bodies[id].velocity = Vec2::new(0.1 * i as f32, -0.05 * i as f32);
+        }
+        no_damping_no_sleep_2d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let mut b = scene();
+    for _ in 0..100 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_2d(&a, &b);
+    for body in &a.bodies {
+        assert!(body.transform.position.x.is_finite());
+        assert!(body.velocity.x.is_finite());
+    }
+}
+
+/// BH orbit sanity: static planet + probes stay bound (loose radius
+/// bound — the tree approximates), deterministically.
+#[test]
+fn gravity_bh_orbit_bounded() {
+    fn scene() -> (World2, Vec<usize>) {
+        let mut w = World2::new();
+        w.gravity = Vec2::ZERO;
+        w.gravity_config.mode = GravityMode::BarnesHut;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        w.gravity_config.theta = 0.5;
+        // Static 10x10 planet, mass 100.
+        w.add_static_body(
+            Vec2::ZERO,
+            Shape2::Box {
+                half_extents: Vec2::new(5.0, 5.0),
+            },
+        )
+        .expect("valid shape");
+        let mut probes = Vec::new();
+        // Circular-orbit velocity for r = 30, mu = 100.
+        let v = (100.0f32 / 30.0).sqrt();
+        for angle in [0.0f32, 2.1, 4.2] {
+            let p = Vec2::new(angle.cos(), angle.sin()) * 30.0;
+            let id = w
+                .add_dynamic_body(p, Shape2::Circle { radius: 0.5 }, 1.0)
+                .expect("valid shape");
+            let tangent = Vec2::new(-angle.sin(), angle.cos());
+            w.bodies[id].velocity = tangent * v;
+            probes.push(id);
+        }
+        no_damping_no_sleep_2d(&mut w);
+        (w, probes)
+    }
+    let (mut a, probes_a) = scene();
+    let (mut b, _) = scene();
+    for _ in 0..600 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_2d(&a, &b);
+    for &id in &probes_a {
+        let r = a.bodies[id].transform.position.length();
+        assert!(
+            (r - 30.0).abs() / 30.0 < 0.5,
+            "probe escaped/crashed: r={r}"
+        );
+    }
+}
+
+/// BH snapshot round-trip: theta + scales persist, continuation is
+/// bit-identical through JSON and binary Exact loads.
+#[test]
+fn gravity_bh_snapshot_roundtrip() {
+    let mut direct = World2::new();
+    direct.gravity = Vec2::ZERO;
+    direct.gravity_config.mode = GravityMode::BarnesHut;
+    direct.gravity_config.big_g = 2.0;
+    direct.gravity_config.softening = 0.1;
+    direct.gravity_config.theta = 0.7;
+    for (p, s) in [
+        (Vec2::new(-8.0, 0.0), 1.0),
+        (Vec2::new(8.0, 0.0), 0.5),
+        (Vec2::new(0.0, 8.0), 2.0),
+    ] {
+        let id = direct
+            .add_dynamic_body(p, Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        direct.bodies[id].gravity_scale = s;
+    }
+    no_damping_no_sleep_2d(&mut direct);
+    for _ in 0..60 {
+        direct.step(DT);
+    }
+    let json = world2_to_json(&direct, LoadMode::Exact).expect("serializes");
+    assert!(json.contains("\"schema\": 4"));
+    assert!(json.contains("\"theta\": 0.7"));
+    let bytes = world2_to_binary(&direct, LoadMode::Exact).expect("serializes");
+    let mut from_json = world2_from_json(&json, LoadMode::Exact).expect("json loads");
+    let mut from_bin = world2_from_binary(&bytes, LoadMode::Exact).expect("bin loads");
+    assert_eq!(from_json.gravity_config.mode, GravityMode::BarnesHut);
+    assert_eq!(from_bin.gravity_config.theta, 0.7);
+    assert_eq!(from_json.bodies[2].gravity_scale, 2.0);
+    for _ in 0..60 {
+        direct.step(DT);
+        from_json.step(DT);
+        from_bin.step(DT);
+    }
+    assert_worlds_equal_2d(&direct, &from_json);
+    assert_worlds_equal_2d(&direct, &from_bin);
+}
+
+/// Empty BH world steps without panic.
+#[test]
+fn gravity_bh_empty_world() {
+    let mut w = World2::new();
+    w.gravity_config.mode = GravityMode::BarnesHut;
+    for _ in 0..10 {
+        w.step(DT);
+    }
+    assert_eq!(w.bodies.len(), 0);
+}
+
+/// 3D BH determinism.
+#[test]
+fn gravity3_bh_deterministic() {
+    fn scene() -> World3 {
+        let mut w = World3::new();
+        w.gravity = Vec3::ZERO;
+        w.gravity_config.mode = GravityMode::BarnesHut;
+        w.gravity_config.big_g = 1.0;
+        w.gravity_config.softening = 0.1;
+        w.gravity_config.theta = 0.5;
+        for i in 0..30 {
+            let id = w
+                .add_dynamic_body(
+                    Vec3::new(
+                        (i as f32 * 1.7) % 20.0 - 10.0,
+                        (i as f32 * 2.3) % 20.0 - 10.0,
+                        (i as f32 * 3.1) % 20.0 - 10.0,
+                    ),
+                    Shape3::Sphere { radius: 0.5 },
+                    1.0,
+                )
+                .expect("valid shape");
+            w.bodies[id].velocity = Vec3::new(0.1 * i as f32, 0.0, -0.05 * i as f32);
+        }
+        no_damping_no_sleep_3d(&mut w);
+        w
+    }
+    let mut a = scene();
+    let mut b = scene();
+    for _ in 0..60 {
+        a.step(DT);
+        b.step(DT);
+    }
+    assert_worlds_equal_3d(&a, &b);
+}
