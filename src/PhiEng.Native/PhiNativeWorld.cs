@@ -129,14 +129,140 @@ public sealed class PhiNativeWorld : IDisposable
         }
     }
 
+    /// <summary>Set the 2D ambient-force config (spring/SHM, drag, turbulence).</summary>
+    public unsafe void SetAmbientConfig(Dynamics.AmbientConfig2 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = ToFfi(config);
+            int ok = NativeMethods.phieng_world_set_ambient_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected ambient config (check tags and ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the ambient-force config from the native world.</summary>
+    public unsafe Dynamics.AmbientConfig2 GetAmbientConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.AmbientConfig2Ffi ffi;
+            int ok = NativeMethods.phieng_world_get_ambient_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native ambient config read failed.");
+            }
+            return FromFfi(ffi);
+        }
+    }
+
+    /// <summary>Set the simulation clock (2D).</summary>
+    public void SetTime(float t)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (NativeMethods.phieng_world_set_time(_handle, t) == 0)
+            {
+                throw new ArgumentException("Native world rejected time (non-finite).");
+            }
+        }
+    }
+
+    /// <summary>Read the simulation clock (2D).</summary>
+    public unsafe float GetTime()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float t;
+            if (NativeMethods.phieng_world_get_time(_handle, &t) == 0)
+            {
+                throw new InvalidOperationException("Native time read failed.");
+            }
+            return t;
+        }
+    }
+
+    /// <summary>Set a body's ambient-force coupling multiplier (2D).</summary>
+    public void SetBodyAmbientScale(int bodyId, float scale)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (NativeMethods.phieng_world_set_body_ambient_scale(_handle, (uint)bodyId, scale) == 0)
+            {
+                throw new ArgumentException("Native world rejected body ambient scale (unknown body or non-finite).");
+            }
+        }
+    }
+
+    private static NativeMethods.AmbientConfig2Ffi ToFfi(Dynamics.AmbientConfig2 c) => new()
+    {
+        SpringEnabled = c.Spring.Enabled ? 1u : 0u,
+        SpringAx = c.Spring.Anchor.X,
+        SpringAy = c.Spring.Anchor.Y,
+        SpringStiffness = c.Spring.Stiffness,
+        SpringDamping = c.Spring.Damping,
+        SpringMaxDisplacement = c.Spring.MaxDisplacement,
+        DragEnabled = c.Drag.Enabled ? 1u : 0u,
+        DragLinear = c.Drag.Linear,
+        DragQuadratic = c.Drag.Quadratic,
+        AirDensity = c.Drag.AirDensity,
+        DragAngular = c.Drag.Angular,
+        WindX = c.Drag.Wind.X,
+        WindY = c.Drag.Wind.Y,
+        TurbulenceEnabled = c.Turbulence.Enabled ? 1u : 0u,
+        TurbulenceAmplitude = c.Turbulence.Amplitude,
+        TurbulenceFrequency = c.Turbulence.Frequency,
+        TurbulenceTimeScale = c.Turbulence.TimeScale,
+        TurbulenceSeed = c.Turbulence.Seed,
+        TurbulenceOctaves = (uint)c.Turbulence.Octaves,
+        TurbulenceDivergenceFree = c.Turbulence.DivergenceFree ? 1u : 0u,
+    };
+
+    private static Dynamics.AmbientConfig2 FromFfi(NativeMethods.AmbientConfig2Ffi f) => new()
+    {
+        Spring = new Dynamics.SpringConfig2
+        {
+            Enabled = f.SpringEnabled != 0,
+            Anchor = new Vector2(f.SpringAx, f.SpringAy),
+            Stiffness = f.SpringStiffness,
+            Damping = f.SpringDamping,
+            MaxDisplacement = f.SpringMaxDisplacement,
+        },
+        Drag = new Dynamics.DragConfig2
+        {
+            Enabled = f.DragEnabled != 0,
+            Linear = f.DragLinear,
+            Quadratic = f.DragQuadratic,
+            AirDensity = f.AirDensity,
+            Angular = f.DragAngular,
+            Wind = new Vector2(f.WindX, f.WindY),
+        },
+        Turbulence = new Dynamics.TurbulenceConfig2
+        {
+            Enabled = f.TurbulenceEnabled != 0,
+            Amplitude = f.TurbulenceAmplitude,
+            Frequency = f.TurbulenceFrequency,
+            TimeScale = f.TurbulenceTimeScale,
+            Seed = f.TurbulenceSeed,
+            Octaves = (int)f.TurbulenceOctaves,
+            DivergenceFree = f.TurbulenceDivergenceFree != 0,
+        },
+    };
+
     public int BodyCount
     {
         get
         {
             lock (_gate)
             {
-                ThrowIfDisposed();
-                return NativeMethods.phieng_world_body_count(_handle);
+                ThrowIfDisposed();                return NativeMethods.phieng_world_body_count(_handle);
             }
         }
     }

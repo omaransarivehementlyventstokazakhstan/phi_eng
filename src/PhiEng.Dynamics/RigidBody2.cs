@@ -48,6 +48,11 @@ public class RigidBody2
     /// </summary>
     public float GravityScale { get; set; }
     /// <summary>
+    /// Ambient-force coupling multiplier (1.0 full, 0.0 immune; must be
+    /// finite). Mirrors Rust <c>RigidBody2::ambient_scale</c>.
+    /// </summary>
+    public float AmbientScale { get; set; }
+    /// <summary>
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     /// </summary>
@@ -73,6 +78,7 @@ public class RigidBody2
         LinearDamping = 0.01f;
         AngularDamping = 0.01f;
         GravityScale = 1.0f;
+        AmbientScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;

@@ -136,6 +136,143 @@ internal static partial class NativeMethods
         float* outScale);
 
     /// <summary>
+    /// Ambient-force config FFI struct (2D). Field order mirrors Rust
+    /// <c>AmbientConfig2Ffi</c> — never reorder.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct AmbientConfig2Ffi
+    {
+        public uint SpringEnabled;
+        public float SpringAx;
+        public float SpringAy;
+        public float SpringStiffness;
+        public float SpringDamping;
+        public float SpringMaxDisplacement;
+        public uint DragEnabled;
+        public float DragLinear;
+        public float DragQuadratic;
+        public float AirDensity;
+        public float DragAngular;
+        public float WindX;
+        public float WindY;
+        public uint TurbulenceEnabled;
+        public float TurbulenceAmplitude;
+        public float TurbulenceFrequency;
+        public float TurbulenceTimeScale;
+        public uint TurbulenceSeed;
+        public uint TurbulenceOctaves;
+        public uint TurbulenceDivergenceFree;
+    }
+
+    /// <summary>Ambient-force config FFI struct (3D). Mirrors Rust <c>AmbientConfig3Ffi</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct AmbientConfig3Ffi
+    {
+        public uint SpringEnabled;
+        public float SpringAx;
+        public float SpringAy;
+        public float SpringAz;
+        public float SpringStiffness;
+        public float SpringDamping;
+        public float SpringMaxDisplacement;
+        public uint DragEnabled;
+        public float DragLinear;
+        public float DragQuadratic;
+        public float AirDensity;
+        public float DragAngular;
+        public float WindX;
+        public float WindY;
+        public float WindZ;
+        public uint TurbulenceEnabled;
+        public float TurbulenceAmplitude;
+        public float TurbulenceFrequency;
+        public float TurbulenceTimeScale;
+        public uint TurbulenceSeed;
+        public uint TurbulenceOctaves;
+        public uint TurbulenceDivergenceFree;
+    }
+
+    /// <summary>Sets the 2D ambient-force config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_ambient_config(
+        IntPtr world,
+        AmbientConfig2Ffi* cfg);
+
+    /// <summary>Reads the 2D ambient-force config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_ambient_config(
+        IntPtr world,
+        AmbientConfig2Ffi* outCfg);
+
+    /// <summary>Sets the 3D ambient-force config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_ambient_config(
+        IntPtr world,
+        AmbientConfig3Ffi* cfg);
+
+    /// <summary>Reads the 3D ambient-force config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_ambient_config(
+        IntPtr world,
+        AmbientConfig3Ffi* outCfg);
+
+    /// <summary>Sets the 2D simulation clock.</summary>
+    /// <returns>1 on success, 0 for null world or non-finite input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_time(IntPtr world, float t);
+
+    /// <summary>Reads the 2D simulation clock.</summary>
+    /// <returns>1 on success, 0 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_time(IntPtr world, float* outT);
+
+    /// <summary>Sets the 3D simulation clock.</summary>
+    /// <returns>1 on success, 0 for null world or non-finite input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_time(IntPtr world, float t);
+
+    /// <summary>Reads the 3D simulation clock.</summary>
+    /// <returns>1 on success, 0 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_time(IntPtr world, float* outT);
+
+    /// <summary>Sets a body's ambient-force coupling multiplier (2D).</summary>
+    /// <returns>1 on success, 0 for null world, unknown body, or non-finite scale.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_ambient_scale(
+        IntPtr world,
+        uint bodyId,
+        float scale);
+
+    /// <summary>Reads a body's ambient-force coupling multiplier (2D).</summary>
+    /// <returns>1 on success, 0 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_ambient_scale(
+        IntPtr world,
+        uint bodyId,
+        float* outScale);
+
+    /// <summary>Sets a body's ambient-force coupling multiplier (3D).</summary>
+    /// <returns>1 on success, 0 for null world, unknown body, or non-finite scale.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_ambient_scale(
+        IntPtr world,
+        uint bodyId,
+        float scale);
+
+    /// <summary>Reads a body's ambient-force coupling multiplier (3D).</summary>
+    /// <returns>1 on success, 0 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_ambient_scale(
+        IntPtr world,
+        uint bodyId,
+        float* outScale);
+
+    /// <summary>
     /// Sets the sleep velocity thresholds (0.0 disables sleeping).
     /// </summary>
     /// <returns>1 on success, 0 for null world or negative/non-finite input.</returns>

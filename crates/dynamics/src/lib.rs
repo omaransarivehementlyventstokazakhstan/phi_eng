@@ -1,3 +1,4 @@
+pub mod ambient;
 pub mod barnes_hut;
 pub mod body;
 pub mod fluid;
@@ -8,6 +9,7 @@ pub mod island;
 pub mod joint;
 pub mod joint3;
 pub mod material;
+pub mod noise;
 pub mod pool;
 pub mod snapshot;
 pub mod solver;
@@ -20,6 +22,7 @@ pub mod world;
 // when the SoA solver backend is ready with differential tests.
 // pub mod world_soa;
 
+pub use ambient::*;
 pub use barnes_hut::*;
 pub use body::*;
 pub use fluid::*;
@@ -29,6 +32,7 @@ pub use island::*;
 pub use joint::*;
 pub use joint3::*;
 pub use material::*;
+pub use noise::*;
 pub use pool::*;
 pub use snapshot::*;
 pub use solver::*;

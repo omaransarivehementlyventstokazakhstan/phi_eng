@@ -36,6 +36,10 @@ pub struct RigidBody2 {
     /// mass), negative = repulsion. Only finiteness is enforced
     /// (see `validate_body_2d`); must be finite.
     pub gravity_scale: f32,
+    /// Ambient-force coupling multiplier (warm: ambient kick). 1.0 = full
+    /// coupling to spring/drag/turbulence, 0.0 = immune, negative is the
+    /// caller's physics. Only finiteness is enforced; must be finite.
+    pub ambient_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -323,6 +327,7 @@ impl RigidBody2 {
             linear_damping: 0.01,
             angular_damping: 0.01,
             gravity_scale: 1.0,
+            ambient_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -640,6 +645,8 @@ pub struct RigidBody3 {
     pub angular_damping: f32,
     /// Gravitational coupling multiplier (see `RigidBody2::gravity_scale`).
     pub gravity_scale: f32,
+    /// Ambient-force coupling multiplier (see `RigidBody2::ambient_scale`).
+    pub ambient_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -764,6 +771,7 @@ impl RigidBody3 {
             linear_damping: 0.01,
             angular_damping: 0.01,
             gravity_scale: 1.0,
+            ambient_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,

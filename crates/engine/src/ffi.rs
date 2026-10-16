@@ -224,6 +224,414 @@ pub unsafe extern "C" fn phieng_world_get_gravity_config(
     1
 }
 
+// ============================================================================
+// Ambient force config FFI (spring / SHM, drag, turbulence)
+// ============================================================================
+
+/// C-ABI mirror of the 2D ambient-force configuration. Flags are `u32`
+/// (0 = false). Field order is the ABI contract — never reorder.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AmbientConfig2Ffi {
+    /// Spring/SHM master switch (0/1).
+    pub spring_enabled: u32,
+    /// Spring world anchor x.
+    pub spring_ax: f32,
+    /// Spring world anchor y.
+    pub spring_ay: f32,
+    /// Spring stiffness `k`.
+    pub spring_stiffness: f32,
+    /// Spring viscous damping `c`.
+    pub spring_damping: f32,
+    /// Spring rest-length leash (0 = unlimited).
+    pub spring_max_displacement: f32,
+    /// Drag master switch (0/1).
+    pub drag_enabled: u32,
+    /// Linear (Stokes) drag coefficient.
+    pub drag_linear: f32,
+    /// Quadratic drag coefficient.
+    pub drag_quadratic: f32,
+    /// Air density multiplier.
+    pub air_density: f32,
+    /// Angular drag coefficient.
+    pub drag_angular: f32,
+    /// Ambient wind x.
+    pub wind_x: f32,
+    /// Ambient wind y.
+    pub wind_y: f32,
+    /// Turbulence master switch (0/1).
+    pub turbulence_enabled: u32,
+    /// Peak turbulence acceleration.
+    pub turbulence_amplitude: f32,
+    /// Turbulence spatial frequency.
+    pub turbulence_frequency: f32,
+    /// Turbulence temporal rate.
+    pub turbulence_time_scale: f32,
+    /// Turbulence noise seed.
+    pub turbulence_seed: u32,
+    /// Turbulence fBm octaves (clamped to 1..=8).
+    pub turbulence_octaves: u32,
+    /// Turbulence curl-noise (divergence-free) flag (0/1).
+    pub turbulence_divergence_free: u32,
+}
+
+/// 3D counterpart of [`AmbientConfig2Ffi`] (wind is a `Vec3`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AmbientConfig3Ffi {
+    /// Spring/SHM master switch (0/1).
+    pub spring_enabled: u32,
+    /// Spring world anchor x.
+    pub spring_ax: f32,
+    /// Spring world anchor y.
+    pub spring_ay: f32,
+    /// Spring world anchor z.
+    pub spring_az: f32,
+    /// Spring stiffness `k`.
+    pub spring_stiffness: f32,
+    /// Spring viscous damping `c`.
+    pub spring_damping: f32,
+    /// Spring rest-length leash (0 = unlimited).
+    pub spring_max_displacement: f32,
+    /// Drag master switch (0/1).
+    pub drag_enabled: u32,
+    /// Linear (Stokes) drag coefficient.
+    pub drag_linear: f32,
+    /// Quadratic drag coefficient.
+    pub drag_quadratic: f32,
+    /// Air density multiplier.
+    pub air_density: f32,
+    /// Angular drag coefficient.
+    pub drag_angular: f32,
+    /// Ambient wind x.
+    pub wind_x: f32,
+    /// Ambient wind y.
+    pub wind_y: f32,
+    /// Ambient wind z.
+    pub wind_z: f32,
+    /// Turbulence master switch (0/1).
+    pub turbulence_enabled: u32,
+    /// Peak turbulence acceleration.
+    pub turbulence_amplitude: f32,
+    /// Turbulence spatial frequency.
+    pub turbulence_frequency: f32,
+    /// Turbulence temporal rate.
+    pub turbulence_time_scale: f32,
+    /// Turbulence noise seed.
+    pub turbulence_seed: u32,
+    /// Turbulence fBm octaves (clamped to 1..=8).
+    pub turbulence_octaves: u32,
+    /// Turbulence curl-noise (divergence-free) flag (0/1).
+    pub turbulence_divergence_free: u32,
+}
+
+fn ambient2_from_ffi(c: &AmbientConfig2Ffi) -> Option<phieng_dynamics::AmbientConfig2> {
+    use phieng_dynamics::{AmbientConfig2, DragConfig2, SpringConfig2, TurbulenceConfig2};
+    for v in [
+        c.spring_ax,
+        c.spring_ay,
+        c.spring_stiffness,
+        c.spring_damping,
+        c.spring_max_displacement,
+        c.drag_linear,
+        c.drag_quadratic,
+        c.air_density,
+        c.drag_angular,
+        c.wind_x,
+        c.wind_y,
+        c.turbulence_amplitude,
+        c.turbulence_frequency,
+        c.turbulence_time_scale,
+    ] {
+        if !valid(v) {
+            return None;
+        }
+    }
+    if c.spring_stiffness < 0.0
+        || c.spring_damping < 0.0
+        || c.spring_max_displacement < 0.0
+        || c.drag_linear < 0.0
+        || c.drag_quadratic < 0.0
+        || c.air_density < 0.0
+        || c.drag_angular < 0.0
+        || c.turbulence_amplitude < 0.0
+    {
+        return None;
+    }
+    Some(AmbientConfig2 {
+        spring: SpringConfig2 {
+            enabled: c.spring_enabled != 0,
+            anchor: Vec2::new(c.spring_ax, c.spring_ay),
+            stiffness: c.spring_stiffness,
+            damping: c.spring_damping,
+            max_displacement: c.spring_max_displacement,
+        },
+        drag: DragConfig2 {
+            enabled: c.drag_enabled != 0,
+            linear: c.drag_linear,
+            quadratic: c.drag_quadratic,
+            air_density: c.air_density,
+            angular: c.drag_angular,
+            wind: Vec2::new(c.wind_x, c.wind_y),
+        },
+        turbulence: TurbulenceConfig2 {
+            enabled: c.turbulence_enabled != 0,
+            amplitude: c.turbulence_amplitude,
+            frequency: c.turbulence_frequency,
+            time_scale: c.turbulence_time_scale,
+            seed: c.turbulence_seed,
+            octaves: c.turbulence_octaves.min(255) as u8,
+            divergence_free: c.turbulence_divergence_free != 0,
+        },
+    })
+}
+
+fn ambient2_to_ffi(a: &phieng_dynamics::AmbientConfig2) -> AmbientConfig2Ffi {
+    AmbientConfig2Ffi {
+        spring_enabled: a.spring.enabled as u32,
+        spring_ax: a.spring.anchor.x,
+        spring_ay: a.spring.anchor.y,
+        spring_stiffness: a.spring.stiffness,
+        spring_damping: a.spring.damping,
+        spring_max_displacement: a.spring.max_displacement,
+        drag_enabled: a.drag.enabled as u32,
+        drag_linear: a.drag.linear,
+        drag_quadratic: a.drag.quadratic,
+        air_density: a.drag.air_density,
+        drag_angular: a.drag.angular,
+        wind_x: a.drag.wind.x,
+        wind_y: a.drag.wind.y,
+        turbulence_enabled: a.turbulence.enabled as u32,
+        turbulence_amplitude: a.turbulence.amplitude,
+        turbulence_frequency: a.turbulence.frequency,
+        turbulence_time_scale: a.turbulence.time_scale,
+        turbulence_seed: a.turbulence.seed,
+        turbulence_octaves: a.turbulence.octaves as u32,
+        turbulence_divergence_free: a.turbulence.divergence_free as u32,
+    }
+}
+
+fn ambient3_from_ffi(c: &AmbientConfig3Ffi) -> Option<phieng_dynamics::AmbientConfig3> {
+    use phieng_dynamics::{AmbientConfig3, DragConfig3, SpringConfig3, TurbulenceConfig3};
+    for v in [
+        c.spring_ax,
+        c.spring_ay,
+        c.spring_az,
+        c.spring_stiffness,
+        c.spring_damping,
+        c.spring_max_displacement,
+        c.drag_linear,
+        c.drag_quadratic,
+        c.air_density,
+        c.drag_angular,
+        c.wind_x,
+        c.wind_y,
+        c.wind_z,
+        c.turbulence_amplitude,
+        c.turbulence_frequency,
+        c.turbulence_time_scale,
+    ] {
+        if !valid(v) {
+            return None;
+        }
+    }
+    if c.spring_stiffness < 0.0
+        || c.spring_damping < 0.0
+        || c.spring_max_displacement < 0.0
+        || c.drag_linear < 0.0
+        || c.drag_quadratic < 0.0
+        || c.air_density < 0.0
+        || c.drag_angular < 0.0
+        || c.turbulence_amplitude < 0.0
+    {
+        return None;
+    }
+    Some(AmbientConfig3 {
+        spring: SpringConfig3 {
+            enabled: c.spring_enabled != 0,
+            anchor: Vec3::new(c.spring_ax, c.spring_ay, c.spring_az),
+            stiffness: c.spring_stiffness,
+            damping: c.spring_damping,
+            max_displacement: c.spring_max_displacement,
+        },
+        drag: DragConfig3 {
+            enabled: c.drag_enabled != 0,
+            linear: c.drag_linear,
+            quadratic: c.drag_quadratic,
+            air_density: c.air_density,
+            angular: c.drag_angular,
+            wind: Vec3::new(c.wind_x, c.wind_y, c.wind_z),
+        },
+        turbulence: TurbulenceConfig3 {
+            enabled: c.turbulence_enabled != 0,
+            amplitude: c.turbulence_amplitude,
+            frequency: c.turbulence_frequency,
+            time_scale: c.turbulence_time_scale,
+            seed: c.turbulence_seed,
+            octaves: c.turbulence_octaves.min(255) as u8,
+            divergence_free: c.turbulence_divergence_free != 0,
+        },
+    })
+}
+
+fn ambient3_to_ffi(a: &phieng_dynamics::AmbientConfig3) -> AmbientConfig3Ffi {
+    AmbientConfig3Ffi {
+        spring_enabled: a.spring.enabled as u32,
+        spring_ax: a.spring.anchor.x,
+        spring_ay: a.spring.anchor.y,
+        spring_az: a.spring.anchor.z,
+        spring_stiffness: a.spring.stiffness,
+        spring_damping: a.spring.damping,
+        spring_max_displacement: a.spring.max_displacement,
+        drag_enabled: a.drag.enabled as u32,
+        drag_linear: a.drag.linear,
+        drag_quadratic: a.drag.quadratic,
+        air_density: a.drag.air_density,
+        drag_angular: a.drag.angular,
+        wind_x: a.drag.wind.x,
+        wind_y: a.drag.wind.y,
+        wind_z: a.drag.wind.z,
+        turbulence_enabled: a.turbulence.enabled as u32,
+        turbulence_amplitude: a.turbulence.amplitude,
+        turbulence_frequency: a.turbulence.frequency,
+        turbulence_time_scale: a.turbulence.time_scale,
+        turbulence_seed: a.turbulence.seed,
+        turbulence_octaves: a.turbulence.octaves as u32,
+        turbulence_divergence_free: a.turbulence.divergence_free as u32,
+    }
+}
+
+/// Set the 2D ambient-force config from a caller-owned struct. Returns 1
+/// on success, 0 for null world/struct or any out-of-range input (world
+/// left unchanged).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `cfg` must be null (clean `0`) or point at an initialized
+/// [`AmbientConfig2Ffi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_ambient_config(
+    world: *mut World2,
+    cfg: *const AmbientConfig2Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = ambient2_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).ambient = parsed;
+    1
+}
+
+/// Copy the 2D ambient-force config out. Returns 1 on success, 0 for
+/// null world/out.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `out` must be null (clean `0`) or valid for a write of one
+/// [`AmbientConfig2Ffi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_ambient_config(
+    world: *mut World2,
+    out: *mut AmbientConfig2Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = ambient2_to_ffi(&(*world).ambient);
+    1
+}
+
+/// Set the 3D ambient-force config. See
+/// [`phieng_world_set_ambient_config`].
+/// # Safety
+/// See [`phieng_world_set_ambient_config`] (3D world/struct).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_ambient_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const AmbientConfig3Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = ambient3_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).ambient = parsed;
+    1
+}
+
+/// Copy the 3D ambient-force config out. See
+/// [`phieng_world_get_ambient_config`].
+/// # Safety
+/// See [`phieng_world_get_ambient_config`] (3D world/struct).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_ambient_config(
+    world: *mut phieng_dynamics::World3,
+    out: *mut AmbientConfig3Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = ambient3_to_ffi(&(*world).ambient);
+    1
+}
+
+/// Set the simulation clock (2D). Returns 1 on success, 0 for null world
+/// or non-finite input.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_time(world: *mut World2, t: f32) -> i32 {
+    if world.is_null() || !valid(t) {
+        return 0;
+    }
+    (*world).time = t;
+    1
+}
+
+/// Read the simulation clock (2D). Returns 1 on success, 0 on bad input.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one f32.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_time(world: *mut World2, out: *mut f32) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = (*world).time;
+    1
+}
+
+/// Set the simulation clock (3D). See [`phieng_world_set_time`].
+/// # Safety
+/// See [`phieng_world_set_time`] (3D world).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_time(
+    world: *mut phieng_dynamics::World3,
+    t: f32,
+) -> i32 {
+    if world.is_null() || !valid(t) {
+        return 0;
+    }
+    (*world).time = t;
+    1
+}
+
+/// Read the simulation clock (3D). See [`phieng_world_get_time`].
+/// # Safety
+/// See [`phieng_world_get_time`] (3D world).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_time(
+    world: *mut phieng_dynamics::World3,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = (*world).time;
+    1
+}
+
 /// Number of bodies in the world, or -1 for null.
 /// # Safety
 /// `world` must be a live pointer from [`phieng_world_new`] (or null,
@@ -509,6 +917,47 @@ pub unsafe extern "C" fn phieng_world_get_body_gravity_scale(
         return 0;
     };
     *out_scale = world_ref.bodies[index].gravity_scale;
+    1
+}
+
+/// Set a body's ambient-force coupling multiplier (2D). See
+/// [`phieng_world_set_body_gravity_scale`].
+/// # Safety
+/// See [`phieng_world_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_ambient_scale(
+    world: *mut World2,
+    body_id: u32,
+    scale: f32,
+) -> i32 {
+    if world.is_null() || !valid(scale) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].ambient_scale = scale;
+    1
+}
+
+/// Copy a body's ambient-force coupling multiplier out (2D).
+/// # Safety
+/// See [`phieng_world_get_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_ambient_scale(
+    world: *mut World2,
+    body_id: u32,
+    out_scale: *mut f32,
+) -> i32 {
+    if world.is_null() || out_scale.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_scale = world_ref.bodies[index].ambient_scale;
     1
 }
 
@@ -1591,6 +2040,46 @@ pub unsafe extern "C" fn phieng_world3_get_body_gravity_scale(
     1
 }
 
+/// Set a body's ambient-force coupling multiplier (3D).
+/// # Safety
+/// See [`phieng_world_set_body_gravity_scale`] (3D world).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_ambient_scale(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    scale: f32,
+) -> i32 {
+    if world.is_null() || !valid(scale) {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].ambient_scale = scale;
+    1
+}
+
+/// Copy a body's ambient-force coupling multiplier out (3D).
+/// # Safety
+/// See [`phieng_world_get_body_gravity_scale`] (3D world).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_ambient_scale(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    out_scale: *mut f32,
+) -> i32 {
+    if world.is_null() || out_scale.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_scale = world_ref.bodies[index].ambient_scale;
+    1
+}
+
 /// Add 3D SPH fluid particles from interleaved `positions` (`count`
 /// triples `[x0, y0, z0, ...]`), starting at zero velocity. Returns the
 /// number added, or 0 on null world/positions or any non-finite input
@@ -2390,6 +2879,70 @@ mod tests {
                 ),
                 0
             );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn ambient_config_roundtrip() {
+        unsafe {
+            let world = phieng_world_new();
+            let cfg = AmbientConfig2Ffi {
+                spring_enabled: 1,
+                spring_ax: 1.5,
+                spring_ay: -2.5,
+                spring_stiffness: 30.0,
+                spring_damping: 0.5,
+                spring_max_displacement: 4.0,
+                drag_enabled: 1,
+                drag_linear: 0.3,
+                drag_quadratic: 0.7,
+                air_density: 1.2,
+                drag_angular: 0.05,
+                wind_x: 1.0,
+                wind_y: 0.0,
+                turbulence_enabled: 1,
+                turbulence_amplitude: 2.0,
+                turbulence_frequency: 0.6,
+                turbulence_time_scale: 1.3,
+                turbulence_seed: 42,
+                turbulence_octaves: 4,
+                turbulence_divergence_free: 1,
+            };
+            assert_eq!(phieng_world_set_ambient_config(world, &cfg), 1);
+            let mut out = std::mem::zeroed::<AmbientConfig2Ffi>();
+            assert_eq!(phieng_world_get_ambient_config(world, &mut out), 1);
+            assert_eq!(out.spring_enabled, 1);
+            assert_eq!(out.spring_stiffness, 30.0);
+            assert_eq!(out.spring_ax, 1.5);
+            assert_eq!(out.wind_x, 1.0);
+            assert_eq!(out.turbulence_seed, 42);
+            assert_eq!(out.turbulence_octaves, 4);
+            assert_eq!(out.turbulence_divergence_free, 1);
+            // Null tolerance.
+            assert_eq!(
+                phieng_world_set_ambient_config(std::ptr::null_mut(), &cfg),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_ambient_config(world, std::ptr::null_mut()),
+                0
+            );
+            // Negative coefficient rejected without mutating the world.
+            let bad = AmbientConfig2Ffi {
+                spring_stiffness: -1.0,
+                ..cfg
+            };
+            assert_eq!(phieng_world_set_ambient_config(world, &bad), 0);
+            let mut after = std::mem::zeroed::<AmbientConfig2Ffi>();
+            assert_eq!(phieng_world_get_ambient_config(world, &mut after), 1);
+            assert_eq!(after.spring_stiffness, 30.0);
+            // Clock round-trip.
+            assert_eq!(phieng_world_set_time(world, 3.5), 1);
+            let mut t = 0.0f32;
+            assert_eq!(phieng_world_get_time(world, &mut t), 1);
+            assert_eq!(t, 3.5);
+            assert_eq!(phieng_world_set_time(world, f32::NAN), 0);
             phieng_world_free(world);
         }
     }

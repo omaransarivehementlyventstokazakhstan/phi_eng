@@ -94,6 +94,10 @@ public class RigidBody3
     /// <c>RigidBody2.GravityScale</c>).
     /// </summary>
     public float GravityScale { get; set; }
+    /// <summary>
+    /// Ambient-force coupling multiplier (see <c>RigidBody2.AmbientScale</c>).
+    /// </summary>
+    public float AmbientScale { get; set; }
     /// <summary>Surface and mass properties (shapes inherit it).</summary>
     public PhysicsMaterial Material { get; set; }
     /// <summary>Whether the body is immovable.</summary>
@@ -117,6 +121,7 @@ public class RigidBody3
         LinearDamping = 0.01f;
         AngularDamping = 0.01f;
         GravityScale = 1.0f;
+        AmbientScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;

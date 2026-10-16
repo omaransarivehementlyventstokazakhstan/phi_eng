@@ -96,6 +96,12 @@ pub struct World2 {
     /// [`crate::gravity`]). Default is the legacy uniform field with
     /// semi-implicit Euler — bit-identical to pre-gravity behavior.
     pub gravity_config: super::gravity::GravityConfig2,
+    /// Ambient force fields — spring (SHM), aerodynamic drag, and
+    /// turbulence (see [`crate::ambient`]). Default is a no-op.
+    pub ambient: super::ambient::AmbientConfig2,
+    /// Monotonic simulation clock in seconds, advanced by `dt` each step.
+    /// Drives time-varying ambient fields (turbulence).
+    pub time: f32,
     /// Next body ID
     pub next_body_id: usize,
     /// Previous frame's contact impulses, keyed by (body_a, body_b).
@@ -133,6 +139,8 @@ impl World2 {
             solver: Solver::new(),
             gravity: Vec2::new(0.0, -9.81),
             gravity_config: super::gravity::GravityConfig2::default(),
+            ambient: super::ambient::AmbientConfig2::default(),
+            time: 0.0,
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
             dt: 1.0 / 60.0,
@@ -419,6 +427,13 @@ impl World2 {
             verlet,
         );
 
+        // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
+        // and same Verlet split as the gravity kick above: a pure velocity
+        // kick pre-solve. A no-op when no sub-field is enabled.
+        if self.ambient.is_active() {
+            super::ambient::ambient_kick_2(&mut self.bodies, &self.ambient, self.time, h);
+        }
+
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
@@ -539,6 +554,14 @@ impl World2 {
                 dt * 0.5,
                 true,
             );
+            if self.ambient.is_active() {
+                super::ambient::ambient_kick_2(
+                    &mut self.bodies,
+                    &self.ambient,
+                    self.time,
+                    dt * 0.5,
+                );
+            }
         } else {
             // 5. Integrate motion
             for body in self.bodies.iter_mut() {
@@ -558,6 +581,9 @@ impl World2 {
                 body.angular_velocity = 0.0;
             }
         }
+
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        self.time += dt;
     }
 
     pub fn wake_body(&mut self, body_id: usize) {
@@ -1011,6 +1037,11 @@ pub struct World3 {
     /// [`crate::gravity`]). Default is the legacy uniform field with
     /// semi-implicit Euler — bit-identical to pre-gravity behavior.
     pub gravity_config: super::gravity::GravityConfig3,
+    /// Ambient force fields — spring (SHM), aerodynamic drag, and
+    /// turbulence (see [`crate::ambient`]). Default is a no-op.
+    pub ambient: super::ambient::AmbientConfig3,
+    /// Monotonic simulation clock in seconds (see [`World2::time`]).
+    pub time: f32,
     /// Next body ID
     pub next_body_id: usize,
     /// Fixed timestep
@@ -1059,6 +1090,8 @@ impl World3 {
             solver: Solver3D::new(),
             gravity: Vec3::new(0.0, -9.81, 0.0),
             gravity_config: super::gravity::GravityConfig3::default(),
+            ambient: super::ambient::AmbientConfig3::default(),
+            time: 0.0,
             next_body_id: 0,
             dt: 1.0 / 60.0,
             linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
@@ -1210,6 +1243,12 @@ impl World3 {
             verlet,
         );
 
+        // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
+        // and same Verlet split as the gravity kick above.
+        if self.ambient.is_active() {
+            super::ambient::ambient_kick_3(&mut self.bodies, &self.ambient, self.time, h);
+        }
+
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
@@ -1330,6 +1369,14 @@ impl World3 {
                 dt * 0.5,
                 true,
             );
+            if self.ambient.is_active() {
+                super::ambient::ambient_kick_3(
+                    &mut self.bodies,
+                    &self.ambient,
+                    self.time,
+                    dt * 0.5,
+                );
+            }
         } else {
             // 5. Integrate motion
             for body in self.bodies.iter_mut() {
@@ -1350,6 +1397,9 @@ impl World3 {
                 body.angular_velocity = Vec3::ZERO;
             }
         }
+
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        self.time += dt;
 
         // Return scratch buffers for the next step.
         self.scratch_pairs = pairs;
@@ -1802,6 +1852,69 @@ mod tests {
             .expect("valid shape");
         assert_eq!(id, 0);
         assert_eq!(world.bodies.len(), 1);
+    }
+
+    #[test]
+    fn test_world2_time_advances() {
+        let mut world = World2::new();
+        assert_eq!(world.time, 0.0);
+        world.step(1.0 / 60.0);
+        assert!((world.time - 1.0 / 60.0).abs() < 1e-9);
+        world.step(1.0 / 60.0);
+        assert!((world.time - 2.0 / 60.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_world2_spring_oscillates() {
+        let mut world = World2::new();
+        world.gravity = Vec2::ZERO;
+        let id = world
+            .add_dynamic_body(Vec2::new(1.0, 0.0), Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        world.bodies[id].linear_damping = 0.0;
+        world.linear_sleep_threshold = 0.0;
+        world.ambient.spring = super::super::ambient::SpringConfig2 {
+            enabled: true,
+            anchor: Vec2::ZERO,
+            stiffness: 40.0,
+            damping: 0.0,
+            max_displacement: 0.0,
+        };
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        for _ in 0..600 {
+            world.step(1.0 / 240.0);
+            let x = world.bodies[id].transform.position.x;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+        }
+        assert!(
+            max_x > 0.5 && min_x < -0.5,
+            "spring did not oscillate: [{min_x},{max_x}]"
+        );
+    }
+
+    #[test]
+    fn test_world2_ambient_default_noop() {
+        // Default ambient config is fully inert: a body's trajectory is
+        // exactly what gravity alone produces (kick is gated off).
+        let mut world = World2::new();
+        world.gravity = Vec2::new(0.0, -9.81);
+        let id = world
+            .add_dynamic_body(Vec2::new(0.0, 10.0), Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        world.bodies[id].linear_damping = 0.0;
+        assert!(!world.ambient.is_active());
+        for _ in 0..120 {
+            world.step(1.0 / 60.0);
+        }
+        // Free-fall: v = g*t exactly (no damping, no contacts).
+        let t = 2.0f32;
+        assert!(
+            (world.bodies[id].velocity.y - (-9.81 * t)).abs() < 1e-2,
+            "default ambient perturbed free fall: {}",
+            world.bodies[id].velocity.y
+        );
     }
 
     #[test]

@@ -7,6 +7,40 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Added
+- **Ambient force fields (Rust + managed C#)**: a new
+  `phieng_dynamics::ambient` module with three independently-toggled
+  fields applied as a pre-solve velocity kick (same pipeline slot and
+  Verlet half-kick contract as gravity):
+  - **Spring / simple-harmonic-motion** (`SpringConfig2/3`): a linear
+    restoring force `F = -k*(x - anchor) - c*v` with an optional
+    rest-length leash, giving the textbook damped oscillator
+    (`ω = sqrt(k/m)`, `ζ = c/(2*sqrt(k*m))`).
+  - **Air resistance** (`DragConfig2/3`): linear (Stokes) plus quadratic
+    (`0.5*rho*Cd*A*|v_rel|*v_rel`) drag against an ambient wind, with an
+    angular-drag torque. Reference area is derived per shape
+    (circle/sphere analytic, box/capsule/polygon hull proxies).
+  - **Air turbulence** (`TurbulenceConfig2/3`): deterministic seeded
+    value-noise fBm (see `phieng_dynamics::noise`), optionally
+    divergence-free via curl noise. Bounded to the configured amplitude.
+  - Per-body `ambient_scale` coupling multiplier (0 = immune), mirroring
+    `gravity_scale`.
+  - Clock: `World2/3::time` advances by `dt` each step and drives
+    time-varying turbulence.
+- **Ambient FFI surface**: `phieng_world[_3]_set/get_ambient_config`
+  (repr(C) `AmbientConfig2Ffi`/`AmbientConfig3Ffi`),
+  `phieng_world[_3]_set/get_time`, and
+  `phieng_world[_3]_set_body_ambient_scale`.
+- **Managed mirror**: `Ambient.cs`, `AmbientIntegration.cs`,
+  `TurbulenceNoise.cs` in `PhiEng.Dynamics`; `World2/3.Ambient` + `Time`;
+  `RigidBody2/3.AmbientScale`; native wrappers in `PhiNativeWorld(3)`.
+- **Snapshot schema v5**: adds the ambient config block, the simulation
+  clock, and per-body `ambient_scale` (conditional: default worlds stay
+  v3 and gravity-only worlds stay v4, byte-identical to older files).
+- **Ambient parity block A01–A05** (mirrored Rust↔C#): spring period,
+  drag terminal velocity, turbulence determinism, default no-op, and
+  scale immunity.
+
 ## [0.4.0] - 2026-10-16
 
 ### Added

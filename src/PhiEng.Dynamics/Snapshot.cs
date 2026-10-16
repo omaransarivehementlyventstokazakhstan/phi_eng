@@ -32,15 +32,20 @@ public static class Snapshot
 {
     /// <summary>
     /// Snapshot schema version. Must match Rust SNAPSHOT_SCHEMA_VERSION.
-    /// v4 adds the gravity config block and per-body gravity scales;
-    /// writers emit v3 for default-gravity worlds (byte-compatible with
-    /// older files) and v4 otherwise.
+    /// v4 adds the gravity config block and per-body gravity scales; v5
+    /// adds the ambient-force config block (spring/drag/turbulence), the
+    /// simulation clock, and per-body ambient scales. Writers emit v3 for
+    /// default worlds and v4 for gravity-only worlds (byte-compatible
+    /// with older files); anything using ambient features uses v5.
     /// </summary>
-    public const uint SchemaVersion = 4;
+    public const uint SchemaVersion = 5;
+
+    /// <summary>Schema that introduced the gravity block (v4).</summary>
+    public const uint GravitySchemaVersion = 4;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
-    /// they load as defaults. Anything outside [3, 4] is rejected.
+    /// they load as defaults. Anything outside [3, 5] is rejected.
     /// </summary>
     public const uint MinReadableSchemaVersion = 3;
 
@@ -272,6 +277,8 @@ public static class Snapshot
         /// files (no key) decode to full coupling, mirroring Rust.
         /// </summary>
         [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
+        /// <summary>Ambient-force coupling multiplier (schema v5; default 1.0).</summary>
+        [JsonPropertyName("ambient_scale")] public float AmbientScale { get; set; } = 1.0f;
     }
 
     private sealed class Body3Dto
@@ -289,6 +296,8 @@ public static class Snapshot
         [JsonPropertyName("angular_velocity")] public Vec3Dto AngularVelocity { get; set; } = new();
         /// <summary>See <c>Body2Dto.GravityScale</c>.</summary>
         [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
+        /// <summary>See <c>Body2Dto.AmbientScale</c>.</summary>
+        [JsonPropertyName("ambient_scale")] public float AmbientScale { get; set; } = 1.0f;
     }
 
     private sealed class Joint2Dto
@@ -401,6 +410,116 @@ public static class Snapshot
             AttractorMu == 0.0f && Theta == 0.5f;
     }
 
+    /// <summary>Spring / SHM config DTO (schema v5).</summary>
+    private sealed class Spring2Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("anchor")] public Vec2Dto Anchor { get; set; } = new();
+        [JsonPropertyName("stiffness")] public float Stiffness { get; set; }
+        [JsonPropertyName("damping")] public float Damping { get; set; }
+        [JsonPropertyName("max_displacement")] public float MaxDisplacement { get; set; }
+
+        public bool IsDefault() =>
+            !Enabled && Anchor.X == 0.0f && Anchor.Y == 0.0f &&
+            Stiffness == 0.0f && Damping == 0.0f && MaxDisplacement == 0.0f;
+    }
+
+    /// <summary>Drag config DTO (schema v5).</summary>
+    private sealed class Drag2Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("linear")] public float Linear { get; set; }
+        [JsonPropertyName("quadratic")] public float Quadratic { get; set; }
+        [JsonPropertyName("air_density")] public float AirDensity { get; set; } = 1.0f;
+        [JsonPropertyName("angular")] public float Angular { get; set; }
+        [JsonPropertyName("wind")] public Vec2Dto Wind { get; set; } = new();
+
+        public bool IsDefault() =>
+            !Enabled && Linear == 0.0f && Quadratic == 0.0f && AirDensity == 1.0f &&
+            Angular == 0.0f && Wind.X == 0.0f && Wind.Y == 0.0f;
+    }
+
+    /// <summary>Turbulence config DTO (schema v5).</summary>
+    private sealed class Turbulence2Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("amplitude")] public float Amplitude { get; set; }
+        [JsonPropertyName("frequency")] public float Frequency { get; set; } = 1.0f;
+        [JsonPropertyName("time_scale")] public float TimeScale { get; set; } = 1.0f;
+        [JsonPropertyName("seed")] public uint Seed { get; set; }
+        [JsonPropertyName("octaves")] public int Octaves { get; set; } = 3;
+        [JsonPropertyName("divergence_free")] public bool DivergenceFree { get; set; }
+
+        public bool IsDefault() =>
+            !Enabled && Amplitude == 0.0f && Frequency == 1.0f && TimeScale == 1.0f &&
+            Seed == 0 && Octaves == 3 && !DivergenceFree;
+    }
+
+    /// <summary>Ambient-force config DTO (schema v5, 2D).</summary>
+    private sealed class AmbientConfig2Dto
+    {
+        [JsonPropertyName("spring")] public Spring2Dto Spring { get; set; } = new();
+        [JsonPropertyName("drag")] public Drag2Dto Drag { get; set; } = new();
+        [JsonPropertyName("turbulence")] public Turbulence2Dto Turbulence { get; set; } = new();
+
+        public bool IsDefault() => Spring.IsDefault() && Drag.IsDefault() && Turbulence.IsDefault();
+    }
+
+    /// <summary>Spring / SHM config DTO (schema v5, 3D).</summary>
+    private sealed class Spring3Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("anchor")] public Vec3Dto Anchor { get; set; } = new();
+        [JsonPropertyName("stiffness")] public float Stiffness { get; set; }
+        [JsonPropertyName("damping")] public float Damping { get; set; }
+        [JsonPropertyName("max_displacement")] public float MaxDisplacement { get; set; }
+
+        public bool IsDefault() =>
+            !Enabled && Anchor.X == 0.0f && Anchor.Y == 0.0f && Anchor.Z == 0.0f &&
+            Stiffness == 0.0f && Damping == 0.0f && MaxDisplacement == 0.0f;
+    }
+
+    /// <summary>Drag config DTO (schema v5, 3D).</summary>
+    private sealed class Drag3Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("linear")] public float Linear { get; set; }
+        [JsonPropertyName("quadratic")] public float Quadratic { get; set; }
+        [JsonPropertyName("air_density")] public float AirDensity { get; set; } = 1.0f;
+        [JsonPropertyName("angular")] public float Angular { get; set; }
+        [JsonPropertyName("wind")] public Vec3Dto Wind { get; set; } = new();
+
+        public bool IsDefault() =>
+            !Enabled && Linear == 0.0f && Quadratic == 0.0f && AirDensity == 1.0f &&
+            Angular == 0.0f && Wind.X == 0.0f && Wind.Y == 0.0f && Wind.Z == 0.0f;
+    }
+
+    /// <summary>Turbulence config DTO (schema v5, 3D).</summary>
+    private sealed class Turbulence3Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("amplitude")] public float Amplitude { get; set; }
+        [JsonPropertyName("frequency")] public float Frequency { get; set; } = 1.0f;
+        [JsonPropertyName("time_scale")] public float TimeScale { get; set; } = 1.0f;
+        [JsonPropertyName("seed")] public uint Seed { get; set; }
+        [JsonPropertyName("octaves")] public int Octaves { get; set; } = 3;
+        [JsonPropertyName("divergence_free")] public bool DivergenceFree { get; set; }
+
+        public bool IsDefault() =>
+            !Enabled && Amplitude == 0.0f && Frequency == 1.0f && TimeScale == 1.0f &&
+            Seed == 0 && Octaves == 3 && !DivergenceFree;
+    }
+
+    /// <summary>Ambient-force config DTO (schema v5, 3D).</summary>
+    private sealed class AmbientConfig3Dto
+    {
+        [JsonPropertyName("spring")] public Spring3Dto Spring { get; set; } = new();
+        [JsonPropertyName("drag")] public Drag3Dto Drag { get; set; } = new();
+        [JsonPropertyName("turbulence")] public Turbulence3Dto Turbulence { get; set; } = new();
+
+        public bool IsDefault() => Spring.IsDefault() && Drag.IsDefault() && Turbulence.IsDefault();
+    }
+
     private sealed class FluidParticle2Dto
     {
         [JsonPropertyName("position")] public Vec2Dto Position { get; set; } = new();
@@ -460,6 +579,10 @@ public static class Snapshot
         /// decode to the legacy uniform-field behavior.
         /// </summary>
         [JsonPropertyName("gravity_config")] public GravityConfig2Dto GravityConfig { get; set; } = new();
+        /// <summary>Ambient-force config (schema v5); defaults so pre-v5 files decode to no-op.</summary>
+        [JsonPropertyName("ambient")] public AmbientConfig2Dto Ambient { get; set; } = new();
+        /// <summary>Simulation clock (schema v5); 0 for pre-v5 files.</summary>
+        [JsonPropertyName("time")] public float Time { get; set; }
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -475,14 +598,15 @@ public static class Snapshot
 
         public static World2Dto From(World2 w, SnapshotLoadMode mode)
         {
-            // Conditional schema: default-gravity worlds stay v3
-            // (byte-compatible with older files); anything using gravity
-            // features needs v4. Mirrors the Rust writer rule.
-            bool gravityDefault = w.GravityConfig.IsDefault()
-                && w.Bodies.All(b => b.GravityScale == 1.0f);
+            // Conditional schema: default worlds stay v3 (byte-compatible
+            // with older files); gravity-only worlds v4; ambient worlds
+            // v5. Mirrors the Rust writer rule.
+            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f);
+            bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
+            uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
             {
-                Schema = gravityDefault ? MinReadableSchemaVersion : SchemaVersion,
+                Schema = schema,
                 Gravity = V2(w.Gravity),
                 GravityConfig = new GravityConfig2Dto
                 {
@@ -494,6 +618,37 @@ public static class Snapshot
                     AttractorMu = w.GravityConfig.AttractorMu,
                     Theta = w.GravityConfig.Theta,
                 },
+                Ambient = new AmbientConfig2Dto
+                {
+                    Spring = new Spring2Dto
+                    {
+                        Enabled = w.Ambient.Spring.Enabled,
+                        Anchor = V2(w.Ambient.Spring.Anchor),
+                        Stiffness = w.Ambient.Spring.Stiffness,
+                        Damping = w.Ambient.Spring.Damping,
+                        MaxDisplacement = w.Ambient.Spring.MaxDisplacement,
+                    },
+                    Drag = new Drag2Dto
+                    {
+                        Enabled = w.Ambient.Drag.Enabled,
+                        Linear = w.Ambient.Drag.Linear,
+                        Quadratic = w.Ambient.Drag.Quadratic,
+                        AirDensity = w.Ambient.Drag.AirDensity,
+                        Angular = w.Ambient.Drag.Angular,
+                        Wind = V2(w.Ambient.Drag.Wind),
+                    },
+                    Turbulence = new Turbulence2Dto
+                    {
+                        Enabled = w.Ambient.Turbulence.Enabled,
+                        Amplitude = w.Ambient.Turbulence.Amplitude,
+                        Frequency = w.Ambient.Turbulence.Frequency,
+                        TimeScale = w.Ambient.Turbulence.TimeScale,
+                        Seed = w.Ambient.Turbulence.Seed,
+                        Octaves = w.Ambient.Turbulence.Octaves,
+                        DivergenceFree = w.Ambient.Turbulence.DivergenceFree,
+                    },
+                },
+                Time = hasAmbient ? w.Time : 0.0f,
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -556,6 +711,7 @@ public static class Snapshot
                     Velocity = V2(b.Velocity),
                     AngularVelocity = b.AngularVelocity,
                     GravityScale = b.GravityScale,
+                    AmbientScale = b.AmbientScale,
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -675,6 +831,10 @@ public static class Snapshot
         [JsonPropertyName("gravity")] public Vec3Dto Gravity { get; set; } = new();
         /// <summary>See <c>World2Dto.GravityConfig</c>.</summary>
         [JsonPropertyName("gravity_config")] public GravityConfig3Dto GravityConfig { get; set; } = new();
+        /// <summary>See <c>World2Dto.Ambient</c>.</summary>
+        [JsonPropertyName("ambient")] public AmbientConfig3Dto Ambient { get; set; } = new();
+        /// <summary>See <c>World2Dto.Time</c>.</summary>
+        [JsonPropertyName("time")] public float Time { get; set; }
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -690,11 +850,12 @@ public static class Snapshot
         public static World3Dto From(World3 w, SnapshotLoadMode mode)
         {
             // Conditional schema: see World2Dto.From.
-            bool gravityDefault = w.GravityConfig.IsDefault()
-                && w.Bodies.All(b => b.GravityScale == 1.0f);
+            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f);
+            bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
+            uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
             {
-                Schema = gravityDefault ? MinReadableSchemaVersion : SchemaVersion,
+                Schema = schema,
                 Gravity = V3(w.Gravity),
                 GravityConfig = new GravityConfig3Dto
                 {
@@ -706,6 +867,37 @@ public static class Snapshot
                     AttractorMu = w.GravityConfig.AttractorMu,
                     Theta = w.GravityConfig.Theta,
                 },
+                Ambient = new AmbientConfig3Dto
+                {
+                    Spring = new Spring3Dto
+                    {
+                        Enabled = w.Ambient.Spring.Enabled,
+                        Anchor = V3(w.Ambient.Spring.Anchor),
+                        Stiffness = w.Ambient.Spring.Stiffness,
+                        Damping = w.Ambient.Spring.Damping,
+                        MaxDisplacement = w.Ambient.Spring.MaxDisplacement,
+                    },
+                    Drag = new Drag3Dto
+                    {
+                        Enabled = w.Ambient.Drag.Enabled,
+                        Linear = w.Ambient.Drag.Linear,
+                        Quadratic = w.Ambient.Drag.Quadratic,
+                        AirDensity = w.Ambient.Drag.AirDensity,
+                        Angular = w.Ambient.Drag.Angular,
+                        Wind = V3(w.Ambient.Drag.Wind),
+                    },
+                    Turbulence = new Turbulence3Dto
+                    {
+                        Enabled = w.Ambient.Turbulence.Enabled,
+                        Amplitude = w.Ambient.Turbulence.Amplitude,
+                        Frequency = w.Ambient.Turbulence.Frequency,
+                        TimeScale = w.Ambient.Turbulence.TimeScale,
+                        Seed = w.Ambient.Turbulence.Seed,
+                        Octaves = w.Ambient.Turbulence.Octaves,
+                        DivergenceFree = w.Ambient.Turbulence.DivergenceFree,
+                    },
+                },
+                Time = hasAmbient ? w.Time : 0.0f,
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -863,6 +1055,7 @@ public static class Snapshot
                     Velocity = V3(b.Velocity),
                     AngularVelocity = V3(b.AngularVelocity),
                     GravityScale = b.GravityScale,
+                    AmbientScale = b.AmbientScale,
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -964,6 +1157,96 @@ public static class Snapshot
         };
     }
 
+    private static AmbientConfig2 AmbientConfigFrom(AmbientConfig2Dto c)
+    {
+        if (c.Spring.Stiffness < 0.0f || c.Spring.Damping < 0.0f || c.Spring.MaxDisplacement < 0.0f)
+            throw new ArgumentException("Ambient spring coefficients must be >= 0.");
+        if (c.Drag.Linear < 0.0f || c.Drag.Quadratic < 0.0f || c.Drag.AirDensity < 0.0f || c.Drag.Angular < 0.0f)
+            throw new ArgumentException("Ambient drag coefficients must be >= 0.");
+        if (c.Turbulence.Amplitude < 0.0f)
+            throw new ArgumentException("Ambient turbulence amplitude must be >= 0.");
+        return new AmbientConfig2
+        {
+            Spring = new SpringConfig2
+            {
+                Enabled = c.Spring.Enabled,
+                Anchor = new Vector2(
+                    Fin(c.Spring.Anchor.X, "ambient.spring.ax"),
+                    Fin(c.Spring.Anchor.Y, "ambient.spring.ay")),
+                Stiffness = Fin(c.Spring.Stiffness, "ambient.spring.stiffness"),
+                Damping = Fin(c.Spring.Damping, "ambient.spring.damping"),
+                MaxDisplacement = Fin(c.Spring.MaxDisplacement, "ambient.spring.max_displacement"),
+            },
+            Drag = new DragConfig2
+            {
+                Enabled = c.Drag.Enabled,
+                Linear = Fin(c.Drag.Linear, "ambient.drag.linear"),
+                Quadratic = Fin(c.Drag.Quadratic, "ambient.drag.quadratic"),
+                AirDensity = Fin(c.Drag.AirDensity, "ambient.drag.air_density"),
+                Angular = Fin(c.Drag.Angular, "ambient.drag.angular"),
+                Wind = new Vector2(
+                    Fin(c.Drag.Wind.X, "ambient.drag.wind.x"),
+                    Fin(c.Drag.Wind.Y, "ambient.drag.wind.y")),
+            },
+            Turbulence = new TurbulenceConfig2
+            {
+                Enabled = c.Turbulence.Enabled,
+                Amplitude = Fin(c.Turbulence.Amplitude, "ambient.turbulence.amplitude"),
+                Frequency = Fin(c.Turbulence.Frequency, "ambient.turbulence.frequency"),
+                TimeScale = Fin(c.Turbulence.TimeScale, "ambient.turbulence.time_scale"),
+                Seed = c.Turbulence.Seed,
+                Octaves = c.Turbulence.Octaves,
+                DivergenceFree = c.Turbulence.DivergenceFree,
+            },
+        };
+    }
+
+    private static AmbientConfig3 AmbientConfigFrom(AmbientConfig3Dto c)
+    {
+        if (c.Spring.Stiffness < 0.0f || c.Spring.Damping < 0.0f || c.Spring.MaxDisplacement < 0.0f)
+            throw new ArgumentException("Ambient spring coefficients must be >= 0.");
+        if (c.Drag.Linear < 0.0f || c.Drag.Quadratic < 0.0f || c.Drag.AirDensity < 0.0f || c.Drag.Angular < 0.0f)
+            throw new ArgumentException("Ambient drag coefficients must be >= 0.");
+        if (c.Turbulence.Amplitude < 0.0f)
+            throw new ArgumentException("Ambient turbulence amplitude must be >= 0.");
+        return new AmbientConfig3
+        {
+            Spring = new SpringConfig3
+            {
+                Enabled = c.Spring.Enabled,
+                Anchor = new Vector3(
+                    Fin(c.Spring.Anchor.X, "ambient.spring.ax"),
+                    Fin(c.Spring.Anchor.Y, "ambient.spring.ay"),
+                    Fin(c.Spring.Anchor.Z, "ambient.spring.az")),
+                Stiffness = Fin(c.Spring.Stiffness, "ambient.spring.stiffness"),
+                Damping = Fin(c.Spring.Damping, "ambient.spring.damping"),
+                MaxDisplacement = Fin(c.Spring.MaxDisplacement, "ambient.spring.max_displacement"),
+            },
+            Drag = new DragConfig3
+            {
+                Enabled = c.Drag.Enabled,
+                Linear = Fin(c.Drag.Linear, "ambient.drag.linear"),
+                Quadratic = Fin(c.Drag.Quadratic, "ambient.drag.quadratic"),
+                AirDensity = Fin(c.Drag.AirDensity, "ambient.drag.air_density"),
+                Angular = Fin(c.Drag.Angular, "ambient.drag.angular"),
+                Wind = new Vector3(
+                    Fin(c.Drag.Wind.X, "ambient.drag.wind.x"),
+                    Fin(c.Drag.Wind.Y, "ambient.drag.wind.y"),
+                    Fin(c.Drag.Wind.Z, "ambient.drag.wind.z")),
+            },
+            Turbulence = new TurbulenceConfig3
+            {
+                Enabled = c.Turbulence.Enabled,
+                Amplitude = Fin(c.Turbulence.Amplitude, "ambient.turbulence.amplitude"),
+                Frequency = Fin(c.Turbulence.Frequency, "ambient.turbulence.frequency"),
+                TimeScale = Fin(c.Turbulence.TimeScale, "ambient.turbulence.time_scale"),
+                Seed = c.Turbulence.Seed,
+                Octaves = c.Turbulence.Octaves,
+                DivergenceFree = c.Turbulence.DivergenceFree,
+            },
+        };
+    }
+
     private static Shape2 ShapeFrom(Shape2Dto? s)
     {
         if (s == null) throw new ArgumentException("Missing shape.");
@@ -1007,6 +1290,8 @@ public static class Snapshot
         {
             Gravity = UV2(dto.Gravity),
             GravityConfig = GravityConfigFrom(dto.GravityConfig),
+            Ambient = AmbientConfigFrom(dto.Ambient),
+            Time = Fin(dto.Time, "time"),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1066,6 +1351,7 @@ public static class Snapshot
             body.LinearDamping = Fin(b.LinearDamping, "damping");
             body.AngularDamping = Fin(b.AngularDamping, "damping");
             body.GravityScale = Fin(b.GravityScale, "gravity_scale");
+            body.AmbientScale = Fin(b.AmbientScale, "ambient_scale");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1183,6 +1469,8 @@ public static class Snapshot
         {
             Gravity = UV3(dto.Gravity),
             GravityConfig = GravityConfigFrom(dto.GravityConfig),
+            Ambient = AmbientConfigFrom(dto.Ambient),
+            Time = Fin(dto.Time, "time"),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1242,6 +1530,7 @@ public static class Snapshot
             body.LinearDamping = Fin(b.LinearDamping, "damping");
             body.AngularDamping = Fin(b.AngularDamping, "damping");
             body.GravityScale = Fin(b.GravityScale, "gravity_scale");
+            body.AmbientScale = Fin(b.AmbientScale, "ambient_scale");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1630,8 +1919,15 @@ public static class Snapshot
         WriteValidation(w, dto.Validation);
         // Schema v4: gravity config block. v3 payloads omit it (strict:
         // a v4-tagged payload without it fails truncation, never misparses).
-        bool gravityV4 = dto.Schema == SchemaVersion;
+        bool gravityV4 = dto.Schema >= GravitySchemaVersion;
         if (gravityV4) WriteGravityConfig2(w, dto.GravityConfig);
+        // Schema v5: ambient config block + clock.
+        bool ambientV5 = dto.Schema >= SchemaVersion;
+        if (ambientV5)
+        {
+            WriteAmbientConfig2(w, dto.Ambient);
+            w.Write(dto.Time);
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.CellSize);
@@ -1651,6 +1947,7 @@ public static class Snapshot
             w.Write(b.Velocity.X); w.Write(b.Velocity.Y);
             w.Write(b.AngularVelocity);
             if (gravityV4) w.Write(b.GravityScale);
+            if (ambientV5) w.Write(b.AmbientScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -1790,14 +2087,18 @@ public static class Snapshot
             AngularSleepThreshold = r.ReadSingle(),
             Solver = ReadSolver(r),
             Validation = ReadValidation(r),
-            // v4 payloads carry the gravity block; older ones resolve
+            // v4+ payloads carry the gravity block; older ones resolve
             // to defaults (same values a v3 file implies).
-            GravityConfig = version == SchemaVersion ? ReadGravityConfig2(r) : new GravityConfig2Dto(),
+            GravityConfig = version >= GravitySchemaVersion ? ReadGravityConfig2(r) : new GravityConfig2Dto(),
+            // v5 payloads carry the ambient block + clock.
+            Ambient = version >= SchemaVersion ? ReadAmbientConfig2(r) : new AmbientConfig2Dto(),
+            Time = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
         };
-        bool gravityV4 = version == SchemaVersion;
+        bool gravityV4 = version >= GravitySchemaVersion;
+        bool ambientV5 = version >= SchemaVersion;
         int nb = r.ReadInt32();
         if (nb < 0 || nb > 1_000_000) throw new ArgumentException("Body count out of range.");
         for (int i = 0; i < nb; i++)
@@ -1824,6 +2125,7 @@ public static class Snapshot
                 Velocity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 AngularVelocity = r.ReadSingle(),
                 GravityScale = gravityV4 ? r.ReadSingle() : 1.0f,
+                AmbientScale = ambientV5 ? r.ReadSingle() : 1.0f,
             };
             dto.Bodies.Add(b);
         }
@@ -1907,6 +2209,113 @@ public static class Snapshot
         Theta = r.ReadSingle(),
     };
 
+    private static void WriteAmbientConfig2(BinaryWriter w, AmbientConfig2Dto c)
+    {
+        w.Write((byte)(c.Spring.Enabled ? 1 : 0));
+        w.Write(c.Spring.Anchor.X); w.Write(c.Spring.Anchor.Y);
+        w.Write(c.Spring.Stiffness);
+        w.Write(c.Spring.Damping);
+        w.Write(c.Spring.MaxDisplacement);
+        w.Write((byte)(c.Drag.Enabled ? 1 : 0));
+        w.Write(c.Drag.Linear);
+        w.Write(c.Drag.Quadratic);
+        w.Write(c.Drag.AirDensity);
+        w.Write(c.Drag.Angular);
+        w.Write(c.Drag.Wind.X); w.Write(c.Drag.Wind.Y);
+        w.Write((byte)(c.Turbulence.Enabled ? 1 : 0));
+        w.Write(c.Turbulence.Amplitude);
+        w.Write(c.Turbulence.Frequency);
+        w.Write(c.Turbulence.TimeScale);
+        w.Write(c.Turbulence.Seed);
+        w.Write((byte)c.Turbulence.Octaves);
+        w.Write((byte)(c.Turbulence.DivergenceFree ? 1 : 0));
+    }
+
+    private static AmbientConfig2Dto ReadAmbientConfig2(BinaryReader r) => new()
+    {
+        Spring = new Spring2Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Anchor = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
+            Stiffness = r.ReadSingle(),
+            Damping = r.ReadSingle(),
+            MaxDisplacement = r.ReadSingle(),
+        },
+        Drag = new Drag2Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Linear = r.ReadSingle(),
+            Quadratic = r.ReadSingle(),
+            AirDensity = r.ReadSingle(),
+            Angular = r.ReadSingle(),
+            Wind = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
+        },
+        Turbulence = new Turbulence2Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Amplitude = r.ReadSingle(),
+            Frequency = r.ReadSingle(),
+            TimeScale = r.ReadSingle(),
+            Seed = r.ReadUInt32(),
+            Octaves = r.ReadByte(),
+            DivergenceFree = r.ReadByte() != 0,
+        },
+    };
+
+    private static void WriteAmbientConfig3(BinaryWriter w, AmbientConfig3Dto c)
+    {
+        w.Write((byte)(c.Spring.Enabled ? 1 : 0));
+        w.Write(c.Spring.Anchor.X); w.Write(c.Spring.Anchor.Y); w.Write(c.Spring.Anchor.Z);
+        w.Write(c.Spring.Stiffness);
+        w.Write(c.Spring.Damping);
+        w.Write(c.Spring.MaxDisplacement);
+        w.Write((byte)(c.Drag.Enabled ? 1 : 0));
+        w.Write(c.Drag.Linear);
+        w.Write(c.Drag.Quadratic);
+        w.Write(c.Drag.AirDensity);
+        w.Write(c.Drag.Angular);
+        w.Write(c.Drag.Wind.X); w.Write(c.Drag.Wind.Y); w.Write(c.Drag.Wind.Z);
+        w.Write((byte)(c.Turbulence.Enabled ? 1 : 0));
+        w.Write(c.Turbulence.Amplitude);
+        w.Write(c.Turbulence.Frequency);
+        w.Write(c.Turbulence.TimeScale);
+        w.Write(c.Turbulence.Seed);
+        w.Write((byte)c.Turbulence.Octaves);
+        w.Write((byte)(c.Turbulence.DivergenceFree ? 1 : 0));
+    }
+
+    private static AmbientConfig3Dto ReadAmbientConfig3(BinaryReader r) => new()
+    {
+        Spring = new Spring3Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Anchor = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
+            Stiffness = r.ReadSingle(),
+            Damping = r.ReadSingle(),
+            MaxDisplacement = r.ReadSingle(),
+        },
+        Drag = new Drag3Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Linear = r.ReadSingle(),
+            Quadratic = r.ReadSingle(),
+            AirDensity = r.ReadSingle(),
+            Angular = r.ReadSingle(),
+            Wind = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
+        },
+        Turbulence = new Turbulence3Dto
+        {
+            Enabled = r.ReadByte() != 0,
+            Amplitude = r.ReadSingle(),
+            Frequency = r.ReadSingle(),
+            TimeScale = r.ReadSingle(),
+            Seed = r.ReadUInt32(),
+            Octaves = r.ReadByte(),
+            DivergenceFree = r.ReadByte() != 0,
+        },
+    };
+
+
     private static ValidationDto ReadValidation(BinaryReader r) => new()
     {
         CheckFinite = r.ReadBoolean(),
@@ -1928,8 +2337,14 @@ public static class Snapshot
         WriteSolver(w, dto.Solver);
         WriteValidation(w, dto.Validation);
         // Schema v4: gravity config block (see WriteWorld2Payload).
-        bool gravityV4 = dto.Schema == SchemaVersion;
+        bool gravityV4 = dto.Schema >= GravitySchemaVersion;
         if (gravityV4) WriteGravityConfig3(w, dto.GravityConfig);
+        bool ambientV5 = dto.Schema >= SchemaVersion;
+        if (ambientV5)
+        {
+            WriteAmbientConfig3(w, dto.Ambient);
+            w.Write(dto.Time);
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.Bodies.Count);
@@ -1950,6 +2365,7 @@ public static class Snapshot
             w.Write(b.AngularVelocity.Y);
             w.Write(b.AngularVelocity.Z);
             if (gravityV4) w.Write(b.GravityScale);
+            if (ambientV5) w.Write(b.AmbientScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -1982,7 +2398,9 @@ public static class Snapshot
             AngularSleepThreshold = r.ReadSingle(),
             Solver = ReadSolver(r),
             Validation = ReadValidation(r),
-            GravityConfig = version == SchemaVersion ? ReadGravityConfig3(r) : new GravityConfig3Dto(),
+            GravityConfig = version >= GravitySchemaVersion ? ReadGravityConfig3(r) : new GravityConfig3Dto(),
+            Ambient = version >= SchemaVersion ? ReadAmbientConfig3(r) : new AmbientConfig3Dto(),
+            Time = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
@@ -2011,7 +2429,8 @@ public static class Snapshot
                 Rotation = new[] { r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle() },
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 AngularVelocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
-                GravityScale = version == SchemaVersion ? r.ReadSingle() : 1.0f,
+                GravityScale = version >= GravitySchemaVersion ? r.ReadSingle() : 1.0f,
+                AmbientScale = version >= SchemaVersion ? r.ReadSingle() : 1.0f,
             });
         }
         int nj = r.ReadInt32();

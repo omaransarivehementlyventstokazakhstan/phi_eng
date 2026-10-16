@@ -49,7 +49,12 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
 /// unknown versions rather than guessing.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+/// v5 adds the ambient-force config block (spring/drag/turbulence), the
+/// simulation clock, and per-body `ambient_scale`.
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 5;
+/// Schema that introduced the gravity block (v4). Worlds without ambient
+/// features but with gravity features serialize at this version.
+const SNAPSHOT_SCHEMA_GRAVITY: u32 = 4;
 /// Oldest schema this build can read. v3 predates gravity fields
 /// (uniform field, unit scales, Euler integrator); they load as
 /// defaults. Anything outside `[MIN_READABLE, VERSION]` is rejected.
@@ -200,6 +205,10 @@ struct Body2Dto {
     /// byte-identical).
     #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
     gravity_scale: f32,
+    /// Ambient-force coupling multiplier (schema v5; defaults to 1.0 and
+    /// is omitted when 1.0 so pre-ambient output stays byte-identical).
+    #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
+    ambient_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +227,9 @@ struct Body3Dto {
     /// See `Body2Dto::gravity_scale`.
     #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
     gravity_scale: f32,
+    /// See `Body2Dto::ambient_scale`.
+    #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
+    ambient_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,6 +427,12 @@ fn is_one(v: &f32) -> bool {
     *v == 1.0
 }
 
+/// `skip_serializing_if` companion: a zero clock is omitted so worlds
+/// that never used ambient features serialize exactly like schema v3/v4.
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
 /// Gravity configuration DTO (schema v4). Field names mirror
 /// [`crate::gravity::GravityConfig2`]; `mode`/`integrator` are the
 /// enum discriminants (0 = Uniform/Euler).
@@ -503,6 +521,256 @@ impl GravityConfig3Dto {
     }
 }
 
+// ---- Ambient force DTOs (schema v5) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Spring2Dto {
+    enabled: bool,
+    anchor: Vec2Dto,
+    stiffness: f32,
+    damping: f32,
+    max_displacement: f32,
+}
+
+impl Default for Spring2Dto {
+    fn default() -> Self {
+        let c = super::ambient::SpringConfig2::default();
+        Self {
+            enabled: c.enabled,
+            anchor: v2(c.anchor),
+            stiffness: c.stiffness,
+            damping: c.damping,
+            max_displacement: c.max_displacement,
+        }
+    }
+}
+
+impl Spring2Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.anchor.x == d.anchor.x
+            && self.anchor.y == d.anchor.y
+            && self.stiffness == d.stiffness
+            && self.damping == d.damping
+            && self.max_displacement == d.max_displacement
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Drag2Dto {
+    enabled: bool,
+    linear: f32,
+    quadratic: f32,
+    air_density: f32,
+    angular: f32,
+    wind: Vec2Dto,
+}
+
+impl Default for Drag2Dto {
+    fn default() -> Self {
+        let c = super::ambient::DragConfig2::default();
+        Self {
+            enabled: c.enabled,
+            linear: c.linear,
+            quadratic: c.quadratic,
+            air_density: c.air_density,
+            angular: c.angular,
+            wind: v2(c.wind),
+        }
+    }
+}
+
+impl Drag2Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.linear == d.linear
+            && self.quadratic == d.quadratic
+            && self.air_density == d.air_density
+            && self.angular == d.angular
+            && self.wind.x == d.wind.x
+            && self.wind.y == d.wind.y
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Turbulence2Dto {
+    enabled: bool,
+    amplitude: f32,
+    frequency: f32,
+    time_scale: f32,
+    seed: u32,
+    octaves: u8,
+    divergence_free: bool,
+}
+
+impl Default for Turbulence2Dto {
+    fn default() -> Self {
+        let c = super::ambient::TurbulenceConfig2::default();
+        Self {
+            enabled: c.enabled,
+            amplitude: c.amplitude,
+            frequency: c.frequency,
+            time_scale: c.time_scale,
+            seed: c.seed,
+            octaves: c.octaves,
+            divergence_free: c.divergence_free,
+        }
+    }
+}
+
+impl Turbulence2Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.amplitude == d.amplitude
+            && self.frequency == d.frequency
+            && self.time_scale == d.time_scale
+            && self.seed == d.seed
+            && self.octaves == d.octaves
+            && self.divergence_free == d.divergence_free
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AmbientConfig2Dto {
+    spring: Spring2Dto,
+    drag: Drag2Dto,
+    turbulence: Turbulence2Dto,
+}
+
+impl AmbientConfig2Dto {
+    fn is_default(&self) -> bool {
+        self.spring.is_default() && self.drag.is_default() && self.turbulence.is_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Spring3Dto {
+    enabled: bool,
+    anchor: Vec3Dto,
+    stiffness: f32,
+    damping: f32,
+    max_displacement: f32,
+}
+
+impl Default for Spring3Dto {
+    fn default() -> Self {
+        let c = super::ambient::SpringConfig3::default();
+        Self {
+            enabled: c.enabled,
+            anchor: v3(c.anchor),
+            stiffness: c.stiffness,
+            damping: c.damping,
+            max_displacement: c.max_displacement,
+        }
+    }
+}
+
+impl Spring3Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.anchor.x == d.anchor.x
+            && self.anchor.y == d.anchor.y
+            && self.anchor.z == d.anchor.z
+            && self.stiffness == d.stiffness
+            && self.damping == d.damping
+            && self.max_displacement == d.max_displacement
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Drag3Dto {
+    enabled: bool,
+    linear: f32,
+    quadratic: f32,
+    air_density: f32,
+    angular: f32,
+    wind: Vec3Dto,
+}
+
+impl Default for Drag3Dto {
+    fn default() -> Self {
+        let c = super::ambient::DragConfig3::default();
+        Self {
+            enabled: c.enabled,
+            linear: c.linear,
+            quadratic: c.quadratic,
+            air_density: c.air_density,
+            angular: c.angular,
+            wind: v3(c.wind),
+        }
+    }
+}
+
+impl Drag3Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.linear == d.linear
+            && self.quadratic == d.quadratic
+            && self.air_density == d.air_density
+            && self.angular == d.angular
+            && self.wind.x == d.wind.x
+            && self.wind.y == d.wind.y
+            && self.wind.z == d.wind.z
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Turbulence3Dto {
+    enabled: bool,
+    amplitude: f32,
+    frequency: f32,
+    time_scale: f32,
+    seed: u32,
+    octaves: u8,
+    divergence_free: bool,
+}
+
+impl Default for Turbulence3Dto {
+    fn default() -> Self {
+        let c = super::ambient::TurbulenceConfig3::default();
+        Self {
+            enabled: c.enabled,
+            amplitude: c.amplitude,
+            frequency: c.frequency,
+            time_scale: c.time_scale,
+            seed: c.seed,
+            octaves: c.octaves,
+            divergence_free: c.divergence_free,
+        }
+    }
+}
+
+impl Turbulence3Dto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.amplitude == d.amplitude
+            && self.frequency == d.frequency
+            && self.time_scale == d.time_scale
+            && self.seed == d.seed
+            && self.octaves == d.octaves
+            && self.divergence_free == d.divergence_free
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AmbientConfig3Dto {
+    spring: Spring3Dto,
+    drag: Drag3Dto,
+    turbulence: Turbulence3Dto,
+}
+
+impl AmbientConfig3Dto {
+    fn is_default(&self) -> bool {
+        self.spring.is_default() && self.drag.is_default() && self.turbulence.is_default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct World2Dto {
     schema: u32,
@@ -511,6 +779,13 @@ struct World2Dto {
     /// snapshots load with a default config.
     #[serde(default, skip_serializing_if = "GravityConfig2Dto::is_default")]
     gravity_config: GravityConfig2Dto,
+    /// Schema v5; omitted (and defaulted) for pre-ambient files.
+    #[serde(default, skip_serializing_if = "AmbientConfig2Dto::is_default")]
+    ambient: AmbientConfig2Dto,
+    /// Schema v5; simulation clock. Omitted when zero so pre-ambient
+    /// output stays byte-identical.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    time: f32,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -587,6 +862,12 @@ struct World3Dto {
     /// Schema v4; omitted (and defaulted) for v3 files.
     #[serde(default, skip_serializing_if = "GravityConfig3Dto::is_default")]
     gravity_config: GravityConfig3Dto,
+    /// Schema v5; omitted (and defaulted) for pre-ambient files.
+    #[serde(default, skip_serializing_if = "AmbientConfig3Dto::is_default")]
+    ambient: AmbientConfig3Dto,
+    /// Schema v5; simulation clock (omitted when zero).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    time: f32,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -772,6 +1053,187 @@ fn gravity_config_dto_3(c: &super::gravity::GravityConfig3) -> GravityConfig3Dto
     }
 }
 
+fn ambient_config_dto_2(c: &super::ambient::AmbientConfig2) -> AmbientConfig2Dto {
+    AmbientConfig2Dto {
+        spring: Spring2Dto {
+            enabled: c.spring.enabled,
+            anchor: v2(c.spring.anchor),
+            stiffness: c.spring.stiffness,
+            damping: c.spring.damping,
+            max_displacement: c.spring.max_displacement,
+        },
+        drag: Drag2Dto {
+            enabled: c.drag.enabled,
+            linear: c.drag.linear,
+            quadratic: c.drag.quadratic,
+            air_density: c.drag.air_density,
+            angular: c.drag.angular,
+            wind: v2(c.drag.wind),
+        },
+        turbulence: Turbulence2Dto {
+            enabled: c.turbulence.enabled,
+            amplitude: c.turbulence.amplitude,
+            frequency: c.turbulence.frequency,
+            time_scale: c.turbulence.time_scale,
+            seed: c.turbulence.seed,
+            octaves: c.turbulence.octaves,
+            divergence_free: c.turbulence.divergence_free,
+        },
+    }
+}
+
+fn ambient_config_dto_3(c: &super::ambient::AmbientConfig3) -> AmbientConfig3Dto {
+    AmbientConfig3Dto {
+        spring: Spring3Dto {
+            enabled: c.spring.enabled,
+            anchor: v3(c.spring.anchor),
+            stiffness: c.spring.stiffness,
+            damping: c.spring.damping,
+            max_displacement: c.spring.max_displacement,
+        },
+        drag: Drag3Dto {
+            enabled: c.drag.enabled,
+            linear: c.drag.linear,
+            quadratic: c.drag.quadratic,
+            air_density: c.drag.air_density,
+            angular: c.drag.angular,
+            wind: v3(c.drag.wind),
+        },
+        turbulence: Turbulence3Dto {
+            enabled: c.turbulence.enabled,
+            amplitude: c.turbulence.amplitude,
+            frequency: c.turbulence.frequency,
+            time_scale: c.turbulence.time_scale,
+            seed: c.turbulence.seed,
+            octaves: c.turbulence.octaves,
+            divergence_free: c.turbulence.divergence_free,
+        },
+    }
+}
+
+/// Validated ambient config from a DTO. All floats finite; the
+/// coefficient fields must be non-negative. Anything else is `Corrupt`.
+fn ambient_config_from_2(
+    c: &AmbientConfig2Dto,
+) -> Result<super::ambient::AmbientConfig2, SnapshotError> {
+    use super::ambient::{AmbientConfig2, DragConfig2, SpringConfig2, TurbulenceConfig2};
+    finite(c.spring.anchor.x, "ambient.spring.anchor.x")?;
+    finite(c.spring.anchor.y, "ambient.spring.anchor.y")?;
+    finite(c.spring.stiffness, "ambient.spring.stiffness")?;
+    finite(c.spring.damping, "ambient.spring.damping")?;
+    finite(c.spring.max_displacement, "ambient.spring.max_displacement")?;
+    if c.spring.stiffness < 0.0 || c.spring.damping < 0.0 || c.spring.max_displacement < 0.0 {
+        return corrupt("ambient.spring coefficients must be >= 0");
+    }
+    finite(c.drag.linear, "ambient.drag.linear")?;
+    finite(c.drag.quadratic, "ambient.drag.quadratic")?;
+    finite(c.drag.air_density, "ambient.drag.air_density")?;
+    finite(c.drag.angular, "ambient.drag.angular")?;
+    finite(c.drag.wind.x, "ambient.drag.wind.x")?;
+    finite(c.drag.wind.y, "ambient.drag.wind.y")?;
+    if c.drag.linear < 0.0
+        || c.drag.quadratic < 0.0
+        || c.drag.air_density < 0.0
+        || c.drag.angular < 0.0
+    {
+        return corrupt("ambient.drag coefficients must be >= 0");
+    }
+    finite(c.turbulence.amplitude, "ambient.turbulence.amplitude")?;
+    finite(c.turbulence.frequency, "ambient.turbulence.frequency")?;
+    finite(c.turbulence.time_scale, "ambient.turbulence.time_scale")?;
+    if c.turbulence.amplitude < 0.0 {
+        return corrupt("ambient.turbulence.amplitude must be >= 0");
+    }
+    Ok(AmbientConfig2 {
+        spring: SpringConfig2 {
+            enabled: c.spring.enabled,
+            anchor: Vec2::new(c.spring.anchor.x, c.spring.anchor.y),
+            stiffness: c.spring.stiffness,
+            damping: c.spring.damping,
+            max_displacement: c.spring.max_displacement,
+        },
+        drag: DragConfig2 {
+            enabled: c.drag.enabled,
+            linear: c.drag.linear,
+            quadratic: c.drag.quadratic,
+            air_density: c.drag.air_density,
+            angular: c.drag.angular,
+            wind: Vec2::new(c.drag.wind.x, c.drag.wind.y),
+        },
+        turbulence: TurbulenceConfig2 {
+            enabled: c.turbulence.enabled,
+            amplitude: c.turbulence.amplitude,
+            frequency: c.turbulence.frequency,
+            time_scale: c.turbulence.time_scale,
+            seed: c.turbulence.seed,
+            octaves: c.turbulence.octaves,
+            divergence_free: c.turbulence.divergence_free,
+        },
+    })
+}
+
+/// 3D counterpart of [`ambient_config_from_2`].
+fn ambient_config_from_3(
+    c: &AmbientConfig3Dto,
+) -> Result<super::ambient::AmbientConfig3, SnapshotError> {
+    use super::ambient::{AmbientConfig3, DragConfig3, SpringConfig3, TurbulenceConfig3};
+    finite(c.spring.anchor.x, "ambient.spring.anchor.x")?;
+    finite(c.spring.anchor.y, "ambient.spring.anchor.y")?;
+    finite(c.spring.anchor.z, "ambient.spring.anchor.z")?;
+    finite(c.spring.stiffness, "ambient.spring.stiffness")?;
+    finite(c.spring.damping, "ambient.spring.damping")?;
+    finite(c.spring.max_displacement, "ambient.spring.max_displacement")?;
+    if c.spring.stiffness < 0.0 || c.spring.damping < 0.0 || c.spring.max_displacement < 0.0 {
+        return corrupt("ambient.spring coefficients must be >= 0");
+    }
+    finite(c.drag.linear, "ambient.drag.linear")?;
+    finite(c.drag.quadratic, "ambient.drag.quadratic")?;
+    finite(c.drag.air_density, "ambient.drag.air_density")?;
+    finite(c.drag.angular, "ambient.drag.angular")?;
+    finite(c.drag.wind.x, "ambient.drag.wind.x")?;
+    finite(c.drag.wind.y, "ambient.drag.wind.y")?;
+    finite(c.drag.wind.z, "ambient.drag.wind.z")?;
+    if c.drag.linear < 0.0
+        || c.drag.quadratic < 0.0
+        || c.drag.air_density < 0.0
+        || c.drag.angular < 0.0
+    {
+        return corrupt("ambient.drag coefficients must be >= 0");
+    }
+    finite(c.turbulence.amplitude, "ambient.turbulence.amplitude")?;
+    finite(c.turbulence.frequency, "ambient.turbulence.frequency")?;
+    finite(c.turbulence.time_scale, "ambient.turbulence.time_scale")?;
+    if c.turbulence.amplitude < 0.0 {
+        return corrupt("ambient.turbulence.amplitude must be >= 0");
+    }
+    Ok(AmbientConfig3 {
+        spring: SpringConfig3 {
+            enabled: c.spring.enabled,
+            anchor: Vec3::new(c.spring.anchor.x, c.spring.anchor.y, c.spring.anchor.z),
+            stiffness: c.spring.stiffness,
+            damping: c.spring.damping,
+            max_displacement: c.spring.max_displacement,
+        },
+        drag: DragConfig3 {
+            enabled: c.drag.enabled,
+            linear: c.drag.linear,
+            quadratic: c.drag.quadratic,
+            air_density: c.drag.air_density,
+            angular: c.drag.angular,
+            wind: Vec3::new(c.drag.wind.x, c.drag.wind.y, c.drag.wind.z),
+        },
+        turbulence: TurbulenceConfig3 {
+            enabled: c.turbulence.enabled,
+            amplitude: c.turbulence.amplitude,
+            frequency: c.turbulence.frequency,
+            time_scale: c.turbulence.time_scale,
+            seed: c.turbulence.seed,
+            octaves: c.turbulence.octaves,
+            divergence_free: c.turbulence.divergence_free,
+        },
+    })
+}
+
 /// Validated gravity config from a DTO: enum tags must be known,
 /// floats finite, softening non-negative. Anything else is `Corrupt`,
 /// never a silent default (the serde `Default` only fills fields
@@ -871,6 +1333,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         velocity: v2(b.velocity),
         angular_velocity: b.angular_velocity,
         gravity_scale: b.gravity_scale,
+        ambient_scale: b.ambient_scale,
     }
 }
 
@@ -889,6 +1352,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         velocity: v3(b.velocity),
         angular_velocity: v3(b.angular_velocity),
         gravity_scale: b.gravity_scale,
+        ambient_scale: b.ambient_scale,
     }
 }
 
@@ -1020,20 +1484,28 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         }
     };
 
+    // Conditional schema: default worlds stay v3 (byte-identical to
+    // pre-gravity files); gravity-feature worlds use v4; anything using
+    // ambient features (or a non-unit ambient scale) uses v5. The clock
+    // is only persisted at v5 (it is irrelevant without ambient fields),
+    // keeping v3/v4 output byte-identical.
+    let has_ambient = w.ambient.is_active() || w.bodies.iter().any(|b| b.ambient_scale != 1.0);
+    let has_gravity =
+        !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
+    let schema = if has_ambient {
+        SNAPSHOT_SCHEMA_VERSION
+    } else if has_gravity {
+        SNAPSHOT_SCHEMA_GRAVITY
+    } else {
+        SNAPSHOT_SCHEMA_MIN_READABLE
+    };
+
     World2Dto {
-        // Conditional schema: default-gravity worlds stay v3
-        // (byte-identical to pre-gravity files, so old loaders and the
-        // C# v3 side keep working); anything using gravity features
-        // needs v4. MIN_READABLE doubles as the legacy version number —
-        // if v3 reads are ever dropped, this degrades to always-current.
-        schema: if w.gravity_config.is_default() && w.bodies.iter().all(|b| b.gravity_scale == 1.0)
-        {
-            SNAPSHOT_SCHEMA_MIN_READABLE
-        } else {
-            SNAPSHOT_SCHEMA_VERSION
-        },
+        schema,
         gravity: v2(w.gravity),
         gravity_config: gravity_config_dto_2(&w.gravity_config),
+        ambient: ambient_config_dto_2(&w.ambient),
+        time: if has_ambient { w.time } else { 0.0 },
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -1190,16 +1662,24 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         }
     };
 
+    // Conditional schema: see `world2_dto`.
+    let has_ambient = w.ambient.is_active() || w.bodies.iter().any(|b| b.ambient_scale != 1.0);
+    let has_gravity =
+        !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
+    let schema = if has_ambient {
+        SNAPSHOT_SCHEMA_VERSION
+    } else if has_gravity {
+        SNAPSHOT_SCHEMA_GRAVITY
+    } else {
+        SNAPSHOT_SCHEMA_MIN_READABLE
+    };
+
     World3Dto {
-        // Conditional schema: see `world2_dto`.
-        schema: if w.gravity_config.is_default() && w.bodies.iter().all(|b| b.gravity_scale == 1.0)
-        {
-            SNAPSHOT_SCHEMA_MIN_READABLE
-        } else {
-            SNAPSHOT_SCHEMA_VERSION
-        },
+        schema,
         gravity: v3(w.gravity),
         gravity_config: gravity_config_dto_3(&w.gravity_config),
+        ambient: ambient_config_dto_3(&w.ambient),
+        time: if has_ambient { w.time } else { 0.0 },
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -1509,6 +1989,7 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     body.linear_damping = b.linear_damping;
     body.angular_damping = b.angular_damping;
     body.gravity_scale = b.gravity_scale;
+    body.ambient_scale = b.ambient_scale;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -1568,6 +2049,7 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     body.linear_damping = b.linear_damping;
     body.angular_damping = b.angular_damping;
     body.gravity_scale = b.gravity_scale;
+    body.ambient_scale = b.ambient_scale;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -2048,6 +2530,9 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     let mut w = World2::new();
     w.gravity = Vec2::new(dto.gravity.x, dto.gravity.y);
     w.gravity_config = gravity_config_from_2(&dto.gravity_config)?;
+    finite(dto.time, "time")?;
+    w.ambient = ambient_config_from_2(&dto.ambient)?;
+    w.time = dto.time;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -2089,6 +2574,9 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     let mut w = World3::new();
     w.gravity = Vec3::new(dto.gravity.x, dto.gravity.y, dto.gravity.z);
     w.gravity_config = gravity_config_from_3(&dto.gravity_config)?;
+    finite(dto.time, "time")?;
+    w.ambient = ambient_config_from_3(&dto.ambient)?;
+    w.time = dto.time;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -2273,6 +2761,126 @@ fn decode_gravity_config_3(r: &mut Reader) -> Result<GravityConfig3Dto, Snapshot
         },
         attractor_mu: r.read_f32()?,
         theta: r.read_f32()?,
+    })
+}
+
+fn encode_ambient_config_2(out: &mut Vec<u8>, a: &AmbientConfig2Dto) {
+    write_u8(out, a.spring.enabled as u8);
+    write_f32(out, a.spring.anchor.x);
+    write_f32(out, a.spring.anchor.y);
+    write_f32(out, a.spring.stiffness);
+    write_f32(out, a.spring.damping);
+    write_f32(out, a.spring.max_displacement);
+    write_u8(out, a.drag.enabled as u8);
+    write_f32(out, a.drag.linear);
+    write_f32(out, a.drag.quadratic);
+    write_f32(out, a.drag.air_density);
+    write_f32(out, a.drag.angular);
+    write_f32(out, a.drag.wind.x);
+    write_f32(out, a.drag.wind.y);
+    write_u8(out, a.turbulence.enabled as u8);
+    write_f32(out, a.turbulence.amplitude);
+    write_f32(out, a.turbulence.frequency);
+    write_f32(out, a.turbulence.time_scale);
+    write_u32(out, a.turbulence.seed);
+    write_u8(out, a.turbulence.octaves);
+    write_u8(out, a.turbulence.divergence_free as u8);
+}
+
+fn decode_ambient_config_2(r: &mut Reader) -> Result<AmbientConfig2Dto, SnapshotError> {
+    Ok(AmbientConfig2Dto {
+        spring: Spring2Dto {
+            enabled: r.read_u8()? != 0,
+            anchor: Vec2Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+            },
+            stiffness: r.read_f32()?,
+            damping: r.read_f32()?,
+            max_displacement: r.read_f32()?,
+        },
+        drag: Drag2Dto {
+            enabled: r.read_u8()? != 0,
+            linear: r.read_f32()?,
+            quadratic: r.read_f32()?,
+            air_density: r.read_f32()?,
+            angular: r.read_f32()?,
+            wind: Vec2Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+            },
+        },
+        turbulence: Turbulence2Dto {
+            enabled: r.read_u8()? != 0,
+            amplitude: r.read_f32()?,
+            frequency: r.read_f32()?,
+            time_scale: r.read_f32()?,
+            seed: r.read_u32()?,
+            octaves: r.read_u8()?,
+            divergence_free: r.read_u8()? != 0,
+        },
+    })
+}
+
+fn encode_ambient_config_3(out: &mut Vec<u8>, a: &AmbientConfig3Dto) {
+    write_u8(out, a.spring.enabled as u8);
+    write_f32(out, a.spring.anchor.x);
+    write_f32(out, a.spring.anchor.y);
+    write_f32(out, a.spring.anchor.z);
+    write_f32(out, a.spring.stiffness);
+    write_f32(out, a.spring.damping);
+    write_f32(out, a.spring.max_displacement);
+    write_u8(out, a.drag.enabled as u8);
+    write_f32(out, a.drag.linear);
+    write_f32(out, a.drag.quadratic);
+    write_f32(out, a.drag.air_density);
+    write_f32(out, a.drag.angular);
+    write_f32(out, a.drag.wind.x);
+    write_f32(out, a.drag.wind.y);
+    write_f32(out, a.drag.wind.z);
+    write_u8(out, a.turbulence.enabled as u8);
+    write_f32(out, a.turbulence.amplitude);
+    write_f32(out, a.turbulence.frequency);
+    write_f32(out, a.turbulence.time_scale);
+    write_u32(out, a.turbulence.seed);
+    write_u8(out, a.turbulence.octaves);
+    write_u8(out, a.turbulence.divergence_free as u8);
+}
+
+fn decode_ambient_config_3(r: &mut Reader) -> Result<AmbientConfig3Dto, SnapshotError> {
+    Ok(AmbientConfig3Dto {
+        spring: Spring3Dto {
+            enabled: r.read_u8()? != 0,
+            anchor: Vec3Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+                z: r.read_f32()?,
+            },
+            stiffness: r.read_f32()?,
+            damping: r.read_f32()?,
+            max_displacement: r.read_f32()?,
+        },
+        drag: Drag3Dto {
+            enabled: r.read_u8()? != 0,
+            linear: r.read_f32()?,
+            quadratic: r.read_f32()?,
+            air_density: r.read_f32()?,
+            angular: r.read_f32()?,
+            wind: Vec3Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+                z: r.read_f32()?,
+            },
+        },
+        turbulence: Turbulence3Dto {
+            enabled: r.read_u8()? != 0,
+            amplitude: r.read_f32()?,
+            frequency: r.read_f32()?,
+            time_scale: r.read_f32()?,
+            seed: r.read_u32()?,
+            octaves: r.read_u8()?,
+            divergence_free: r.read_u8()? != 0,
+        },
     })
 }
 
@@ -2489,9 +3097,15 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
     encode_validation(&mut p, &dto.validation);
     // Schema v4: gravity config block. v3 payloads omit it (strict:
     // a v4-tagged payload without it fails truncation, never misparses).
-    let gravity_v4 = dto.schema == SNAPSHOT_SCHEMA_VERSION;
+    let gravity_v4 = dto.schema >= SNAPSHOT_SCHEMA_GRAVITY;
     if gravity_v4 {
         encode_gravity_config_2(&mut p, &dto.gravity_config);
+    }
+    // Schema v5: ambient config block + clock.
+    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_VERSION;
+    if ambient_v5 {
+        encode_ambient_config_2(&mut p, &dto.ambient);
+        write_f32(&mut p, dto.time);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -2520,6 +3134,9 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         if gravity_v4 {
             write_f32(&mut p, b.gravity_scale);
         }
+        if ambient_v5 {
+            write_f32(&mut p, b.ambient_scale);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -2543,10 +3160,10 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
     Ok(encode_envelope(KIND_WORLD2, dto.schema, &p))
 }
 
-/// Version-gated gravity decode: v4 payloads carry the config block,
+/// Version-gated gravity decode: v4+ payloads carry the config block,
 /// older payloads resolve to defaults (same values a v3 file implies).
 fn decode_opt_gravity_2(r: &mut Reader, version: u32) -> Result<GravityConfig2Dto, SnapshotError> {
-    if version == SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_GRAVITY {
         decode_gravity_config_2(r)
     } else {
         Ok(GravityConfig2Dto::default())
@@ -2555,20 +3172,59 @@ fn decode_opt_gravity_2(r: &mut Reader, version: u32) -> Result<GravityConfig2Dt
 
 /// 3D counterpart of [`decode_opt_gravity_2`].
 fn decode_opt_gravity_3(r: &mut Reader, version: u32) -> Result<GravityConfig3Dto, SnapshotError> {
-    if version == SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_GRAVITY {
         decode_gravity_config_3(r)
     } else {
         Ok(GravityConfig3Dto::default())
     }
 }
 
-/// Version-gated per-body scale: v4 records carry a trailing scale
-/// float per body; older records imply full coupling (1.0).
+/// Version-gated per-body gravity scale: v4+ records carry a trailing
+/// scale float per body; older records imply full coupling (1.0).
 fn decode_opt_scale(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
-    if version == SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_GRAVITY {
         r.read_f32()
     } else {
         Ok(1.0)
+    }
+}
+
+/// Version-gated per-body ambient scale: v5+ records carry a trailing
+/// scale float per body; older records imply full coupling (1.0).
+fn decode_opt_ambient_scale(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        r.read_f32()
+    } else {
+        Ok(1.0)
+    }
+}
+
+/// Version-gated ambient config: v5 payloads carry the block; older
+/// payloads resolve to a default config.
+fn decode_opt_ambient_2(r: &mut Reader, version: u32) -> Result<AmbientConfig2Dto, SnapshotError> {
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        decode_ambient_config_2(r)
+    } else {
+        Ok(AmbientConfig2Dto::default())
+    }
+}
+
+/// 3D counterpart of [`decode_opt_ambient_2`].
+fn decode_opt_ambient_3(r: &mut Reader, version: u32) -> Result<AmbientConfig3Dto, SnapshotError> {
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        decode_ambient_config_3(r)
+    } else {
+        Ok(AmbientConfig3Dto::default())
+    }
+}
+
+/// Version-gated simulation clock: v5 payloads carry it; older payloads
+/// imply time 0.0.
+fn decode_opt_time(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        r.read_f32()
+    } else {
+        Ok(0.0)
     }
 }
 
@@ -3202,6 +3858,8 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         solver: decode_solver(&mut r)?,
         validation: decode_validation(&mut r)?,
         gravity_config: decode_opt_gravity_2(&mut r, version)?,
+        ambient: decode_opt_ambient_2(&mut r, version)?,
+        time: decode_opt_time(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -3240,6 +3898,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                     },
                     angular_velocity: r.read_f32()?,
                     gravity_scale: decode_opt_scale(&mut r, version)?,
+                    ambient_scale: decode_opt_ambient_scale(&mut r, version)?,
                 };
                 v.push(body);
             }
@@ -3319,9 +3978,15 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
     encode_solver(&mut p, &dto.solver);
     encode_validation(&mut p, &dto.validation);
     // Schema v4: gravity config block (see `world2_to_binary`).
-    let gravity_v4 = dto.schema == SNAPSHOT_SCHEMA_VERSION;
+    let gravity_v4 = dto.schema >= SNAPSHOT_SCHEMA_GRAVITY;
     if gravity_v4 {
         encode_gravity_config_3(&mut p, &dto.gravity_config);
+    }
+    // Schema v5: ambient config block + clock (see `world2_to_binary`).
+    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_VERSION;
+    if ambient_v5 {
+        encode_ambient_config_3(&mut p, &dto.ambient);
+        write_f32(&mut p, dto.time);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -3352,6 +4017,9 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, b.angular_velocity.z);
         if gravity_v4 {
             write_f32(&mut p, b.gravity_scale);
+        }
+        if ambient_v5 {
+            write_f32(&mut p, b.ambient_scale);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -3399,6 +4067,8 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         solver: decode_solver(&mut r)?,
         validation: decode_validation(&mut r)?,
         gravity_config: decode_opt_gravity_3(&mut r, version)?,
+        ambient: decode_opt_ambient_3(&mut r, version)?,
+        time: decode_opt_time(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {
@@ -3442,6 +4112,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         z: r.read_f32()?,
                     },
                     gravity_scale: decode_opt_scale(&mut r, version)?,
+                    ambient_scale: decode_opt_ambient_scale(&mut r, version)?,
                 });
             }
             v
@@ -3749,6 +4420,132 @@ mod tests {
         }
         assert_fluid2_eq(&direct, &r2);
         assert_eq!(hash_world2(&direct), hash_world2(&r2));
+    }
+
+    #[test]
+    fn test_snapshot_ambient_roundtrip_2d() {
+        use crate::ambient::{AmbientConfig2, DragConfig2, SpringConfig2, TurbulenceConfig2};
+        let mut w = World2::new();
+        let id = w
+            .add_dynamic_body(Vec2::new(1.0, 2.0), Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        w.bodies[id].ambient_scale = 0.25;
+        w.ambient = AmbientConfig2 {
+            spring: SpringConfig2 {
+                enabled: true,
+                anchor: Vec2::new(0.5, -0.5),
+                stiffness: 12.0,
+                damping: 1.5,
+                max_displacement: 8.0,
+            },
+            drag: DragConfig2 {
+                enabled: true,
+                linear: 0.3,
+                quadratic: 0.7,
+                air_density: 1.2,
+                angular: 0.05,
+                wind: Vec2::new(1.0, 0.0),
+            },
+            turbulence: TurbulenceConfig2 {
+                enabled: true,
+                amplitude: 2.0,
+                frequency: 0.6,
+                time_scale: 1.3,
+                seed: 12345,
+                octaves: 4,
+                divergence_free: true,
+            },
+        };
+        for _ in 0..30 {
+            w.step(1.0 / 60.0);
+        }
+        // v5 schema is selected when ambient is active.
+        assert!(w.time > 0.0);
+
+        let r = world2_from_json(
+            &world2_to_json(&w, LoadMode::Exact).expect("json"),
+            LoadMode::Exact,
+        )
+        .expect("json load");
+        assert_eq!(w.ambient, r.ambient);
+        assert_eq!(w.bodies[id].ambient_scale, r.bodies[id].ambient_scale);
+        assert!(
+            (w.time - r.time).abs() < 1e-4,
+            "json time {} vs {}",
+            w.time,
+            r.time
+        );
+
+        let b = world2_from_binary(
+            &world2_to_binary(&w, LoadMode::Exact).expect("bin"),
+            LoadMode::Exact,
+        )
+        .expect("bin load");
+        assert_eq!(w.ambient, b.ambient);
+        assert_eq!(w.bodies[id].ambient_scale, b.bodies[id].ambient_scale);
+        assert!(
+            (w.time - b.time).abs() < 1e-4,
+            "bin time {} vs {}",
+            w.time,
+            b.time
+        );
+
+        // Continuation parity: identical futures after a mid-run save.
+        let mut direct = w;
+        let mut r2 = world2_from_binary(
+            &world2_to_binary(&direct, LoadMode::Exact).expect("bin"),
+            LoadMode::Exact,
+        )
+        .expect("bin load");
+        for _ in 0..60 {
+            direct.step(1.0 / 60.0);
+            r2.step(1.0 / 60.0);
+        }
+        assert_eq!(hash_world2(&direct), hash_world2(&r2));
+    }
+
+    #[test]
+    fn test_snapshot_ambient_roundtrip_3d() {
+        use crate::ambient::{AmbientConfig3, SpringConfig3, TurbulenceConfig3};
+        let mut w = World3::new();
+        let id = w
+            .add_dynamic_body(
+                Vec3::new(1.0, 2.0, 3.0),
+                Shape3::Sphere { radius: 0.5 },
+                1.0,
+            )
+            .expect("valid shape");
+        w.bodies[id].ambient_scale = 2.0;
+        w.ambient = AmbientConfig3 {
+            spring: SpringConfig3 {
+                enabled: true,
+                anchor: Vec3::new(0.0, 1.0, 0.0),
+                stiffness: 9.0,
+                damping: 0.5,
+                max_displacement: 0.0,
+            },
+            drag: Default::default(),
+            turbulence: TurbulenceConfig3 {
+                enabled: true,
+                amplitude: 1.5,
+                frequency: 0.4,
+                time_scale: 0.9,
+                seed: 777,
+                octaves: 3,
+                divergence_free: false,
+            },
+        };
+        for _ in 0..20 {
+            w.step(1.0 / 60.0);
+        }
+        let b = world3_from_binary(
+            &world3_to_binary(&w, LoadMode::Exact).expect("bin"),
+            LoadMode::Exact,
+        )
+        .expect("bin load");
+        assert_eq!(w.ambient, b.ambient);
+        assert_eq!(w.bodies[id].ambient_scale, b.bodies[id].ambient_scale);
+        assert!((w.time - b.time).abs() < 1e-4);
     }
 
     #[test]

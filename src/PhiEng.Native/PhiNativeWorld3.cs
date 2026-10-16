@@ -121,6 +121,122 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>Set the 3D ambient-force config (spring/SHM, drag, turbulence).</summary>
+    public unsafe void SetAmbientConfig(Dynamics.AmbientConfig3 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = ToFfi(config);
+            int ok = NativeMethods.phieng_world3_set_ambient_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected ambient config (check tags and ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the ambient-force config from the native 3D world.</summary>
+    public unsafe Dynamics.AmbientConfig3 GetAmbientConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.AmbientConfig3Ffi ffi;
+            int ok = NativeMethods.phieng_world3_get_ambient_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native 3D ambient config read failed.");
+            }
+            return FromFfi(ffi);
+        }
+    }
+
+    /// <summary>Set the simulation clock (3D).</summary>
+    public void SetTime(float t)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (NativeMethods.phieng_world3_set_time(_handle, t) == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected time (non-finite).");
+            }
+        }
+    }
+
+    /// <summary>Read the simulation clock (3D).</summary>
+    public unsafe float GetTime()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float t;
+            if (NativeMethods.phieng_world3_get_time(_handle, &t) == 0)
+            {
+                throw new InvalidOperationException("Native 3D time read failed.");
+            }
+            return t;
+        }
+    }
+
+    private static NativeMethods.AmbientConfig3Ffi ToFfi(Dynamics.AmbientConfig3 c) => new()
+    {
+        SpringEnabled = c.Spring.Enabled ? 1u : 0u,
+        SpringAx = c.Spring.Anchor.X,
+        SpringAy = c.Spring.Anchor.Y,
+        SpringAz = c.Spring.Anchor.Z,
+        SpringStiffness = c.Spring.Stiffness,
+        SpringDamping = c.Spring.Damping,
+        SpringMaxDisplacement = c.Spring.MaxDisplacement,
+        DragEnabled = c.Drag.Enabled ? 1u : 0u,
+        DragLinear = c.Drag.Linear,
+        DragQuadratic = c.Drag.Quadratic,
+        AirDensity = c.Drag.AirDensity,
+        DragAngular = c.Drag.Angular,
+        WindX = c.Drag.Wind.X,
+        WindY = c.Drag.Wind.Y,
+        WindZ = c.Drag.Wind.Z,
+        TurbulenceEnabled = c.Turbulence.Enabled ? 1u : 0u,
+        TurbulenceAmplitude = c.Turbulence.Amplitude,
+        TurbulenceFrequency = c.Turbulence.Frequency,
+        TurbulenceTimeScale = c.Turbulence.TimeScale,
+        TurbulenceSeed = c.Turbulence.Seed,
+        TurbulenceOctaves = (uint)c.Turbulence.Octaves,
+        TurbulenceDivergenceFree = c.Turbulence.DivergenceFree ? 1u : 0u,
+    };
+
+    private static Dynamics.AmbientConfig3 FromFfi(NativeMethods.AmbientConfig3Ffi f) => new()
+    {
+        Spring = new Dynamics.SpringConfig3
+        {
+            Enabled = f.SpringEnabled != 0,
+            Anchor = new Vector3(f.SpringAx, f.SpringAy, f.SpringAz),
+            Stiffness = f.SpringStiffness,
+            Damping = f.SpringDamping,
+            MaxDisplacement = f.SpringMaxDisplacement,
+        },
+        Drag = new Dynamics.DragConfig3
+        {
+            Enabled = f.DragEnabled != 0,
+            Linear = f.DragLinear,
+            Quadratic = f.DragQuadratic,
+            AirDensity = f.AirDensity,
+            Angular = f.DragAngular,
+            Wind = new Vector3(f.WindX, f.WindY, f.WindZ),
+        },
+        Turbulence = new Dynamics.TurbulenceConfig3
+        {
+            Enabled = f.TurbulenceEnabled != 0,
+            Amplitude = f.TurbulenceAmplitude,
+            Frequency = f.TurbulenceFrequency,
+            TimeScale = f.TurbulenceTimeScale,
+            Seed = f.TurbulenceSeed,
+            Octaves = (int)f.TurbulenceOctaves,
+            DivergenceFree = f.TurbulenceDivergenceFree != 0,
+        },
+    };
+
     public int BodyCount
     {
         get

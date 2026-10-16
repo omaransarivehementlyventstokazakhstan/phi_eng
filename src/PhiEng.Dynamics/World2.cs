@@ -44,6 +44,13 @@ public class World2
     /// with semi-implicit Euler — bit-identical to pre-gravity behavior.
     /// </summary>
     public GravityConfig2 GravityConfig { get; set; }
+    /// <summary>
+    /// Ambient force fields — spring (SHM), aerodynamic drag, turbulence
+    /// (see <see cref="AmbientConfig2"/>). Default is a no-op.
+    /// </summary>
+    public AmbientConfig2 Ambient { get; set; } = AmbientConfig2.Default;
+    /// <summary>Monotonic simulation clock (s), advanced by Dt each step.</summary>
+    public float Time { get; set; }
     /// <summary>Next body id.</summary>
     public int NextBodyId { get; set; }
     /// <summary>Previous frame's contact impulses, keyed by (bodyA, bodyB).</summary>
@@ -301,6 +308,13 @@ public class World2
         float h = verlet ? dt * 0.5f : dt;
         GravityIntegration.Kick2(Bodies, GravityConfig, Gravity, h, verlet);
 
+        // 1a. Ambient forces (spring/SHM, drag, turbulence), same slot and
+        // Verlet split as the gravity kick above (see AmbientIntegration).
+        if (Ambient.IsActive())
+        {
+            AmbientIntegration.Kick2(Bodies, Ambient, Time, h);
+        }
+
         // 2. Broad phase - find potential collision pairs (into scratch).
         UpdateBroadphase();
         _pairs.Clear();
@@ -418,6 +432,10 @@ public class World2
                 body.IntegrateDrift(dt);
             }
             GravityIntegration.Kick2(Bodies, GravityConfig, Gravity, dt * 0.5f, true);
+            if (Ambient.IsActive())
+            {
+                AmbientIntegration.Kick2(Bodies, Ambient, Time, dt * 0.5f);
+            }
         }
         else
         {
@@ -444,6 +462,9 @@ public class World2
                 body.AngularVelocity = 0.0f;
             }
         }
+
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        Time += dt;
     }
 
     private void UpdateBroadphase()

@@ -23,6 +23,9 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              softening safety, probes, snapshot round-trip, BH
              determinism; G08-G10 compact 3D set — orbit, determinism,
              snapshot)
+    A01-A05  ambient forces (mirrored both languages: A01 spring/SHM
+             period, A02 linear-drag terminal velocity, A03 turbulence
+             determinism, A04 default no-op, A05 ambient-scale immunity)
 
 This script extracts IDs from Rust test fns (crates/**/*.rs) and C# test
 methods (tests/**/*.cs) and fails (exit 1) on any drift outside the
