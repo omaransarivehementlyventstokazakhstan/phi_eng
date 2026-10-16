@@ -21,6 +21,14 @@
 //! components as f32 bits (never re-derived from angles). Broadphase,
 //! scratch buffers, and EPA working sets are rebuilt, never stored.
 //! Anything ambiguous or out of range is [`SnapshotError::Corrupt`].
+//!
+//! Schema history: v3 is the pre-gravity format (uniform field only).
+//! v4 adds the gravity config block (mode, integrator, G, softening,
+//! attractor, mu) and per-body `gravity_scale`. Writers emit v3 for
+//! default-gravity worlds (byte-identical to older files) and v4
+//! otherwise; loaders accept both, filling v3 gravity state with
+//! defaults. JSON additive fields carry `#[serde(default)]` (same
+//! precedent as fluid/joints); binary stays strict per version.
 
 use glam::{Mat2, Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -41,7 +49,11 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
 /// unknown versions rather than guessing.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+/// Oldest schema this build can read. v3 predates gravity fields
+/// (uniform field, unit scales, Euler integrator); they load as
+/// defaults. Anything outside `[MIN_READABLE, VERSION]` is rejected.
+const SNAPSHOT_SCHEMA_MIN_READABLE: u32 = 3;
 
 /// Binary envelope magic (`PHE1` = physics engine snapshot family; the
 /// numeric schema version travels as a separate `u32`).
@@ -183,6 +195,11 @@ struct Body2Dto {
     rotation: [f32; 4],
     velocity: Vec2Dto,
     angular_velocity: f32,
+    /// Gravitational coupling multiplier (schema v4; defaults to 1.0
+    /// for older files and is omitted when 1.0 so v3 output stays
+    /// byte-identical).
+    #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
+    gravity_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +215,9 @@ struct Body3Dto {
     rotation: [f32; 4],
     velocity: Vec3Dto,
     angular_velocity: Vec3Dto,
+    /// See `Body2Dto::gravity_scale`.
+    #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
+    gravity_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,10 +404,104 @@ impl Default for FluidConfig3Dto {
     }
 }
 
+/// Default `gravity_scale` for pre-v4 files (full coupling).
+fn default_gravity_scale() -> f32 {
+    1.0
+}
+
+/// `skip_serializing_if` companion: unit scales are omitted so
+/// default-gravity worlds serialize exactly like schema v3.
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
+}
+
+/// Gravity configuration DTO (schema v4). Field names mirror
+/// [`crate::gravity::GravityConfig2`]; `mode`/`integrator` are the
+/// enum discriminants (0 = Uniform/Euler).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GravityConfig2Dto {
+    mode: u32,
+    integrator: u32,
+    big_g: f32,
+    softening: f32,
+    attractor: Vec2Dto,
+    attractor_mu: f32,
+}
+
+impl Default for GravityConfig2Dto {
+    fn default() -> Self {
+        Self {
+            mode: 0,
+            integrator: 0,
+            big_g: 1.0,
+            softening: 0.0,
+            attractor: Vec2Dto { x: 0.0, y: 0.0 },
+            attractor_mu: 0.0,
+        }
+    }
+}
+
+impl GravityConfig2Dto {
+    fn is_default(&self) -> bool {
+        self.mode == 0
+            && self.integrator == 0
+            && self.big_g == 1.0
+            && self.softening == 0.0
+            && self.attractor.x == 0.0
+            && self.attractor.y == 0.0
+            && self.attractor_mu == 0.0
+    }
+}
+
+/// 3D counterpart of [`GravityConfig2Dto`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GravityConfig3Dto {
+    mode: u32,
+    integrator: u32,
+    big_g: f32,
+    softening: f32,
+    attractor: Vec3Dto,
+    attractor_mu: f32,
+}
+
+impl Default for GravityConfig3Dto {
+    fn default() -> Self {
+        Self {
+            mode: 0,
+            integrator: 0,
+            big_g: 1.0,
+            softening: 0.0,
+            attractor: Vec3Dto {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            attractor_mu: 0.0,
+        }
+    }
+}
+
+impl GravityConfig3Dto {
+    fn is_default(&self) -> bool {
+        self.mode == 0
+            && self.integrator == 0
+            && self.big_g == 1.0
+            && self.softening == 0.0
+            && self.attractor.x == 0.0
+            && self.attractor.y == 0.0
+            && self.attractor.z == 0.0
+            && self.attractor_mu == 0.0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct World2Dto {
     schema: u32,
     gravity: Vec2Dto,
+    /// Schema v4; omitted (and defaulted) for v3 files so pre-gravity
+    /// snapshots load with a default config.
+    #[serde(default, skip_serializing_if = "GravityConfig2Dto::is_default")]
+    gravity_config: GravityConfig2Dto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -461,6 +575,9 @@ enum Joint3Dto {
 struct World3Dto {
     schema: u32,
     gravity: Vec3Dto,
+    /// Schema v4; omitted (and defaulted) for v3 files.
+    #[serde(default, skip_serializing_if = "GravityConfig3Dto::is_default")]
+    gravity_config: GravityConfig3Dto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -622,6 +739,100 @@ fn validation_dto(v: ValidationConfig) -> ValidationDto {
     }
 }
 
+fn gravity_config_dto_2(c: &super::gravity::GravityConfig2) -> GravityConfig2Dto {
+    GravityConfig2Dto {
+        mode: c.mode as u32,
+        integrator: c.integrator as u32,
+        big_g: c.big_g,
+        softening: c.softening,
+        attractor: v2(c.attractor),
+        attractor_mu: c.attractor_mu,
+    }
+}
+
+fn gravity_config_dto_3(c: &super::gravity::GravityConfig3) -> GravityConfig3Dto {
+    GravityConfig3Dto {
+        mode: c.mode as u32,
+        integrator: c.integrator as u32,
+        big_g: c.big_g,
+        softening: c.softening,
+        attractor: v3(c.attractor),
+        attractor_mu: c.attractor_mu,
+    }
+}
+
+/// Validated gravity config from a DTO: enum tags must be known,
+/// floats finite, softening non-negative. Anything else is `Corrupt`,
+/// never a silent default (the serde `Default` only fills fields
+/// *absent* from older files, which are default by construction).
+fn gravity_config_from_2(
+    c: &GravityConfig2Dto,
+) -> Result<super::gravity::GravityConfig2, SnapshotError> {
+    use super::gravity::{GravityConfig2, GravityMode, Integrator};
+    let mode = match c.mode {
+        0 => GravityMode::Uniform,
+        1 => GravityMode::Central,
+        2 => GravityMode::NBody,
+        _ => return corrupt(format!("unknown gravity mode {}", c.mode)),
+    };
+    let integrator = match c.integrator {
+        0 => Integrator::SemiImplicitEuler,
+        1 => Integrator::VelocityVerlet,
+        _ => return corrupt(format!("unknown integrator {}", c.integrator)),
+    };
+    finite(c.big_g, "gravity.big_g")?;
+    finite(c.softening, "gravity.softening")?;
+    if c.softening < 0.0 {
+        return corrupt("gravity.softening must be >= 0");
+    }
+    finite(c.attractor.x, "gravity.attractor.x")?;
+    finite(c.attractor.y, "gravity.attractor.y")?;
+    finite(c.attractor_mu, "gravity.attractor_mu")?;
+    Ok(GravityConfig2 {
+        mode,
+        integrator,
+        big_g: c.big_g,
+        softening: c.softening,
+        attractor: Vec2::new(c.attractor.x, c.attractor.y),
+        attractor_mu: c.attractor_mu,
+    })
+}
+
+/// 3D counterpart of [`gravity_config_from_2`].
+fn gravity_config_from_3(
+    c: &GravityConfig3Dto,
+) -> Result<super::gravity::GravityConfig3, SnapshotError> {
+    use super::gravity::{GravityConfig3, GravityMode, Integrator};
+    let mode = match c.mode {
+        0 => GravityMode::Uniform,
+        1 => GravityMode::Central,
+        2 => GravityMode::NBody,
+        _ => return corrupt(format!("unknown gravity mode {}", c.mode)),
+    };
+    let integrator = match c.integrator {
+        0 => Integrator::SemiImplicitEuler,
+        1 => Integrator::VelocityVerlet,
+        _ => return corrupt(format!("unknown integrator {}", c.integrator)),
+    };
+    finite(c.big_g, "gravity.big_g")?;
+    finite(c.softening, "gravity.softening")?;
+    if c.softening < 0.0 {
+        return corrupt("gravity.softening must be >= 0");
+    }
+    finite(c.attractor.x, "gravity.attractor.x")?;
+    finite(c.attractor.y, "gravity.attractor.y")?;
+    finite(c.attractor.z, "gravity.attractor.z")?;
+    finite(c.attractor_mu, "gravity.attractor_mu")?;
+    Ok(GravityConfig3 {
+        mode,
+        integrator,
+        big_g: c.big_g,
+        softening: c.softening,
+        attractor: Vec3::new(c.attractor.x, c.attractor.y, c.attractor.z),
+        attractor_mu: c.attractor_mu,
+    })
+}
+
 fn body2_dto(b: &RigidBody2) -> Body2Dto {
     let r = b.transform.rotation;
     Body2Dto {
@@ -636,6 +847,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         rotation: [r.x_axis.x, r.x_axis.y, r.y_axis.x, r.y_axis.y],
         velocity: v2(b.velocity),
         angular_velocity: b.angular_velocity,
+        gravity_scale: b.gravity_scale,
     }
 }
 
@@ -653,6 +865,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         rotation: [q.x, q.y, q.z, q.w],
         velocity: v3(b.velocity),
         angular_velocity: v3(b.angular_velocity),
+        gravity_scale: b.gravity_scale,
     }
 }
 
@@ -785,8 +998,19 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     };
 
     World2Dto {
-        schema: SNAPSHOT_SCHEMA_VERSION,
+        // Conditional schema: default-gravity worlds stay v3
+        // (byte-identical to pre-gravity files, so old loaders and the
+        // C# v3 side keep working); anything using gravity features
+        // needs v4. MIN_READABLE doubles as the legacy version number —
+        // if v3 reads are ever dropped, this degrades to always-current.
+        schema: if w.gravity_config.is_default() && w.bodies.iter().all(|b| b.gravity_scale == 1.0)
+        {
+            SNAPSHOT_SCHEMA_MIN_READABLE
+        } else {
+            SNAPSHOT_SCHEMA_VERSION
+        },
         gravity: v2(w.gravity),
+        gravity_config: gravity_config_dto_2(&w.gravity_config),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -944,8 +1168,15 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     };
 
     World3Dto {
-        schema: SNAPSHOT_SCHEMA_VERSION,
+        // Conditional schema: see `world2_dto`.
+        schema: if w.gravity_config.is_default() && w.bodies.iter().all(|b| b.gravity_scale == 1.0)
+        {
+            SNAPSHOT_SCHEMA_MIN_READABLE
+        } else {
+            SNAPSHOT_SCHEMA_VERSION
+        },
         gravity: v3(w.gravity),
+        gravity_config: gravity_config_dto_3(&w.gravity_config),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -965,7 +1196,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
 // ============================================================================
 
 fn check_schema(schema: u32) -> Result<(), SnapshotError> {
-    if schema == SNAPSHOT_SCHEMA_VERSION {
+    if (SNAPSHOT_SCHEMA_MIN_READABLE..=SNAPSHOT_SCHEMA_VERSION).contains(&schema) {
         Ok(())
     } else {
         Err(SnapshotError::Version(schema))
@@ -1214,6 +1445,7 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     finite(b.angular_velocity, "body.angular_velocity")?;
     finite(b.linear_damping, "body.linear_damping")?;
     finite(b.angular_damping, "body.angular_damping")?;
+    finite(b.gravity_scale, "body.gravity_scale")?;
     let material = material_from(&b.material)?;
 
     // id == index invariant: snapshot bodies must arrive in order.
@@ -1253,6 +1485,7 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     body.angular_velocity = b.angular_velocity;
     body.linear_damping = b.linear_damping;
     body.angular_damping = b.angular_damping;
+    body.gravity_scale = b.gravity_scale;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -1273,6 +1506,7 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     finite(b.angular_velocity.z, "body.angular_velocity.z")?;
     finite(b.linear_damping, "body.linear_damping")?;
     finite(b.angular_damping, "body.angular_damping")?;
+    finite(b.gravity_scale, "body.gravity_scale")?;
     let material = material_from(&b.material)?;
 
     if b.id as usize != w.bodies.len() {
@@ -1310,6 +1544,7 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     );
     body.linear_damping = b.linear_damping;
     body.angular_damping = b.angular_damping;
+    body.gravity_scale = b.gravity_scale;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -1789,6 +2024,7 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
 
     let mut w = World2::new();
     w.gravity = Vec2::new(dto.gravity.x, dto.gravity.y);
+    w.gravity_config = gravity_config_from_2(&dto.gravity_config)?;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -1829,6 +2065,7 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
 
     let mut w = World3::new();
     w.gravity = Vec3::new(dto.gravity.x, dto.gravity.y, dto.gravity.z);
+    w.gravity_config = gravity_config_from_3(&dto.gravity_config)?;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -1903,10 +2140,10 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn encode_envelope(kind: u8, payload: &[u8]) -> Vec<u8> {
+fn encode_envelope(kind: u8, version: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(13 + payload.len());
     out.extend_from_slice(&BINARY_MAGIC);
-    out.extend_from_slice(&SNAPSHOT_SCHEMA_VERSION.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.push(kind);
     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     out.extend_from_slice(payload);
@@ -1914,7 +2151,11 @@ fn encode_envelope(kind: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn decode_envelope(bytes: &[u8], want_kind: u8) -> Result<Vec<u8>, SnapshotError> {
+/// Strict envelope check: magic, kind, length, CRC must match, and the
+/// schema version must be one this build can read
+/// (`[MIN_READABLE, VERSION]`). Returns the file's version with the
+/// payload so body/config decoding can branch on it.
+fn decode_envelope(bytes: &[u8], want_kind: u8) -> Result<(u32, Vec<u8>), SnapshotError> {
     if bytes.len() < 13 {
         return Err(SnapshotError::Parse("binary snapshot too short".into()));
     }
@@ -1922,7 +2163,7 @@ fn decode_envelope(bytes: &[u8], want_kind: u8) -> Result<Vec<u8>, SnapshotError
         return Err(SnapshotError::Parse("bad snapshot magic".into()));
     }
     let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    if version != SNAPSHOT_SCHEMA_VERSION {
+    if !(SNAPSHOT_SCHEMA_MIN_READABLE..=SNAPSHOT_SCHEMA_VERSION).contains(&version) {
         return Err(SnapshotError::Version(version));
     }
     if bytes[8] != want_kind {
@@ -1944,7 +2185,7 @@ fn decode_envelope(bytes: &[u8], want_kind: u8) -> Result<Vec<u8>, SnapshotError
     if crc32fast::hash(payload) != want {
         return Err(SnapshotError::Corrupt("snapshot CRC mismatch".into()));
     }
-    Ok(payload.to_vec())
+    Ok((version, payload.to_vec()))
 }
 
 fn encode_solver(out: &mut Vec<u8>, s: &SolverDto) {
@@ -1952,6 +2193,60 @@ fn encode_solver(out: &mut Vec<u8>, s: &SolverDto) {
     write_f32(out, s.slop);
     write_f32(out, s.baumgarte);
     write_f32(out, s.early_exit_tolerance);
+}
+
+/// Schema v4 gravity config block (2D): mode/integrator tags,
+/// G, softening, attractor, mu. Only written/read for v4 payloads;
+/// v3 payloads carry no gravity section (defaults on load).
+fn encode_gravity_config_2(out: &mut Vec<u8>, g: &GravityConfig2Dto) {
+    write_u32(out, g.mode);
+    write_u32(out, g.integrator);
+    write_f32(out, g.big_g);
+    write_f32(out, g.softening);
+    write_f32(out, g.attractor.x);
+    write_f32(out, g.attractor.y);
+    write_f32(out, g.attractor_mu);
+}
+
+fn decode_gravity_config_2(r: &mut Reader) -> Result<GravityConfig2Dto, SnapshotError> {
+    Ok(GravityConfig2Dto {
+        mode: r.read_u32()?,
+        integrator: r.read_u32()?,
+        big_g: r.read_f32()?,
+        softening: r.read_f32()?,
+        attractor: Vec2Dto {
+            x: r.read_f32()?,
+            y: r.read_f32()?,
+        },
+        attractor_mu: r.read_f32()?,
+    })
+}
+
+/// 3D counterpart of [`encode_gravity_config_2`].
+fn encode_gravity_config_3(out: &mut Vec<u8>, g: &GravityConfig3Dto) {
+    write_u32(out, g.mode);
+    write_u32(out, g.integrator);
+    write_f32(out, g.big_g);
+    write_f32(out, g.softening);
+    write_f32(out, g.attractor.x);
+    write_f32(out, g.attractor.y);
+    write_f32(out, g.attractor.z);
+    write_f32(out, g.attractor_mu);
+}
+
+fn decode_gravity_config_3(r: &mut Reader) -> Result<GravityConfig3Dto, SnapshotError> {
+    Ok(GravityConfig3Dto {
+        mode: r.read_u32()?,
+        integrator: r.read_u32()?,
+        big_g: r.read_f32()?,
+        softening: r.read_f32()?,
+        attractor: Vec3Dto {
+            x: r.read_f32()?,
+            y: r.read_f32()?,
+            z: r.read_f32()?,
+        },
+        attractor_mu: r.read_f32()?,
+    })
 }
 
 fn decode_solver(r: &mut Reader) -> Result<SolverDto, SnapshotError> {
@@ -2165,6 +2460,12 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
     write_f32(&mut p, dto.angular_sleep_threshold);
     encode_solver(&mut p, &dto.solver);
     encode_validation(&mut p, &dto.validation);
+    // Schema v4: gravity config block. v3 payloads omit it (strict:
+    // a v4-tagged payload without it fails truncation, never misparses).
+    let gravity_v4 = dto.schema == SNAPSHOT_SCHEMA_VERSION;
+    if gravity_v4 {
+        encode_gravity_config_2(&mut p, &dto.gravity_config);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_f32(&mut p, dto.cell_size);
@@ -2189,6 +2490,9 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, b.velocity.x);
         write_f32(&mut p, b.velocity.y);
         write_f32(&mut p, b.angular_velocity);
+        if gravity_v4 {
+            write_f32(&mut p, b.gravity_scale);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -2209,7 +2513,36 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         }
     }
     encode_fluid2(&mut p, &dto.fluid);
-    Ok(encode_envelope(KIND_WORLD2, &p))
+    Ok(encode_envelope(KIND_WORLD2, dto.schema, &p))
+}
+
+/// Version-gated gravity decode: v4 payloads carry the config block,
+/// older payloads resolve to defaults (same values a v3 file implies).
+fn decode_opt_gravity_2(r: &mut Reader, version: u32) -> Result<GravityConfig2Dto, SnapshotError> {
+    if version == SNAPSHOT_SCHEMA_VERSION {
+        decode_gravity_config_2(r)
+    } else {
+        Ok(GravityConfig2Dto::default())
+    }
+}
+
+/// 3D counterpart of [`decode_opt_gravity_2`].
+fn decode_opt_gravity_3(r: &mut Reader, version: u32) -> Result<GravityConfig3Dto, SnapshotError> {
+    if version == SNAPSHOT_SCHEMA_VERSION {
+        decode_gravity_config_3(r)
+    } else {
+        Ok(GravityConfig3Dto::default())
+    }
+}
+
+/// Version-gated per-body scale: v4 records carry a trailing scale
+/// float per body; older records imply full coupling (1.0).
+fn decode_opt_scale(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
+    if version == SNAPSHOT_SCHEMA_VERSION {
+        r.read_f32()
+    } else {
+        Ok(1.0)
+    }
 }
 
 fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto) {
@@ -2825,13 +3158,13 @@ fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
 
 /// Deserialize a 2D world from the versioned binary envelope.
 pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, SnapshotError> {
-    let payload = decode_envelope(bytes, KIND_WORLD2)?;
+    let (version, payload) = decode_envelope(bytes, KIND_WORLD2)?;
     let mut r = Reader {
         b: &payload,
         pos: 0,
     };
     let dto = World2Dto {
-        schema: SNAPSHOT_SCHEMA_VERSION,
+        schema: version,
         gravity: Vec2Dto {
             x: r.read_f32()?,
             y: r.read_f32()?,
@@ -2841,6 +3174,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         angular_sleep_threshold: r.read_f32()?,
         solver: decode_solver(&mut r)?,
         validation: decode_validation(&mut r)?,
+        gravity_config: decode_opt_gravity_2(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -2878,6 +3212,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                         y: r.read_f32()?,
                     },
                     angular_velocity: r.read_f32()?,
+                    gravity_scale: decode_opt_scale(&mut r, version)?,
                 };
                 v.push(body);
             }
@@ -2956,6 +3291,11 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
     write_f32(&mut p, dto.angular_sleep_threshold);
     encode_solver(&mut p, &dto.solver);
     encode_validation(&mut p, &dto.validation);
+    // Schema v4: gravity config block (see `world2_to_binary`).
+    let gravity_v4 = dto.schema == SNAPSHOT_SCHEMA_VERSION;
+    if gravity_v4 {
+        encode_gravity_config_3(&mut p, &dto.gravity_config);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_u32(&mut p, dto.bodies.len() as u32);
@@ -2983,6 +3323,9 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, b.angular_velocity.x);
         write_f32(&mut p, b.angular_velocity.y);
         write_f32(&mut p, b.angular_velocity.z);
+        if gravity_v4 {
+            write_f32(&mut p, b.gravity_scale);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -3006,18 +3349,18 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         }
     }
     encode_fluid3(&mut p, &dto.fluid);
-    Ok(encode_envelope(KIND_WORLD3, &p))
+    Ok(encode_envelope(KIND_WORLD3, dto.schema, &p))
 }
 
 /// Deserialize a 3D world from the versioned binary envelope.
 pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, SnapshotError> {
-    let payload = decode_envelope(bytes, KIND_WORLD3)?;
+    let (version, payload) = decode_envelope(bytes, KIND_WORLD3)?;
     let mut r = Reader {
         b: &payload,
         pos: 0,
     };
     let dto = World3Dto {
-        schema: SNAPSHOT_SCHEMA_VERSION,
+        schema: version,
         gravity: Vec3Dto {
             x: r.read_f32()?,
             y: r.read_f32()?,
@@ -3028,6 +3371,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         angular_sleep_threshold: r.read_f32()?,
         solver: decode_solver(&mut r)?,
         validation: decode_validation(&mut r)?,
+        gravity_config: decode_opt_gravity_3(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {
@@ -3070,6 +3414,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         y: r.read_f32()?,
                         z: r.read_f32()?,
                     },
+                    gravity_scale: decode_opt_scale(&mut r, version)?,
                 });
             }
             v

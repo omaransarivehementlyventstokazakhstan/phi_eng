@@ -7,6 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Added
+- **Gravitational physics core (Rust)**: `GravityMode` (uniform /
+  central attractor / full N-body pairwise with softening),
+  per-body `gravity_scale`, and a velocity-Verlet integrator option,
+  in a new `phieng_dynamics::gravity` module. Snapshot schema is now
+  v4 (conditional: default-gravity worlds still write byte-identical
+  v3; loaders accept both). FFI surface, managed C# mirror, and
+  cross-language parity tests land in a later phase.
+
 ## [0.3.1] - 2026-10-15
 
 ### Fixed

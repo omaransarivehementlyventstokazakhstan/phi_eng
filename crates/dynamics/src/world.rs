@@ -92,6 +92,10 @@ pub struct World2 {
     pub solver: Solver,
     /// Gravity
     pub gravity: Vec2,
+    /// Gravitational force model + integration scheme (see
+    /// [`crate::gravity`]). Default is the legacy uniform field with
+    /// semi-implicit Euler — bit-identical to pre-gravity behavior.
+    pub gravity_config: super::gravity::GravityConfig2,
     /// Next body ID
     pub next_body_id: usize,
     /// Previous frame's contact impulses, keyed by (body_a, body_b).
@@ -128,6 +132,7 @@ impl World2 {
             broadphase: SpatialHash2::new(1.0),
             solver: Solver::new(),
             gravity: Vec2::new(0.0, -9.81),
+            gravity_config: super::gravity::GravityConfig2::default(),
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
             dt: 1.0 / 60.0,
@@ -400,12 +405,19 @@ impl World2 {
         // Reset validation report
         self.validation_report = ValidationReport::default();
 
-        // 1. Apply gravity
-        for body in self.bodies.iter_mut() {
-            if !body.is_static {
-                body.velocity += self.gravity * dt;
-            }
-        }
+        // 1. Gravity kick (see `crate::gravity`): uniform background field
+        // plus Central/N-body terms per `gravity_config`, one full-step
+        // kick (Euler) or the first half-kick (Verlet, with linear
+        // damping riding as symmetric drag).
+        let verlet = self.gravity_config.integrator == super::gravity::Integrator::VelocityVerlet;
+        let h = if verlet { dt * 0.5 } else { dt };
+        super::gravity::gravity_kick_2(
+            &mut self.bodies,
+            &self.gravity_config,
+            self.gravity,
+            h,
+            verlet,
+        );
 
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
@@ -513,9 +525,25 @@ impl World2 {
         }
         self.contact_cache.retain(|_, list| !list.is_empty());
 
-        // 5. Integrate motion
-        for body in self.bodies.iter_mut() {
-            body.integrate(dt);
+        if verlet {
+            // 5v. Verlet drift (positions only — no linear damping) plus
+            // the second half-kick with forces recomputed at the new
+            // positions. The contact solver above ran unchanged.
+            for body in self.bodies.iter_mut() {
+                body.integrate_drift(dt);
+            }
+            super::gravity::gravity_kick_2(
+                &mut self.bodies,
+                &self.gravity_config,
+                self.gravity,
+                dt * 0.5,
+                true,
+            );
+        } else {
+            // 5. Integrate motion
+            for body in self.bodies.iter_mut() {
+                body.integrate(dt);
+            }
         }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep.
@@ -979,6 +1007,10 @@ pub struct World3 {
     pub solver: Solver3D,
     /// Gravity
     pub gravity: Vec3,
+    /// Gravitational force model + integration scheme (see
+    /// [`crate::gravity`]). Default is the legacy uniform field with
+    /// semi-implicit Euler — bit-identical to pre-gravity behavior.
+    pub gravity_config: super::gravity::GravityConfig3,
     /// Next body ID
     pub next_body_id: usize,
     /// Fixed timestep
@@ -1026,6 +1058,7 @@ impl World3 {
             broadphase: AABBTree3D::new(),
             solver: Solver3D::new(),
             gravity: Vec3::new(0.0, -9.81, 0.0),
+            gravity_config: super::gravity::GravityConfig3::default(),
             next_body_id: 0,
             dt: 1.0 / 60.0,
             linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
@@ -1163,12 +1196,19 @@ impl World3 {
         // Reset validation report
         self.validation_report = ValidationReport::default();
 
-        // 1. Apply gravity
-        for body in self.bodies.iter_mut() {
-            if !body.is_static {
-                body.velocity += self.gravity * dt;
-            }
-        }
+        // 1. Gravity kick (see `crate::gravity`): uniform background field
+        // plus Central/N-body terms per `gravity_config`, one full-step
+        // kick (Euler) or the first half-kick (Verlet, with linear
+        // damping riding as symmetric drag).
+        let verlet = self.gravity_config.integrator == super::gravity::Integrator::VelocityVerlet;
+        let h = if verlet { dt * 0.5 } else { dt };
+        super::gravity::gravity_kick_3(
+            &mut self.bodies,
+            &self.gravity_config,
+            self.gravity,
+            h,
+            verlet,
+        );
 
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
@@ -1276,9 +1316,25 @@ impl World3 {
         }
         self.contact_cache.retain(|_, list| !list.is_empty());
 
-        // 5. Integrate motion
-        for body in self.bodies.iter_mut() {
-            body.integrate(dt);
+        if verlet {
+            // 5v. Verlet drift (positions only — no linear damping) plus
+            // the second half-kick with forces recomputed at the new
+            // positions. The contact solver above ran unchanged.
+            for body in self.bodies.iter_mut() {
+                body.integrate_drift(dt);
+            }
+            super::gravity::gravity_kick_3(
+                &mut self.bodies,
+                &self.gravity_config,
+                self.gravity,
+                dt * 0.5,
+                true,
+            );
+        } else {
+            // 5. Integrate motion
+            for body in self.bodies.iter_mut() {
+                body.integrate(dt);
+            }
         }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep

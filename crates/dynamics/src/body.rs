@@ -31,6 +31,11 @@ pub struct RigidBody2 {
     pub linear_damping: f32,
     /// Angular damping (warm: integrate)
     pub angular_damping: f32,
+    /// Gravitational coupling multiplier (warm: gravity kick). 1.0 =
+    /// full coupling, 0.0 = immune (still collides and still exerts by
+    /// mass), negative = repulsion. Only finiteness is enforced
+    /// (see `validate_body_2d`); must be finite.
+    pub gravity_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -317,6 +322,7 @@ impl RigidBody2 {
             inv_inertia: 2.0,
             linear_damping: 0.01,
             angular_damping: 0.01,
+            gravity_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -407,6 +413,22 @@ impl RigidBody2 {
         self.angular_velocity += torque * self.inv_inertia;
     }
 
+    /// Rotation update shared by [`Self::integrate`] and
+    /// [`Self::integrate_drift`]: advances the 2D angle by
+    /// `angular_velocity * dt`. Single source of truth for the
+    /// `atan2(-y_axis.x, x_axis.x)` convention (the negation matters:
+    /// plain `atan2(y_axis.x, x_axis.x)` returns `-angle` and makes
+    /// bodies ping-pong every frame).
+    fn integrate_rotation(&mut self, dt: f32) {
+        // Mat2::from_angle(a) has x_axis=(cos a, sin a), y_axis=(-sin a, cos a),
+        // so the angle is atan2(-y_axis.x, x_axis.x).
+        let m00 = self.transform.rotation.x_axis.x;
+        let m10 = self.transform.rotation.y_axis.x;
+        let current_angle = (-m10).atan2(m00);
+        let new_angle = current_angle + self.angular_velocity * dt;
+        self.transform.rotation = Mat2::from_angle(new_angle);
+    }
+
     /// Integrate motion (semi-implicit Euler)
     pub fn integrate(&mut self, dt: f32) {
         if self.is_static {
@@ -423,16 +445,27 @@ impl RigidBody2 {
         // Update position
         self.transform.position += self.velocity * dt;
 
-        // Update rotation.
-        // Mat2::from_angle(a) has x_axis=(cos a, sin a), y_axis=(-sin a, cos a),
-        // so the angle is atan2(-y_axis.x, x_axis.x). (The negation matters:
-        // plain atan2(y_axis.x, x_axis.x) returns -angle and makes bodies
-        // ping-pong between +angle and -angle every frame.)
-        let m00 = self.transform.rotation.x_axis.x;
-        let m10 = self.transform.rotation.y_axis.x;
-        let current_angle = (-m10).atan2(m00);
-        let new_angle = current_angle + self.angular_velocity * dt;
-        self.transform.rotation = Mat2::from_angle(new_angle);
+        self.integrate_rotation(dt);
+    }
+
+    /// Drift step for velocity-Verlet integration (see
+    /// [`crate::gravity`]): positions and rotation advance a full step
+    /// with the post-kick velocities. Linear damping is NOT applied
+    /// here — in Verlet mode it rides the gravity kicks as symmetric
+    /// drag. Angular damping matches [`Self::integrate`] (multiplicative,
+    /// applied before the rotation update).
+    pub fn integrate_drift(&mut self, dt: f32) {
+        if self.is_static {
+            return;
+        }
+
+        let ang_damping = self.angular_damping * dt;
+        self.angular_velocity *= 1.0 - ang_damping.min(1.0);
+
+        // Update position
+        self.transform.position += self.velocity * dt;
+
+        self.integrate_rotation(dt);
     }
 
     /// Get the transform's rotation angle
@@ -605,6 +638,8 @@ pub struct RigidBody3 {
     pub linear_damping: f32,
     /// Angular damping
     pub angular_damping: f32,
+    /// Gravitational coupling multiplier (see `RigidBody2::gravity_scale`).
+    pub gravity_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -728,6 +763,7 @@ impl RigidBody3 {
             inv_inertia: Mat3::IDENTITY,
             linear_damping: 0.01,
             angular_damping: 0.01,
+            gravity_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -833,6 +869,28 @@ impl RigidBody3 {
         self.angular_velocity += self.world_inv_inertia() * torque;
     }
 
+    /// Rotation update shared by [`Self::integrate`] and
+    /// [`Self::integrate_drift`]: quaternion increment from world-space
+    /// angular velocity, composed on the LEFT (`q' = dq_world * q`;
+    /// right-multiplying would integrate omega as if body-frame).
+    fn integrate_rotation(&mut self, dt: f32) {
+        let w = self.angular_velocity;
+        let angle = w.length() * dt;
+        if angle > 1e-6 {
+            let axis = w / w.length();
+            let half_angle = angle * 0.5;
+            let sin_half = half_angle.sin();
+            let cos_half = half_angle.cos();
+            let delta_quat = glam::Quat::from_xyzw(
+                axis.x * sin_half,
+                axis.y * sin_half,
+                axis.z * sin_half,
+                cos_half,
+            );
+            self.transform.rotation = (delta_quat * self.transform.rotation).normalize();
+        }
+    }
+
     /// Integrate motion (semi-implicit Euler)
     pub fn integrate(&mut self, dt: f32) {
         if self.is_static {
@@ -849,25 +907,26 @@ impl RigidBody3 {
         // Update position
         self.transform.position += self.velocity * dt;
 
-        // Update rotation (quaternion integration). Angular velocity is
-        // stored in world space, so the increment composes on the LEFT:
-        // q' = dq_world * q (right-multiplying would integrate omega as
-        // if it were expressed in the body frame).
-        let w = self.angular_velocity;
-        let angle = w.length() * dt;
-        if angle > 1e-6 {
-            let axis = w / w.length();
-            let half_angle = angle * 0.5;
-            let sin_half = half_angle.sin();
-            let cos_half = half_angle.cos();
-            let delta_quat = glam::Quat::from_xyzw(
-                axis.x * sin_half,
-                axis.y * sin_half,
-                axis.z * sin_half,
-                cos_half,
-            );
-            self.transform.rotation = (delta_quat * self.transform.rotation).normalize();
+        self.integrate_rotation(dt);
+    }
+
+    /// Drift step for velocity-Verlet integration (see
+    /// [`crate::gravity`]): positions and rotation advance a full step
+    /// with the post-kick velocities. Linear damping is NOT applied
+    /// here — in Verlet mode it rides the gravity kicks as symmetric
+    /// drag. Angular damping matches [`Self::integrate`].
+    pub fn integrate_drift(&mut self, dt: f32) {
+        if self.is_static {
+            return;
         }
+
+        let ang_damping = self.angular_damping * dt;
+        self.angular_velocity *= 1.0 - ang_damping.min(1.0);
+
+        // Update position
+        self.transform.position += self.velocity * dt;
+
+        self.integrate_rotation(dt);
     }
 
     /// Check if body should sleep
