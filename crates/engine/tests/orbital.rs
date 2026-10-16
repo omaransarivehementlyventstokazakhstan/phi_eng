@@ -163,8 +163,8 @@ fn orbital_min_separation_2d(world: &World2) -> f32 {
     let mut min = f32::MAX;
     for i in 0..n {
         for j in (i + 1)..n {
-            let d = (world.bodies[j].transform.position - world.bodies[i].transform.position)
-                .length();
+            let d =
+                (world.bodies[j].transform.position - world.bodies[i].transform.position).length();
             min = min.min(d);
         }
     }
@@ -194,10 +194,7 @@ fn orbital_figure8_choreography() {
             Vec2::new(-0.97000436, 0.24308753),
             Vec2::new(0.4662036850, 0.4323657300),
         ),
-        (
-            Vec2::new(0.0, 0.0),
-            Vec2::new(-0.93240737, -0.86473146),
-        ),
+        (Vec2::new(0.0, 0.0), Vec2::new(-0.93240737, -0.86473146)),
     ];
 
     for (label, verlet) in [("euler", false), ("verlet", true)] {
@@ -243,7 +240,10 @@ fn orbital_figure8_choreography() {
             steps,
             wall_ms,
             peak_speed,
-            &format!("return={max_return:.4} e_drift={e_drift:.2e} min_sep={min_sep:.3} hash={:#x}", orbital_hash2(&world)),
+            &format!(
+                "return={max_return:.4} e_drift={e_drift:.2e} min_sep={min_sep:.3} hash={:#x}",
+                orbital_hash2(&world)
+            ),
         );
         assert!(
             max_return < 0.15,
@@ -273,7 +273,8 @@ fn orbital_hohmann_transfer() {
     let dv1 = v_circ1 * ((2.0 * R2 / (R1 + R2)).sqrt() - 1.0);
     // Half period of the transfer ellipse a_t = (r1+r2)/2.
     let a_t = (R1 + R2) * 0.5;
-    let coast_steps = (std::f32::consts::PI * (a_t * a_t * a_t / MU).sqrt() / ORBITAL_DT).round() as usize;
+    let coast_steps =
+        (std::f32::consts::PI * (a_t * a_t * a_t / MU).sqrt() / ORBITAL_DT).round() as usize;
     // Quarter period of the target circular orbit (hold phase).
     let hold_steps =
         (0.5 * std::f32::consts::PI * (R2 * R2 * R2 / MU).sqrt() / ORBITAL_DT).round() as usize;
@@ -286,11 +287,7 @@ fn orbital_hohmann_transfer() {
             world.gravity_config.integrator = Integrator::VelocityVerlet;
         }
         let id = world
-            .add_dynamic_body(
-                Vec2::new(R1, 0.0),
-                Shape2::Circle { radius: 0.5 },
-                1.0,
-            )
+            .add_dynamic_body(Vec2::new(R1, 0.0), Shape2::Circle { radius: 0.5 }, 1.0)
             .expect("valid shape");
         orbital_clean_2d(&mut world);
         // Departure burn (prograde).
@@ -405,10 +402,7 @@ fn orbital_molniya_3d() {
             peak_speed,
             &format!("closure={closure:.3} r_apo={max_r:.2} plane_err={plane_err:.2}deg"),
         );
-        assert!(
-            closure < 0.5,
-            "molniya did not close ({label}): {closure}"
-        );
+        assert!(closure < 0.5, "molniya did not close ({label}): {closure}");
         assert!(
             (max_r - r_apo_expect).abs() / r_apo_expect < 0.02,
             "molniya apogee off ({label}): {max_r} want {r_apo_expect}"
@@ -477,7 +471,10 @@ fn orbital_geo_ring() {
             period_steps,
             wall_ms,
             peak_speed,
-            &format!("ang_err={max_ang_err:.2}deg r_err={max_r_err:.4} hash={:#x}", orbital_hash2(&world)),
+            &format!(
+                "ang_err={max_ang_err:.2}deg r_err={max_r_err:.4} hash={:#x}",
+                orbital_hash2(&world)
+            ),
         );
         assert!(
             max_ang_err < 0.5,
@@ -519,8 +516,7 @@ fn orbital_leo_constellation() {
             for k in 0..22 {
                 // Staggered phase per plane (real constellations phase
                 // planes so crossings never coincide).
-                let a = (k as f32 * 2.0 * std::f32::consts::PI / 22.0)
-                    + plane as f32 * 0.15;
+                let a = (k as f32 * 2.0 * std::f32::consts::PI / 22.0) + plane as f32 * 0.15;
                 // Equatorial ring rotated about x by the inclination.
                 let p = Vec3::new(r * a.cos(), r * a.sin(), 0.0);
                 let v = Vec3::new(-a.sin(), a.cos(), 0.0) * v_circ;
@@ -728,7 +724,13 @@ fn orbital_plummer_cluster() {
         let body_density = (1.0 / N as f32) / body_volume;
         for i in 0..N {
             let id = w
-                .add_dynamic_body(pos[i], Shape3::Sphere { radius: body_radius }, body_density)
+                .add_dynamic_body(
+                    pos[i],
+                    Shape3::Sphere {
+                        radius: body_radius,
+                    },
+                    body_density,
+                )
                 .expect("valid shape");
             w.bodies[id].velocity = vel[i];
         }
@@ -747,8 +749,8 @@ fn orbital_plummer_cluster() {
     let mut u_init = 0.0f32;
     for i in 0..exact.bodies.len() {
         for j in (i + 1)..exact.bodies.len() {
-            let r = (exact.bodies[j].transform.position - exact.bodies[i].transform.position)
-                .length();
+            let r =
+                (exact.bodies[j].transform.position - exact.bodies[i].transform.position).length();
             u_init -= G * exact.bodies[i].mass * exact.bodies[j].mass / r.max(1e-6);
         }
     }
@@ -779,8 +781,8 @@ fn orbital_plummer_cluster() {
     let mut potential = 0.0f32;
     for i in 0..exact.bodies.len() {
         for j in (i + 1)..exact.bodies.len() {
-            let r = (exact.bodies[j].transform.position - exact.bodies[i].transform.position)
-                .length();
+            let r =
+                (exact.bodies[j].transform.position - exact.bodies[i].transform.position).length();
             potential -= G * exact.bodies[i].mass * exact.bodies[j].mass / r.max(1e-6);
         }
     }
