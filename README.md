@@ -12,13 +12,13 @@ wall-clock inside the simulation).
 ```bash
 # Add to your Cargo.toml
 [dependencies]
-phieng = "0.3.0"
+phieng = "0.3.1"
 
 # Or use the full workspace for all crates
-phieng-math = "0.3.0"
-phieng-collision = "0.3.0"
-phieng-broadphase = "0.3.0"
-phieng-dynamics = "0.3.0"
+phieng-math = "0.3.1"
+phieng-collision = "0.3.1"
+phieng-broadphase = "0.3.1"
+phieng-dynamics = "0.3.1"
 ```
 
 ```rust
@@ -99,8 +99,8 @@ counts, tolerances, and policy decisions).
 
 | Surface | Version / requirement |
 |---|---|
-| Rust crates (`phieng-*`) | 0.3.0, MSRV 1.78, edition 2021 |
-| NuGet packages (`PhiEng.*`) | 0.3.0, .NET 10 |
+| Rust crates (`phieng-*`) | 0.3.1, MSRV 1.78, edition 2021 |
+| NuGet packages (`PhiEng.*`) | 0.3.1, .NET 10 |
 | Snapshot schema | v3 (v1/v2 files are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
@@ -292,10 +292,12 @@ noise-sensitive (±40%); hashes are the determinism gate.
 | pile 3D pairs/contacts | 592 / 904 | — | 561–579 / 891–913 | — |
 | pile 3D allocs | 14.0/step | — | gc0 0.000/step | — |
 
-Hashes: pile 2D `0x7813153bb95c20cc` (reproduced exactly — no
-regression), islands `0x188163f1f1508c5f` (serial == parallel),
-pile3d `0x7900e59ee4ba8df1`. C# hashes are run-local (worlds keep
-evolving across windows); the gate is serial == parallel within a run.
+Hashes: pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`
+(serial == parallel), pile3d `0x3c0815ebe61347f4`. Hashes moved in
+0.3.1 (3D friction cone is now a true cone clamp, default sleep
+thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
+seed-margin scaling). C# hashes are run-local (worlds keep evolving
+across windows); the gate is serial == parallel within a run.
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead
@@ -326,7 +328,9 @@ number, which favors AoS.
 | C# islands | 0.0637 | 0.0668 | 0.95x | True |
 
 (ms/step, medians of 5×300; SoA pile hashes `0xde0584218f45a2c7`
-/ `0x40535d8960d217f0` equal AoS bit-for-bit.)
+/ `0x40535d8960d217f0` equal AoS bit-for-bit **as of 0.3.0** — the
+spikes were deleted after measurement and the 0.3.1 physics fixes move
+every hash, so these are historical readings, not reproducible.)
 
 **Verdict: HOLD, on measured evidence.** All six cells sit within
 noise of 1.00x. At iters=8 (solver-dominated) Rust reads exactly

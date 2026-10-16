@@ -12,5 +12,5 @@ keywords = ["physics", "broadphase", "game-development"]
 categories = ["physics", "game-development"]
 
 [dependencies]
-phieng-math = { path = "../math", version = "0.3.0" }
+phieng-math = { path = "../math", version = "0.3.1" }
 glam = { workspace = true }

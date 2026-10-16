@@ -186,22 +186,22 @@ The `PhiEng.Native` csproj automatically packages everything under `runtimes/{ri
 dotnet pack PhiEng.slnx -c Release --no-build -o ./local-nuget
 ```
 
-Outputs (version 0.3.0):
+Outputs (version 0.3.1):
 ```
 local-nuget/
-├── PhiEng.0.3.0.nupkg
-├── PhiEng.0.3.0.snupkg
-├── PhiEng.Math.0.3.0.nupkg
-├── PhiEng.Math.0.3.0.snupkg
-├── PhiEng.Collision.0.3.0.nupkg
-├── PhiEng.Collision.0.3.0.snupkg
-├── PhiEng.Broadphase.0.3.0.nupkg
-├── PhiEng.Broadphase.0.3.0.snupkg
-├── PhiEng.Dynamics.0.3.0.nupkg
-├── PhiEng.Dynamics.0.3.0.snupkg
-├── PhiEng.Native.0.3.0.nupkg
-├── PhiEng.Native.0.3.0.snupkg
-└── PhiEng.Bench.0.3.0.nupkg
+├── PhiEng.0.3.1.nupkg
+├── PhiEng.0.3.1.snupkg
+├── PhiEng.Math.0.3.1.nupkg
+├── PhiEng.Math.0.3.1.snupkg
+├── PhiEng.Collision.0.3.1.nupkg
+├── PhiEng.Collision.0.3.1.snupkg
+├── PhiEng.Broadphase.0.3.1.nupkg
+├── PhiEng.Broadphase.0.3.1.snupkg
+├── PhiEng.Dynamics.0.3.1.nupkg
+├── PhiEng.Dynamics.0.3.1.snupkg
+├── PhiEng.Native.0.3.1.nupkg
+├── PhiEng.Native.0.3.1.snupkg
+└── PhiEng.Bench.0.3.1.nupkg
 ```
 
 Install locally for testing:
@@ -238,11 +238,11 @@ All jobs must pass before merge.
 
 ### Steps
 
-1. **Finalize changelog** — rename `[Unreleased]` section in `CHANGELOG.md` to `[0.3.0] - 2026-10-15`
+1. **Finalize changelog** — rename `[Unreleased]` section in `CHANGELOG.md` to `[0.3.1] - <date>`
 2. **Tag and push**:
    ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push origin v0.3.1
    ```
 3. **Watch CI** — two release workflows trigger:
    - `release-native.yml` → builds 4 RIDs, creates `.zip`/`.tar.gz` assets, attaches to GitHub Release

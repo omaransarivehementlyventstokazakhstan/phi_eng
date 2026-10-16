@@ -7,6 +7,62 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-15
+
+### Fixed
+- **3D friction cone was a box, not a cone** (`Solver3D`): tangent
+  impulses were clamped independently per axis (`|jt1| <= mu*jn`,
+  `|jt2| <= mu*jn`), allowing `|jt|` up to `sqrt(2) * mu*jn` — 41%
+  over the Coulomb cone at 45 degrees. The tangent impulse *vector*
+  is now clamped to the disk `|jt| <= mu*jn`. Surfaces that should
+  grip (boxes on slopes, corner contacts) no longer slide.
+- **Distance joint deadlock at zero separation**: when both anchors
+  coincided while `rest_length > 0`, `axis()` returned `None` and the
+  frame was skipped — the joint exerted zero force forever. It now
+  falls back to the relative-velocity axis (then `Vec2::X` when both
+  bodies are at rest), so overlapping bodies push apart to rest
+  length.
+- **EPA seeding failed for small shapes**: `STRICT_TET_MARGIN` was an
+  absolute `1e-4`, so shapes smaller than the margin could never
+  seed a tetrahedron — `gjk_epa` returned `None` and the collision
+  was missed. The margin now scales with the candidate support
+  points' own extent (AABB diagonal), keeping it a relative tolerance
+  at any scene scale.
+- **GJK iteration exhaustion could report separation for an actual
+  overlap**: with a full tetrahedron (`count == 4`) after 32
+  iterations, GJK now reports `Colliding` instead of falling through
+  to the simplex distance — closes a tunneling path for deep,
+  high-iteration overlaps.
+- **Near-zero effective mass produced inf/NaN**: the guard was
+  `mass_n == 0.0` (exact). Subnormal effective mass (e.g. near-static
+  bodies) yielded huge `lambda` values that poisoned velocities with
+  inf/NaN. Guard is now `mass_n < EPS^2`.
+
+### Changed
+- **Default sleep thresholds 0.01 -> 0.05** (linear and angular, 2D
+  and 3D): bodies no longer sleep while still visibly moving
+  (0.01 m/s = 0.6 mm/frame at 60 Hz; now ~3 mm/frame).
+- **Shared numeric tolerance constants** (`phieng_math`): `EPS`,
+  `EPS_SQ`, `EPS_LINE`, `EPS_PLANE`, `EPA_TOL`, `GJK_EPS`,
+  `MAX_BIAS_VELOCITY`, `DEFAULT_SLOP`, `DEFAULT_BAUMGARTE`,
+  `DEFAULT_ITERATIONS`, `EARLY_EXIT_TOL`,
+  `LINEAR_SLEEP_THRESHOLD`, `ANGULAR_SLEEP_THRESHOLD`,
+  `CONTACT_MATCH_DIST_SQ`, `RESTITUTION_THRESHOLD`, and `scaled_eps()`
+  replace per-file magic numbers across the solver, joints, world,
+  fluid, narrowphase, and material code. `MIN_DENSITY` is now
+  `phieng_math::EPS`.
+- **Release profile**: `lto = "thin"`, `codegen-units = 1`;
+  `overflow-checks = true` in dev/test/release.
+- **Staged native library rebuilt in release**: the committed
+  win-x64 `phieng.dll` was a stale debug build (2.6 MB); it is now
+  the release build (0.87 MB) and matches the current sources.
+- **Baseline hashes moved** (README baseline matrix): the physics
+  fixes above change trajectories, so the recorded pile/islands/
+  pile3d hashes were re-recorded. The determinism gate (serial ==
+  parallel, snapshot round-trip bit-identical) still passes.
+
+## [0.3.0] - 2026-10-15
+
 ### Added
 - **SPH fluid (2D + 3D)**: weakly-compressible particle fluid
   (`FluidState2`/`FluidState3`: poly6 density, linear pressure
