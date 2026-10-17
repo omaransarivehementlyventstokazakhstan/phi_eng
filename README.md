@@ -438,3 +438,11 @@ chase-dominated stalls — not on speculation.
   Each test asserts survival and prints a `BRUTAL ...` readings line;
   results are logged in `absolute_stress_tests.md`. Names deliberately
   avoid the parity-ID pattern, so no C# mirrors are required.
+- Orbital & SHM/SPH benchmark suites (Rust-only, analytic where the
+  method allows): `crates/engine/tests/orbital.rs` (7 celestial-mechanics
+  scenarios) and the SHM/SPH benchmarks in
+  `crates/dynamics/src/{ambient,fluid,fluid3}.rs` (damped-oscillator
+  regimes, driven resonance, hydrostatic column, dam-break surge,
+  droplet, channel flow). Gaps (no-slip walls, Martin–Moyce √t,
+  penalty-floor hydrostatic overshoot) are pinned in `LIMITATIONS.md`;
+  readings in `absolute_stress_tests.md`.

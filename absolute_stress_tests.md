@@ -11,21 +11,21 @@ cargo test --release -p phieng --test brutal -- --nocapture --test-threads=1
 
 ## Readings (release, Windows x64, 2026-10-15)
 
-| Test | Bodies | Steps | Wall ms | ms/step | Peak speed | Reading |
-|---|---|---|---|---|---|---|
-| deep_overlap_eject_2d | 2 | 240 | 0.2 | 0.0006 | 2.001 | 90% overlap separates gently to final_x=7.960, no NaN (was 10.740 / 42.217 pre-cap) |
-| determinism_double_run_2d | 11 | 600 | 2.8 | 0.0047 | 11.215 | run1 == run2 bit-exact, hash `0xe0f4f2748072d545` |
-| friction_shove_2d | 13 | 600 | 7.5 | 0.0125 | 73.499 | 8 m/s shove ejects debris; min_y=-290.59, **tunneled=true** (unchanged by cap: impact-driven, not bias-driven) |
-| hostile_soak_2d | 2 | 120 | 0.1 | 0.0007 | 0.000 | 6/6 hostile ops rejected cleanly |
-| joint_gauntlet_2d | 7 | 1200 | 1.9 | 0.0016 | 16.911 | 6 distance links, max rest-length err 0.0063 (bit-identical pre/post cap) |
-| mass_ratio_soak_2d | 3 | 20000 | 39.7 | 0.0020 | 0.296 | 10,000:1 ratio, light body rests at y=0.994 (bit-identical pre/post cap) |
-| mega_tower_collapse_2d | 37 | 1800 | 81.7 | 0.0454 | 240.074 | 36-box collapse still tunnels (min_y=-3522.97) via impact speeds, not bias; debris escapes to max_abs_x=282.75 |
-| mesh_stack_3d | 7 | 900 | 7.7 | 0.0086 | 9.901 | all 6 levels sank to y≈-0.02 (floor pile, no floor tunneling) |
-| mesh_tumbler_3d | 19 | 900 | 20.4 | 0.0226 | 11.701 | min_y=-0.12, 14 pairs / 14 contacts, all contained |
-| needle_impact_2d | 2 | 300 | 0.4 | 0.0013 | 60.000 | 60 m/s needle rebounded to final_x=-18.26, **tunneled=false** |
-| parallel_parity_scale_2d | 21 | 300 | — | serial 0.0192 / parallel 0.0569 | — | serial == parallel bit-exact, hash `0x7fa0fadeb1ea3f37` (bit-identical pre/post cap: shallow contacts untouched) |
-| restitution_storm_2d | 39 | 1200 | 7.0 | 0.0058 | 23.549 | 36 restitution-1.0 balls contained, energy bounded (bit-identical pre/post cap) |
-| snapshot_midchaos_3d | 11 | 240 | — | — | — | json 19821 B vs bin 2890 B; json == bin == direct continuation `0x33ef9bb330a33282` |
+| Test                      | Bodies | Steps | Wall ms | ms/step                         | Peak speed | Reading                                                                                                          |
+| ------------------------- | ------ | ----- | ------- | ------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| deep_overlap_eject_2d     | 2      | 240   | 0.2     | 0.0006                          | 2.001      | 90% overlap separates gently to final_x=7.960, no NaN (was 10.740 / 42.217 pre-cap)                              |
+| determinism_double_run_2d | 11     | 600   | 2.8     | 0.0047                          | 11.215     | run1 == run2 bit-exact, hash `0xe0f4f2748072d545`                                                                |
+| friction_shove_2d         | 13     | 600   | 7.5     | 0.0125                          | 73.499     | 8 m/s shove ejects debris; min_y=-290.59, **tunneled=true** (unchanged by cap: impact-driven, not bias-driven)   |
+| hostile_soak_2d           | 2      | 120   | 0.1     | 0.0007                          | 0.000      | 6/6 hostile ops rejected cleanly                                                                                 |
+| joint_gauntlet_2d         | 7      | 1200  | 1.9     | 0.0016                          | 16.911     | 6 distance links, max rest-length err 0.0063 (bit-identical pre/post cap)                                        |
+| mass_ratio_soak_2d        | 3      | 20000 | 39.7    | 0.0020                          | 0.296      | 10,000:1 ratio, light body rests at y=0.994 (bit-identical pre/post cap)                                         |
+| mega_tower_collapse_2d    | 37     | 1800  | 81.7    | 0.0454                          | 240.074    | 36-box collapse still tunnels (min_y=-3522.97) via impact speeds, not bias; debris escapes to max_abs_x=282.75   |
+| mesh_stack_3d             | 7      | 900   | 7.7     | 0.0086                          | 9.901      | all 6 levels sank to y≈-0.02 (floor pile, no floor tunneling)                                                    |
+| mesh_tumbler_3d           | 19     | 900   | 20.4    | 0.0226                          | 11.701     | min_y=-0.12, 14 pairs / 14 contacts, all contained                                                               |
+| needle_impact_2d          | 2      | 300   | 0.4     | 0.0013                          | 60.000     | 60 m/s needle rebounded to final_x=-18.26, **tunneled=false**                                                    |
+| parallel_parity_scale_2d  | 21     | 300   | —       | serial 0.0192 / parallel 0.0569 | —          | serial == parallel bit-exact, hash `0x7fa0fadeb1ea3f37` (bit-identical pre/post cap: shallow contacts untouched) |
+| restitution_storm_2d      | 39     | 1200  | 7.0     | 0.0058                          | 23.549     | 36 restitution-1.0 balls contained, energy bounded (bit-identical pre/post cap)                                  |
+| snapshot_midchaos_3d      | 11     | 240   | —       | —                               | —          | json 19821 B vs bin 2890 B; json == bin == direct continuation `0x33ef9bb330a33282`                              |
 
 Result: **13 passed, 0 failed** (total suite wall time ≈ 0.21 s in release).
 (Tested on a Ryzen 7 7745Hs with 16 gigs of ram).
@@ -76,22 +76,22 @@ Run command (release required):
 cargo test --release -p phieng --test orbital -- --nocapture --test-threads=1
 ```
 
-| Test | Bodies | Steps | Wall ms | ms/step | Peak speed | Reading |
-|---|---|---|---|---|---|---|
-| burrau_euler | 3 | 3000 | 0.6 | 0.0002 | 4.978 | e_ratio=-1.139 min_sep=0.027 max_r=27.9 |
-| burrau_verlet | 3 | 3000 | 0.7 | 0.0002 | 4.723 | e_ratio=-1.057 min_sep=0.060 max_r=4.6 |
-| figure8_euler | 3 | 1898 | 0.8 | 0.0004 | 1.285 | return=0.048 e_drift=2.4e-4 min_sep=0.671 |
-| figure8_verlet | 3 | 1898 | 0.6 | 0.0003 | 1.272 | return=0.0004 e_drift=6.3e-6 min_sep=0.690 |
-| geo_ring_euler | 12 | 9537 | 13.2 | 0.0014 | 1.582 | ang_err=0.01° r_err=0.0000 |
-| geo_ring_verlet | 12 | 9537 | 12.7 | 0.0013 | 1.581 | ang_err=0.01° r_err=0.0000 |
-| hohmann_euler | 1 | 1938 | 0.5 | 0.0002 | 3.652 | r_apo=20.001 hold_err=0.0010 |
-| hohmann_verlet | 1 | 1938 | 0.5 | 0.0002 | 3.651 | r_apo=20.000 hold_err=0.0001 |
-| leo_constellation_euler | 66 | 2000 | 7.2 | 0.0036 | 10.023 | r_err=0.0023 |
-| leo_constellation_verlet | 66 | 2000 | 6.9 | 0.0034 | 10.000 | r_err=0.0000 |
-| molniya_euler | 1 | 3372 | 0.4 | 0.0001 | 5.323 | closure=0.077 r_apo=34.01 plane_err=0.00° |
-| molniya_verlet | 1 | 3372 | 0.4 | 0.0001 | 5.323 | closure=0.027 r_apo=34.00 plane_err=0.00° |
-| plummer_exact | 1000 | 200 | 647.5 | 3.2377 | 0.361 | e_drift=3.9e-4 Q=1.016 |
-| plummer_bh | 1000 | 200 | 2956.4 | 14.7822 | 0.361 | e_drift=7.1e-6 |
+| Test                     | Bodies | Steps | Wall ms | ms/step | Peak speed | Reading                                    |
+| ------------------------ | ------ | ----- | ------- | ------- | ---------- | ------------------------------------------ |
+| burrau_euler             | 3      | 3000  | 0.6     | 0.0002  | 4.978      | e_ratio=-1.139 min_sep=0.027 max_r=27.9    |
+| burrau_verlet            | 3      | 3000  | 0.7     | 0.0002  | 4.723      | e_ratio=-1.057 min_sep=0.060 max_r=4.6     |
+| figure8_euler            | 3      | 1898  | 0.8     | 0.0004  | 1.285      | return=0.048 e_drift=2.4e-4 min_sep=0.671  |
+| figure8_verlet           | 3      | 1898  | 0.6     | 0.0003  | 1.272      | return=0.0004 e_drift=6.3e-6 min_sep=0.690 |
+| geo_ring_euler           | 12     | 9537  | 13.2    | 0.0014  | 1.582      | ang_err=0.01° r_err=0.0000                 |
+| geo_ring_verlet          | 12     | 9537  | 12.7    | 0.0013  | 1.581      | ang_err=0.01° r_err=0.0000                 |
+| hohmann_euler            | 1      | 1938  | 0.5     | 0.0002  | 3.652      | r_apo=20.001 hold_err=0.0010               |
+| hohmann_verlet           | 1      | 1938  | 0.5     | 0.0002  | 3.651      | r_apo=20.000 hold_err=0.0001               |
+| leo_constellation_euler  | 66     | 2000  | 7.2     | 0.0036  | 10.023     | r_err=0.0023                               |
+| leo_constellation_verlet | 66     | 2000  | 6.9     | 0.0034  | 10.000     | r_err=0.0000                               |
+| molniya_euler            | 1      | 3372  | 0.4     | 0.0001  | 5.323      | closure=0.077 r_apo=34.01 plane_err=0.00°  |
+| molniya_verlet           | 1      | 3372  | 0.4     | 0.0001  | 5.323      | closure=0.027 r_apo=34.00 plane_err=0.00°  |
+| plummer_exact            | 1000   | 200   | 647.5   | 3.2377  | 0.361      | e_drift=3.9e-4 Q=1.016                     |
+| plummer_bh               | 1000   | 200   | 2956.4  | 14.7822 | 0.361      | e_drift=7.1e-6                             |
 
 Result: **7 passed, 0 failed** (total suite wall time ≈ 4.3 s in release).
 (Tested on a Ryzen 7 7745Hs with 16 gigs of ram.)
@@ -141,4 +141,51 @@ steps bounds the cell map for roaming worlds. All determinism hashes
 (pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`, pile3d
 `0x3c0815ebe61347f4`) are **unchanged** — the optimization is
 memory-only.
+
+## SHM & SPH benchmark suite (2026-10-17)
+
+Canonical, well-known problems, checked against closed-form solutions
+where the method can hit them and against qualitative trends where it
+cannot (gaps pinned in `LIMITATIONS.md`). 12 new tests; all green.
+
+### Simple harmonic motion (damped linear oscillator)
+The spring field is `m x'' + c x' + k x = 0`, so the analytic solution
+is exact:
+
+| Test | Check | Result |
+|---|---|---|
+| `shm_damped_regimes_analytic` | under/critical/over vs closed form (<0.03) | pass |
+| `shm_energy_decay_rate` | envelope slope ≈ `-2 ζ ω₀` (log-fit) | pass |
+| `shm_period_mass_scaling` | `T = 2π√(m/k)` across masses | pass |
+| `shm_vertical_gravity_equilibrium` | rest point shifts `mg/k`, period fixed | pass |
+| `shm_driven_resonance_peak` | amplitude peaks at `ω₀√(1-2ζ²)`; matches `F₀/(m√((ω₀²-ω_d²)²+(2ζω₀ω_d)²))` | pass |
+| `shm3_damped_regimes_analytic` | 3D mirror (bit-identical to 2D) | pass |
+
+### SPH fluid
+
+| Test | Canonical problem | Assertion | Result |
+|---|---|---|---|
+| `sph_hydrostatic_pressure` | still column, `p ≈ ρgh` | order-of-magnitude + monotone depth | pass |
+| `sph_dam_break_surge_front` | Martin & Moyce | advances + contained (√t law is a documented gap) | pass |
+| `sph_droplet_cohesion` | surface tension holds a droplet | bounded radius | pass |
+| `sph_free_blob_energy_bounded` | no gravity/visc/surface | energy conserved (bounded) | pass |
+| `sph_poiseuille_no_slip_gap` | force-driven channel | **flat** profile (no-slip not modeled — pinned gap) | pass |
+| `sph3_hydrostatic_pressure` | 3D column | order-of-magnitude `ρgh` | pass |
+
+Findings worth knowing:
+- **SHM is analytically exact** (to the integrator's O(dt) accuracy);
+  the 2D and 3D springs produce bit-identical trajectories.
+- **Hydrostatic support works** but the penalty floor compresses the
+  bottom decile, so `p_bottom` overshoots `ρgh` (~2.3× in 2D) — a
+  boundary-model artifact, not a solver bug.
+- **No-slip walls are not modeled**: the channel velocity profile stays
+  flat (tangential wall drag is absent); Poiseuille/Chapman profiles are
+  a gap. Boundary particles (`E6`) add normal pressure only.
+- **Martin & Moyce √t front law is not reproduced** by penalty-boundary
+  weakly-compressible SPH; the front advances but the quantitative law
+  is a gap.
+- **Penalty boundaries tunnel** at high speed (no CCD): a violent
+  dam-break ejected a fast particle through a thin wall until the test
+  used thick walls.
+
 

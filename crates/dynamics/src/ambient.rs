@@ -854,4 +854,341 @@ mod tests {
         assert_eq!(a.y.to_bits(), c.y.to_bits());
         assert_eq!(a.z.to_bits(), c.z.to_bits());
     }
+
+    // ---- Canonical damped-oscillator (SHM) benchmark suite ----
+    // The engine's spring is `m x'' + c x' + k x = 0`; the closed-form
+    // solution is known, so each regime is checked analytically.
+
+    /// Integrate one body under the spring kick (semi-implicit Euler),
+    /// returning `(t, x, v)` samples. Anchor at origin.
+    fn spring_series(
+        k: f32,
+        c: f32,
+        x0: f32,
+        v0: f32,
+        dt: f32,
+        steps: usize,
+    ) -> Vec<(f32, f32, f32)> {
+        let mut b = dyn2(Vec2::new(x0, 0.0), 0.5, 1.0);
+        b.velocity = Vec2::new(v0, 0.0);
+        let cfg = AmbientConfig2 {
+            spring: SpringConfig2 {
+                enabled: true,
+                anchor: Vec2::ZERO,
+                stiffness: k,
+                damping: c,
+                max_displacement: 0.0,
+            },
+            ..Default::default()
+        };
+        let mut out = Vec::with_capacity(steps);
+        for n in 0..steps {
+            ambient_kick_2(std::slice::from_mut(&mut b), &cfg, 0.0, dt);
+            b.transform.position += b.velocity * dt;
+            out.push(((n + 1) as f32 * dt, b.transform.position.x, b.velocity.x));
+        }
+        out
+    }
+
+    #[test]
+    fn shm_damped_regimes_analytic() {
+        let k = 40.0f32;
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let w0 = (k / m).sqrt();
+        let dt = 1.0 / 8000.0;
+        let steps = 16000; // 2 s
+        let (x0, v0) = (1.0f32, 0.0f32);
+        let crossings = |series: &[(f32, f32, f32)]| {
+            let mut n = 0;
+            let mut prev = x0;
+            for &(_, x, _) in series {
+                if (x > 0.0) != (prev > 0.0) {
+                    n += 1;
+                }
+                prev = x;
+            }
+            n
+        };
+
+        // Underdamped (zeta = 0.1): oscillatory decay.
+        let zeta = 0.1f32;
+        let c = 2.0 * zeta * (k * m).sqrt();
+        let wd = w0 * (1.0 - zeta * zeta).sqrt();
+        let s = spring_series(k, c, x0, v0, dt, steps);
+        for &(t, x, _) in &s {
+            let analytic = (-zeta * w0 * t).exp()
+                * (x0 * (wd * t).cos() + ((v0 + zeta * w0 * x0) / wd) * (wd * t).sin());
+            assert!(
+                (x - analytic).abs() < 0.03,
+                "underdamped x={x} analytic={analytic} t={t}"
+            );
+        }
+        assert!(
+            crossings(&s) >= 3,
+            "underdamped should oscillate ({})",
+            crossings(&s)
+        );
+
+        // Critically damped (zeta = 1): x = (x0 + (v0 + w0 x0) t) e^{-w0 t}.
+        let c = 2.0 * (k * m).sqrt();
+        let s = spring_series(k, c, x0, v0, dt, steps);
+        for &(t, x, _) in &s {
+            let analytic = (x0 + (v0 + w0 * x0) * t) * (-w0 * t).exp();
+            assert!(
+                (x - analytic).abs() < 0.03,
+                "critical x={x} analytic={analytic} t={t}"
+            );
+        }
+        assert_eq!(crossings(&s), 0, "critically damped must not oscillate");
+
+        // Overdamped (zeta = 3): two real exponentials, no oscillation.
+        let zeta = 3.0f32;
+        let c = 2.0 * zeta * (k * m).sqrt();
+        let disc = (zeta * zeta - 1.0).sqrt();
+        let r1 = -w0 * (zeta - disc);
+        let r2 = -w0 * (zeta + disc);
+        let a = (v0 - r2 * x0) / (r1 - r2);
+        let bcoef = (r1 * x0 - v0) / (r1 - r2);
+        let s = spring_series(k, c, x0, v0, dt, steps);
+        for &(t, x, _) in &s {
+            let analytic = a * (r1 * t).exp() + bcoef * (r2 * t).exp();
+            assert!(
+                (x - analytic).abs() < 0.03,
+                "overdamped x={x} analytic={analytic} t={t}"
+            );
+        }
+        assert_eq!(crossings(&s), 0, "overdamped must not oscillate");
+    }
+
+    #[test]
+    fn shm_energy_decay_rate() {
+        // Underdamped energy envelope: E(t) ~ E0 e^{-2 zeta w0 t}.
+        let k = 40.0f32;
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let w0 = (k / m).sqrt();
+        let zeta = 0.05f32;
+        let c = 2.0 * zeta * (k * m).sqrt();
+        let dt = 1.0 / 4000.0;
+        let s = spring_series(k, c, 1.0, 0.0, dt, 4000 * 6);
+        let mut peaks: Vec<(f32, f32)> = Vec::new();
+        for w in s.windows(2) {
+            if w[0].2 > 0.0 && w[1].2 <= 0.0 {
+                peaks.push((w[1].0, w[1].1));
+            }
+        }
+        assert!(peaks.len() >= 5, "too few peaks: {}", peaks.len());
+        let (mut sx, mut sy, mut sxx, mut sxy, mut n) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for &(t, x) in &peaks {
+            let e = (0.5 * k * x * x).max(1e-9) as f64;
+            let (xt, yt) = (t as f64, e.ln());
+            sx += xt;
+            sy += yt;
+            sxx += xt * xt;
+            sxy += xt * yt;
+            n += 1.0;
+        }
+        let slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+        let expected = -2.0 * zeta as f64 * w0 as f64;
+        assert!(
+            (slope - expected).abs() < 0.2 * expected.abs(),
+            "energy decay slope {slope} want {expected}"
+        );
+    }
+
+    #[test]
+    fn shm_period_mass_scaling() {
+        // T = 2 pi sqrt(m/k): periods scale as sqrt(mass).
+        let k = 50.0f32;
+        let dt = 1.0 / 8000.0;
+        for &density in &[0.5f32, 1.0, 2.0] {
+            let mut b = dyn2(Vec2::new(1.0, 0.0), 0.5, density);
+            let t_expected = 2.0 * std::f32::consts::PI * (b.mass / k).sqrt();
+            let steps = (3.0 * t_expected / dt) as usize;
+            let mut cross_times: Vec<f32> = Vec::new();
+            let mut prev = b.transform.position.x;
+            let mut t = 0.0f32;
+            for _ in 0..steps {
+                ambient_kick_2(std::slice::from_mut(&mut b), &cfg_spring(k), 0.0, dt);
+                b.transform.position += b.velocity * dt;
+                t += dt;
+                let x = b.transform.position.x;
+                if prev > 0.0 && x <= 0.0 {
+                    cross_times.push(t);
+                }
+                prev = x;
+            }
+            assert!(
+                cross_times.len() >= 2,
+                "density {density}: too few crossings"
+            );
+            let period = cross_times[1] - cross_times[0];
+            assert!(
+                (period - t_expected).abs() < 0.05 * t_expected,
+                "density {density}: period {period} want {t_expected}"
+            );
+        }
+    }
+
+    fn cfg_spring(k: f32) -> AmbientConfig2 {
+        AmbientConfig2 {
+            spring: SpringConfig2 {
+                enabled: true,
+                anchor: Vec2::ZERO,
+                stiffness: k,
+                damping: 0.0,
+                max_displacement: 0.0,
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn shm_vertical_gravity_equilibrium() {
+        // Gravity shifts the rest point by m g / k; period is unchanged.
+        let g = 9.81f32;
+        let k = 40.0f32;
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::new(0.0, -g);
+        let id = world
+            .add_dynamic_body(Vec2::ZERO, Shape2::Circle { radius: 0.5 }, 1.0)
+            .expect("valid shape");
+        world.bodies[id].linear_damping = 0.0;
+        world.linear_sleep_threshold = 0.0;
+        world.ambient.spring = SpringConfig2 {
+            enabled: true,
+            anchor: Vec2::ZERO,
+            stiffness: k,
+            damping: 0.0,
+            max_displacement: 0.0,
+        };
+        let m = world.bodies[id].mass;
+        let y_eq = -m * g / k;
+        let period = 2.0 * std::f32::consts::PI * (m / k).sqrt();
+        let dt = 1.0 / 2000.0;
+        let settle = (period / dt) as usize;
+        let (mut sum, mut cnt) = (0.0f32, 0usize);
+        for n in 0..(3 * settle) {
+            world.step(dt);
+            if n >= settle {
+                sum += world.bodies[id].transform.position.y;
+                cnt += 1;
+            }
+        }
+        let mean = sum / cnt as f32;
+        assert!(
+            (mean - y_eq).abs() < 0.02,
+            "gravity rest point {mean} want {y_eq}"
+        );
+    }
+
+    #[test]
+    fn shm_driven_resonance_peak() {
+        // Driven damped oscillator: steady-state amplitude peaks near
+        // omega_r = w0 sqrt(1 - 2 zeta^2).
+        let k = 40.0f32;
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let w0 = (k / m).sqrt();
+        let zeta = 0.08f32;
+        let c = 2.0 * zeta * (k * m).sqrt();
+        let f0 = 1.0f32;
+        let dt = 1.0 / 1000.0;
+
+        let amplitude = |wd: f32| -> f32 {
+            let mut b = dyn2(Vec2::ZERO, 0.5, 1.0);
+            let cfg = AmbientConfig2 {
+                spring: SpringConfig2 {
+                    enabled: true,
+                    anchor: Vec2::ZERO,
+                    stiffness: k,
+                    damping: c,
+                    max_displacement: 0.0,
+                },
+                ..Default::default()
+            };
+            let period = 2.0 * std::f32::consts::PI / wd;
+            let drive_steps = (15.0 * period / dt) as usize;
+            let measure_steps = (2.0 * period / dt) as usize;
+            let mut t = 0.0f32;
+            let mut peak = 0.0f32;
+            for n in 0..(drive_steps + measure_steps) {
+                let f = f0 * (wd * t).cos();
+                b.velocity += Vec2::new(f, 0.0) * (b.inv_mass * dt);
+                ambient_kick_2(std::slice::from_mut(&mut b), &cfg, 0.0, dt);
+                b.transform.position += b.velocity * dt;
+                t += dt;
+                if n >= drive_steps {
+                    peak = peak.max(b.transform.position.x.abs());
+                }
+            }
+            peak
+        };
+
+        let w_r = w0 * (1.0 - 2.0 * zeta * zeta).max(0.0).sqrt();
+        let mut best_w = 0.0f32;
+        let mut best_a = 0.0f32;
+        for i in 0..=40 {
+            let wd = (0.4 + 1.2 * i as f32 / 40.0) * w0;
+            let a = amplitude(wd);
+            if a > best_a {
+                best_a = a;
+                best_w = wd;
+            }
+        }
+        assert!(
+            (best_w - w_r).abs() < 0.15 * w0,
+            "resonance peak at {best_w} want ~{w_r}"
+        );
+        let denom =
+            ((w0 * w0 - best_w * best_w).powi(2) + (2.0 * zeta * w0 * best_w).powi(2)).sqrt();
+        let analytic = f0 / (m * denom);
+        assert!(
+            (best_a - analytic).abs() < 0.3 * analytic,
+            "peak amplitude {best_a} vs analytic {analytic}"
+        );
+    }
+
+    #[test]
+    fn shm3_damped_regimes_analytic() {
+        // 3D mirror: the spring is isotropic, so the x-motion matches 2D.
+        let k = 40.0f32;
+        let mut probe = RigidBody3::new(0);
+        probe
+            .set_shape(Shape3::Sphere { radius: 0.5723572 }, 1.0)
+            .unwrap();
+        let m = probe.mass;
+        let w0 = (k / m).sqrt();
+        let zeta = 0.1f32;
+        let c = 2.0 * zeta * (k * m).sqrt();
+        let wd = w0 * (1.0 - zeta * zeta).sqrt();
+        let cfg = AmbientConfig3 {
+            spring: SpringConfig3 {
+                enabled: true,
+                anchor: Vec3::ZERO,
+                stiffness: k,
+                damping: c,
+                max_displacement: 0.0,
+            },
+            ..Default::default()
+        };
+        let mut b = RigidBody3::new(0);
+        b.set_shape(Shape3::Sphere { radius: 0.5723572 }, 1.0)
+            .unwrap();
+        b.transform.position = Vec3::new(1.0, 0.0, 0.0);
+        b.linear_damping = 0.0;
+        let dt = 1.0 / 8000.0;
+        for n in 0..8000 {
+            ambient_kick_3(std::slice::from_mut(&mut b), &cfg, 0.0, dt);
+            b.transform.position += b.velocity * dt;
+            let t = (n + 1) as f32 * dt;
+            // x(t) = e^{-zeta w0 t}(x0 cos(wd t) + ((v0 + zeta w0 x0)/wd) sin(wd t));
+            // with x0 = 1, v0 = 0 the sin term is (zeta w0 / wd) sin(wd t).
+            let analytic =
+                (-zeta * w0 * t).exp() * ((wd * t).cos() + ((zeta * w0) / wd) * (wd * t).sin());
+            assert!(
+                (b.transform.position.x - analytic).abs() < 0.05,
+                "3D underdamped x={} analytic={analytic}",
+                b.transform.position.x
+            );
+        }
+    }
 }

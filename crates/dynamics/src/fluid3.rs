@@ -1398,4 +1398,51 @@ mod tests {
         }
         assert!(peak < 30.0, "3D boundary run blew up, peak={peak}");
     }
+
+    #[test]
+    fn sph3_hydrostatic_pressure() {
+        // 3D mirror of the still-column hydrostatic benchmark.
+        let mut world = crate::World3::new(); // gravity (0, -9.81, 0)
+        tank(&mut world);
+        // Start on the floor (top at y = -0.5) so there is no impact splash.
+        lattice(&mut world, Vec3::new(0.0, -0.375, 0.0), 8, 10, 8, 0.25);
+        for _ in 0..900 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "hydrostatic3");
+        let g = 9.81f32;
+        let rho0 = world.fluid.config.rest_density;
+        // Robust: ignore any particle ejected out of the (open-topped) tank.
+        let mut ys: Vec<f32> = world
+            .fluid
+            .particles
+            .iter()
+            .filter(|p| p.position.y > -1.0 && p.position.y < 6.0)
+            .map(|p| p.position.y)
+            .collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let (n, tenth) = (ys.len(), ys.len() / 10);
+        let bottom = ys[..tenth].iter().sum::<f32>() / tenth as f32;
+        let surface = ys[n - tenth..].iter().sum::<f32>() / tenth as f32;
+        let (lo, hi) = (ys[tenth], ys[n - tenth]);
+        let (mut p_lo, mut n_lo, mut p_hi, mut n_hi) = (0.0f32, 0, 0.0f32, 0);
+        for p in world.fluid.particles.iter() {
+            if p.position.y <= lo {
+                p_lo += p.pressure;
+                n_lo += 1;
+            }
+            if p.position.y >= hi {
+                p_hi += p.pressure;
+                n_hi += 1;
+            }
+        }
+        let p_bottom = p_lo / n_lo as f32;
+        let p_top = p_hi / n_hi as f32;
+        let expected = rho0 * g * (surface - bottom);
+        assert!(p_bottom > p_top, "3D pressure must rise with depth");
+        assert!(
+            p_bottom > 0.25 * expected && p_bottom < 3.5 * expected,
+            "3D hydrostatic p_bottom={p_bottom} expected~{expected}"
+        );
+    }
 }

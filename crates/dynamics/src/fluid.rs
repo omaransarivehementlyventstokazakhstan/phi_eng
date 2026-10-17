@@ -1506,4 +1506,233 @@ mod tests {
         }
         assert!(peak < 30.0, "boundary run blew up, peak={peak}");
     }
+
+    // ---- Canonical SPH benchmark suite ----
+    // Well-known fluid-validation problems; assertions are analytic where
+    // the method can hit them and qualitative where it cannot (see
+    // LIMITATIONS.md).
+
+    #[test]
+    fn sph_hydrostatic_pressure() {
+        // Still column: pressure must rise with depth and match rho g h.
+        let mut world = crate::World2::new(); // gravity (0, -9.81)
+        tank(&mut world);
+        lattice(&mut world, 0.0, 0.0, 18, 12, 0.25);
+        for _ in 0..1200 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "hydrostatic");
+        let g = 9.81f32;
+        let rho0 = world.fluid.config.rest_density;
+        let mut ys: Vec<f32> = world.fluid.particles.iter().map(|p| p.position.y).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let (n, tenth) = (ys.len(), ys.len() / 10);
+        let bottom = ys[..tenth].iter().sum::<f32>() / tenth as f32;
+        let surface = ys[n - tenth..].iter().sum::<f32>() / tenth as f32;
+        let (lo, hi) = (ys[tenth], ys[n - tenth]);
+        let (mut p_lo, mut n_lo, mut p_hi, mut n_hi) = (0.0f32, 0, 0.0f32, 0);
+        for p in world.fluid.particles.iter() {
+            if p.position.y <= lo {
+                p_lo += p.pressure;
+                n_lo += 1;
+            }
+            if p.position.y >= hi {
+                p_hi += p.pressure;
+                n_hi += 1;
+            }
+        }
+        let p_bottom = p_lo / n_lo as f32;
+        let p_top = p_hi / n_hi as f32;
+        let expected = rho0 * g * (surface - bottom);
+        assert!(
+            p_bottom > p_top,
+            "pressure must rise with depth: bottom={p_bottom} top={p_top}"
+        );
+        // Weakly-compressible SPH with a penalty floor: the bottom decile
+        // is compressed by the boundary, so p_bottom overshoots rho g h.
+        // Assert order-of-magnitude hydrostatic support.
+        assert!(
+            p_bottom > 0.3 * expected && p_bottom < 3.0 * expected,
+            "hydrostatic p_bottom={p_bottom} expected~{expected}"
+        );
+    }
+
+    /// Advance `world` for `steps` and return the max x of its particles.
+    fn front_x(world: &mut crate::World2, steps: usize, dt: f32) -> f32 {
+        for _ in 0..steps {
+            world.step(dt);
+        }
+        world
+            .fluid
+            .particles
+            .iter()
+            .map(|p| p.position.x)
+            .fold(f32::MIN, f32::max)
+    }
+
+    #[test]
+    fn sph_dam_break_surge_front() {
+        // Martin & Moyce: the surge front advances sub-linearly (~sqrt t).
+        let mut world = crate::World2::new();
+        world
+            .add_static_body(
+                Vec2::new(5.0, -0.5),
+                Shape2::Box {
+                    half_extents: Vec2::new(11.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        for x in [-1.0f32, 11.0] {
+            world
+                .add_static_body(
+                    Vec2::new(x, 5.0),
+                    Shape2::Box {
+                        half_extents: Vec2::new(1.5, 6.0),
+                    },
+                )
+                .expect("valid shape");
+        }
+        lattice(&mut world, 0.5, 0.0, 8, 12, 0.25); // 2 wide, 3 tall column
+        let dt = 1.0 / 60.0;
+        let x0 = front_x(&mut world, 1, dt);
+        let f3 = front_x(&mut world, 159, dt); // +2.65 s
+        assert!(f3 > x0 + 1.0, "surge did not advance: x0={x0} f3={f3}");
+        finite_fluid(&world, "dam break surge");
+        // Containment: no particle escapes the long tank (thick walls avoid
+        // the no-CCD tunneling the standard tank already tolerates).
+        for p in world.fluid.particles.iter() {
+            assert!(
+                p.position.x > 0.0 && p.position.x < 9.5 && p.position.y > -1.0,
+                "dam-break particle escaped: p={}",
+                p.position
+            );
+        }
+        // The full Martin & Moyce sqrt(t) front law is not reproduced by a
+        // penalty-boundary weakly-compressible SPH (documented gap).
+    }
+
+    #[test]
+    fn sph_droplet_cohesion() {
+        // A free droplet with cohesion holds together (no boundaries).
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::ZERO;
+        world.fluid.config.surface_tension = 8.0;
+        world.fluid.config.viscosity = 0.1;
+        world.fluid.config.max_velocity = 10.0;
+        let mut pts = Vec::new();
+        for iy in -6..=6 {
+            for ix in -6..=6 {
+                let (x, y) = (ix as f32 * 0.25, iy as f32 * 0.25);
+                if x * x + y * y <= 1.25 * 1.25 {
+                    pts.push(Vec2::new(x, y));
+                }
+            }
+        }
+        world.fluid.add_particles(&pts);
+        let r0 = world
+            .fluid
+            .particles
+            .iter()
+            .map(|p| p.position.length())
+            .fold(0.0f32, f32::max);
+        for _ in 0..600 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "droplet");
+        let r1 = world
+            .fluid
+            .particles
+            .iter()
+            .map(|p| p.position.length())
+            .fold(0.0f32, f32::max);
+        assert!(r1 < 2.0 * r0, "droplet dispersed: r0={r0} r1={r1}");
+    }
+
+    #[test]
+    fn sph_free_blob_energy_bounded() {
+        // No gravity, boundaries, damping, viscosity, tension, or drag:
+        // a uniformly translating blob's energy is conserved (bounded).
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::ZERO;
+        world.fluid.config.viscosity = 0.0;
+        world.fluid.config.drag = 0.0;
+        world.fluid.config.max_velocity = 100.0;
+        lattice(&mut world, -1.0, -1.0, 8, 8, 0.25);
+        for p in world.fluid.particles.iter_mut() {
+            p.velocity = Vec2::new(1.0, 0.0);
+        }
+        let m = world.fluid.config.particle_mass;
+        let ke = |w: &crate::World2| {
+            m * w
+                .fluid
+                .particles
+                .iter()
+                .map(|p| 0.5 * p.velocity.length_squared())
+                .sum::<f32>()
+        };
+        let e0 = ke(&world);
+        for _ in 0..600 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "free blob");
+        let e1 = ke(&world);
+        assert!(
+            e1 > 0.0 && e1 < 2.0 * e0,
+            "free blob energy drifted: {e0} -> {e1}"
+        );
+    }
+
+    #[test]
+    fn sph_poiseuille_no_slip_gap() {
+        // Body-force-driven channel flow. SPH boundaries here are penalty
+        // (normal push-out) with NO tangential wall drag, so the velocity
+        // profile stays essentially FLAT instead of parabolic — the no-slip
+        // Poisson/Chapman profile is a documented gap (see LIMITATIONS.md).
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::new(4.0, 0.0); // horizontal drive on particles
+        world.fluid.config.max_velocity = 100.0;
+        world
+            .add_static_body(
+                Vec2::new(0.0, 0.0),
+                Shape2::Box {
+                    half_extents: Vec2::new(4.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        world
+            .add_static_body(
+                Vec2::new(0.0, 3.0),
+                Shape2::Box {
+                    half_extents: Vec2::new(4.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        lattice(&mut world, -3.0, 1.0, 24, 8, 0.25);
+        for _ in 0..600 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "poiseuille");
+        let band_mean = |lo: f32, hi: f32| -> f32 {
+            let (mut s, mut n) = (0.0f32, 0);
+            for p in world.fluid.particles.iter() {
+                if p.position.y >= lo && p.position.y < hi {
+                    s += p.velocity.x;
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                s / n as f32
+            } else {
+                0.0
+            }
+        };
+        let bottom = band_mean(1.0, 1.75);
+        let middle = band_mean(1.75, 2.25);
+        let top = band_mean(2.25, 3.0);
+        // Pinned limitation: the profile is flat (all bands within 25%).
+        assert!(
+            middle > 0.0 && (middle - bottom).abs() < 0.25 * middle && (middle - top).abs() < 0.25 * middle,
+            "expected a flat profile (no-slip not modeled): bottom={bottom} middle={middle} top={top}"
+        );
+    }
 }

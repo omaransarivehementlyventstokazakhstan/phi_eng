@@ -163,4 +163,29 @@ Two sources still allocate and are documented gaps, not regressions:
   every 256 steps** (recycling buffers to their pool) to bound memory for
   roaming worlds; churn is bounded by the compaction cadence.
 
+## Fluid SPH benchmark gaps (pinned by the SHM/SPH suite)
+
+Canonical fluid problems are tested (see `absolute_stress_tests.md`).
+Where the method cannot hit the textbook result, the test pins the
+limitation rather than faking it:
+
+- **No-slip walls are not modeled.** The boundary is a penalty push-out
+  (normal only), so there is no tangential wall drag and a force-driven
+  channel has a **flat** velocity profile instead of the parabolic
+  Poiseuille/Chapman profile. `sph_poiseuille_no_slip_gap` asserts the
+  flat profile. Boundary particles (`boundary_particles`) add pressure
+  (normal) coupling only — still no tangential friction.
+- **The Martin & Moyce √t surge-front law is not reproduced.**
+  `sph_dam_break_surge_front` asserts the front advances and stays
+  contained, not the quantitative √t position law.
+- **Hydrostatic pressure overshoots at the floor.** The penalty floor
+  compresses the bottom particle layer, so the measured `p_bottom` can
+  exceed `ρ g h` (measured ~2.3× in the 2D column).
+  `sph_hydrostatic_pressure` asserts monotone depth and
+  order-of-magnitude support.
+- **Penalty boundaries tunnel at high speed** (no CCD, as elsewhere): a
+  violent dam break can eject a fast particle through a thin wall. The
+  benchmark uses thick walls.
+
+
 
