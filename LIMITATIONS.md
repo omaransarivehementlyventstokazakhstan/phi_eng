@@ -90,7 +90,11 @@ mass (verified), but its split criterion keys on low density, which also
 describes free surfaces — so it is stable for calm/settled scenes and
 should be avoided in violent dam-break-style transients where surface
 splitting can over-refine and destabilize; merging is a simple
-closest-pair combine, not a full resampling scheme. Fluid state
+closest-pair combine, not a full resampling scheme. Boundary particles
+(`boundary_particles`) add pressure-based walls (two-pass WCSPH) that
+reduce tunneling, but they are regenerated each substep (not persisted)
+and the penalty boundary still runs underneath, so extreme-speed
+tunneling is mitigated rather than eliminated. Fluid state
 persists through snapshots (config block extended at schema v5, both
 languages) and crosses the FFI bridge, and C# carries fluid state for
 round-trips — but C# does not step fluids yet, so managed worlds with

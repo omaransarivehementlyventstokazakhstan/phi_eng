@@ -65,6 +65,12 @@ This project follows [Semantic Versioning](https://semver.org/) and
     over-dense close pairs merge (mass/momentum combined), conserving
     total mass, bounded by the particle cap and a minimum child mass.
     Off by default; best suited to calm/settled scenes.
+  - **Boundary particles** (`boundary_particles`): static bodies are
+    sampled into fixed ghost particles (circle/box/polygon in 2D;
+    sphere/box/capsule/hull in 3D) that exert SPH pressure on the
+    fluid via a two-pass density/pressure scheme — a pressure-based wall
+    that reduces tunneling vs the penalty boundary alone. Regenerated
+    every substep (statics don't move); never persisted.
   - Preserved through snapshot schema v5 (fluid config block extended,
     version-gated); the schema switches to v5 when any fluid-expansion
     field is non-default.

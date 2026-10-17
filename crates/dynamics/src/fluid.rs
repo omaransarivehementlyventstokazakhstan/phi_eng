@@ -18,6 +18,7 @@
 //! bodies may sleep exactly like resting contacts.
 
 use super::body::{RigidBody2, Shape2};
+use crate::fxhash::FxHashMap;
 use crate::noise::{curl_2, fbm_2};
 use glam::Vec2;
 use phieng_math::{EPS, EPS_SQ};
@@ -94,6 +95,12 @@ pub struct FluidConfig2 {
     /// Merge a particle into a close neighbor when both exceed
     /// `merge_density_ratio * rest_density`. Finite, `> 1`.
     pub merge_density_ratio: f32,
+    /// Boundary particles (default off): static bodies are sampled into
+    /// fixed ghost particles that exert SPH pressure on the fluid, giving
+    /// pressure-based walls that reduce tunneling vs the penalty boundary
+    /// alone. Regenerated every substep; never persisted (statics don't
+    /// move, so the set is deterministic from the current bodies).
+    pub boundary_particles: bool,
     /// XSPH smoothing factor in `[0, 1]` (velocity diffusion strength).
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area
@@ -125,6 +132,7 @@ impl Default for FluidConfig2 {
             adaptive_resolution: false,
             split_density_ratio: 0.5,
             merge_density_ratio: 1.6,
+            boundary_particles: false,
             viscosity: 0.3,
             drag: 4.0,
             max_velocity: 30.0,
@@ -153,6 +161,11 @@ pub struct FluidState2 {
     sample_scratch: Vec<(Vec2, Vec2, f32)>,
     /// Steps since vacated grid cells were compacted.
     clears_since_compact: u32,
+    /// Boundary (ghost) particles for pressure coupling. Regenerated each
+    /// substep from the current static bodies; never persisted.
+    boundary: Vec<Particle2>,
+    /// Cell -> boundary indices (rebuilt with `boundary`).
+    boundary_grid: FxHashMap<(i32, i32), Vec<usize>>,
 }
 
 impl FluidState2 {
@@ -166,6 +179,8 @@ impl FluidState2 {
             poly_scratch: Vec::new(),
             sample_scratch: Vec::new(),
             clears_since_compact: 0,
+            boundary: Vec::new(),
+            boundary_grid: FxHashMap::default(),
         }
     }
 
@@ -528,6 +543,162 @@ impl FluidState2 {
         }
     }
 
+    /// Regenerate boundary (ghost) particles from the current static bodies.
+    /// Deterministic surface sampling at `spacing`; each ghost carries the
+    /// fluid's rest density and unit mass so it contributes to the fluid
+    /// density and exerts SPH pressure. Statics never move, so the set is
+    /// fully determined by the body list.
+    fn refresh_boundaries(&mut self, bodies: &[RigidBody2], spacing: f32) {
+        self.boundary.clear();
+        let rest = self.config.rest_density;
+        let mass = self.config.particle_mass.max(EPS);
+        let spacing = spacing.max(EPS);
+        for body in bodies.iter().filter(|b| b.is_static) {
+            match &body.shape {
+                Some(Shape2::Circle { radius }) => {
+                    let n = ((2.0 * std::f32::consts::PI * radius) / spacing).ceil() as usize;
+                    let n = n.max(1);
+                    for k in 0..n {
+                        let a = 2.0 * std::f32::consts::PI * k as f32 / n as f32;
+                        let local = Vec2::new(a.cos(), a.sin()) * radius;
+                        self.boundary.push(Particle2 {
+                            position: body.transform.transform_point(local),
+                            velocity: Vec2::ZERO,
+                            density: rest,
+                            pressure: 0.0,
+                            mass,
+                        });
+                    }
+                }
+                Some(Shape2::Box { half_extents }) => {
+                    let he = *half_extents;
+                    let edges = [
+                        (Vec2::new(0.0, -1.0), Vec2::new(-he.x, -he.y), Vec2::Y),
+                        (Vec2::new(0.0, 1.0), Vec2::new(-he.x, he.y), Vec2::Y),
+                        (Vec2::new(-1.0, 0.0), Vec2::new(-he.x, -he.y), Vec2::X),
+                        (Vec2::new(1.0, 0.0), Vec2::new(he.x, -he.y), Vec2::X),
+                    ];
+                    for (_normal, origin, tangent) in edges {
+                        let extent = if tangent == Vec2::X { he.x } else { he.y };
+                        let n = ((2.0 * extent) / spacing).ceil() as usize;
+                        let n = n.max(1);
+                        for k in 0..n {
+                            let t = (k as f32 + 0.5) / n as f32;
+                            let local = origin + tangent * (2.0 * extent * t);
+                            self.boundary.push(Particle2 {
+                                position: body.transform.transform_point(local),
+                                velocity: Vec2::ZERO,
+                                density: rest,
+                                pressure: 0.0,
+                                mass,
+                            });
+                        }
+                    }
+                }
+                Some(Shape2::Polygon { vertices }) => {
+                    for e in 0..vertices.len() {
+                        let a = vertices[e];
+                        let b = vertices[(e + 1) % vertices.len()];
+                        let edge = b - a;
+                        let len = edge.length();
+                        if len < EPS {
+                            continue;
+                        }
+                        let n = (len / spacing).ceil() as usize;
+                        let n = n.max(1);
+                        for k in 0..n {
+                            let t = (k as f32 + 0.5) / n as f32;
+                            let local = a + edge * t;
+                            self.boundary.push(Particle2 {
+                                position: body.transform.transform_point(local),
+                                velocity: Vec2::ZERO,
+                                density: rest,
+                                pressure: 0.0,
+                                mass,
+                            });
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Rebuild the boundary neighbor grid.
+    fn rebuild_boundary_grid(&mut self, h: f32) {
+        self.boundary_grid.clear();
+        for (i, p) in self.boundary.iter().enumerate() {
+            if !p.position.x.is_finite() || !p.position.y.is_finite() {
+                continue;
+            }
+            let key = (
+                (p.position.x / h).floor() as i32,
+                (p.position.y / h).floor() as i32,
+            );
+            self.boundary_grid.entry(key).or_default().push(i);
+        }
+    }
+
+    /// Boundary indices within the support radius of a world-space point
+    /// (used to apply ghost pressure to a fluid particle).
+    fn boundary_near(&self, point: Vec2, out: &mut Vec<usize>) {
+        out.clear();
+        let h = self.config.smoothing_length;
+        let cx = (point.x / h).floor() as i32;
+        let cy = (point.y / h).floor() as i32;
+        for oy in -1..=1 {
+            for ox in -1..=1 {
+                if let Some(ids) = self.boundary_grid.get(&(cx + ox, cy + oy)) {
+                    for &j in ids.iter() {
+                        let d2 = (self.boundary[j].position - point).length_squared();
+                        if d2 < h * h {
+                            out.push(j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fluid-particle indices within the support radius of a world-space
+    /// point (used to compute a boundary particle's density from fluid).
+    fn fluid_near(&self, point: Vec2, out: &mut Vec<usize>) {
+        out.clear();
+        let h = self.config.smoothing_length;
+        let cx = (point.x / h).floor() as i32;
+        let cy = (point.y / h).floor() as i32;
+        for oy in -1..=1 {
+            for ox in -1..=1 {
+                if let Some(ids) = self.grid.get(&(cx + ox, cy + oy)) {
+                    for &j in ids.iter() {
+                        let d2 = (self.particles[j].position - point).length_squared();
+                        if d2 < h * h {
+                            out.push(j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Boundary density/pressure from nearby fluid particles (two-pass
+    /// WCSPH): a ghost repels only when fluid is packed against it.
+    fn compute_boundary_density_pressure(&mut self, h: f32, nbrs: &mut Vec<usize>) {
+        let cfg = self.config;
+        for bi in 0..self.boundary.len() {
+            let bp = self.boundary[bi].position;
+            self.fluid_near(bp, nbrs);
+            let mut rho = 0.0f32;
+            for &j in nbrs.iter() {
+                let r2 = (self.particles[j].position - bp).length_squared();
+                rho += self.particles[j].mass * Self::poly6(r2, h);
+            }
+            self.boundary[bi].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
+            self.boundary[bi].pressure =
+                Self::pressure(rho, cfg.rest_density, cfg.stiffness, cfg.gamma);
+        }
+    }
+
     /// Adaptive-resolution pass (opt-in via `adaptive_resolution`): merge
     /// over-dense close pairs (mass/momentum conserved), then split
     /// under-dense particles into two half-mass children. Bounded by the
@@ -621,6 +792,7 @@ impl FluidState2 {
 
         // 1+2. Densities (poly6 sum) and pressures (EOS, tension-free).
         let mut nbrs: Vec<usize> = Vec::new();
+        let mut bnbrs: Vec<usize> = Vec::new();
         self.compute_density_pressure(h, &mut nbrs);
 
         // 2b. Adaptive resolution (opt-in): resample, rebuild the grid,
@@ -630,6 +802,15 @@ impl FluidState2 {
             self.resample(h);
             self.rebuild_grid();
             self.compute_density_pressure(h, &mut nbrs);
+        }
+
+        // 2c. Boundary particles (opt-in): regenerate ghosts from static
+        // bodies, build their grid, and compute their density/pressure from
+        // the fluid (two-pass WCSPH).
+        if cfg.boundary_particles {
+            self.refresh_boundaries(bodies, h * 0.5);
+            self.rebuild_boundary_grid(h);
+            self.compute_boundary_density_pressure(h, &mut nbrs);
         }
 
         // 3. Pressure forces (symmetric spiky form) into scratch, plus
@@ -673,6 +854,19 @@ impl FluidState2 {
                         f -= (delta / dist)
                             * (cfg.surface_tension * self.particles[i].mass * pj.mass * coh);
                     }
+                }
+            }
+            // Boundary pressure force (ghost particles): a ghost repels only
+            // when fluid is packed against it (its pressure is fluid-derived).
+            if cfg.boundary_particles {
+                self.boundary_near(pi, &mut bnbrs);
+                for &bk in bnbrs.iter() {
+                    let bp = self.boundary[bk];
+                    let delta = pi - bp.position;
+                    let dist = delta.length();
+                    let grad = Self::spiky_grad(delta, dist, h);
+                    let rho_b = bp.density.max(EPS);
+                    f -= grad * (bp.mass * (p_i / (rho_i * rho_i) + bp.pressure / (rho_b * rho_b)));
                 }
             }
             self.forces[i] = f;
@@ -1234,5 +1428,63 @@ mod tests {
         );
         let after: f32 = world.fluid.particles.iter().map(|p| p.mass).sum();
         assert!((after - before).abs() < 1e-6, "split must conserve mass");
+    }
+
+    #[test]
+    fn test_fluid_boundary_particles_present() {
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        lattice(&mut world, 0.0, 0.0, 6, 8, 0.25);
+        world.fluid.config.boundary_particles = true;
+        world.step(1.0 / 60.0);
+        assert!(
+            !world.fluid.boundary.is_empty(),
+            "static bodies should generate boundary particles"
+        );
+        // Deterministic: two identical worlds generate identical ghosts.
+        let mut other = crate::World2::new();
+        tank(&mut other);
+        lattice(&mut other, 0.0, 0.0, 6, 8, 0.25);
+        other.fluid.config.boundary_particles = true;
+        other.step(1.0 / 60.0);
+        assert_eq!(
+            world.fluid.boundary.len(),
+            other.fluid.boundary.len(),
+            "boundary count differs: {} vs {}",
+            world.fluid.boundary.len(),
+            other.fluid.boundary.len()
+        );
+        for (a, b) in world.fluid.boundary.iter().zip(other.fluid.boundary.iter()) {
+            assert_eq!(a.position.x.to_bits(), b.position.x.to_bits());
+            assert_eq!(a.position.y.to_bits(), b.position.y.to_bits());
+        }
+    }
+
+    #[test]
+    fn test_fluid_boundary_particles_contained() {
+        // Dam tank with boundary pressure: stays finite, contained, calm.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        lattice(&mut world, 0.0, 0.0, 8, 12, 0.25);
+        world.fluid.config.boundary_particles = true;
+        let mut peak = 0.0f32;
+        for frame in 0..300 {
+            world.step(1.0 / 60.0);
+            for p in world.fluid.particles.iter() {
+                peak = peak.max(p.velocity.length());
+            }
+            if frame % 100 == 0 {
+                finite_fluid(&world, "boundary");
+            }
+        }
+        finite_fluid(&world, "boundary final");
+        for p in world.fluid.particles.iter() {
+            assert!(
+                p.position.x > -1.0 && p.position.x < 5.0 && p.position.y > -0.6,
+                "boundary particle escaped: p={}",
+                p.position
+            );
+        }
+        assert!(peak < 30.0, "boundary run blew up, peak={peak}");
     }
 }

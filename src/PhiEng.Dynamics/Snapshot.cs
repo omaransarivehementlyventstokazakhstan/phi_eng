@@ -541,6 +541,7 @@ public static class Snapshot
         [JsonPropertyName("adaptive_resolution")] public bool AdaptiveResolution { get; set; }
         [JsonPropertyName("split_density_ratio")] public float SplitDensityRatio { get; set; } = 0.5f;
         [JsonPropertyName("merge_density_ratio")] public float MergeDensityRatio { get; set; } = 1.6f;
+        [JsonPropertyName("boundary_particles")] public bool BoundaryParticles { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -575,6 +576,7 @@ public static class Snapshot
         [JsonPropertyName("adaptive_resolution")] public bool AdaptiveResolution { get; set; }
         [JsonPropertyName("split_density_ratio")] public float SplitDensityRatio { get; set; } = 0.5f;
         [JsonPropertyName("merge_density_ratio")] public float MergeDensityRatio { get; set; } = 1.6f;
+        [JsonPropertyName("boundary_particles")] public bool BoundaryParticles { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -623,7 +625,8 @@ public static class Snapshot
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
                 || w.Fluid.Config.SurfaceTension != 0.0f
                 || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
-                || w.Fluid.Config.AdaptiveResolution;
+                || w.Fluid.Config.AdaptiveResolution
+                || w.Fluid.Config.BoundaryParticles;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
@@ -811,6 +814,7 @@ public static class Snapshot
                     AdaptiveResolution = w.Fluid.Config.AdaptiveResolution,
                     SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
                     MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
+                    BoundaryParticles = w.Fluid.Config.BoundaryParticles,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -885,7 +889,8 @@ public static class Snapshot
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
                 || w.Fluid.Config.SurfaceTension != 0.0f
                 || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
-                || w.Fluid.Config.AdaptiveResolution;
+                || w.Fluid.Config.AdaptiveResolution
+                || w.Fluid.Config.BoundaryParticles;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
@@ -1128,6 +1133,7 @@ public static class Snapshot
                     AdaptiveResolution = w.Fluid.Config.AdaptiveResolution,
                     SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
                     MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
+                    BoundaryParticles = w.Fluid.Config.BoundaryParticles,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -1495,6 +1501,7 @@ public static class Snapshot
             AdaptiveResolution = cfg.AdaptiveResolution,
             SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
             MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
+            BoundaryParticles = cfg.BoundaryParticles,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1726,6 +1733,7 @@ public static class Snapshot
             AdaptiveResolution = cfg.AdaptiveResolution,
             SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
             MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
+            BoundaryParticles = cfg.BoundaryParticles,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -2046,6 +2054,7 @@ public static class Snapshot
             w.Write(c.AdaptiveResolution);
             w.Write(c.SplitDensityRatio);
             w.Write(c.MergeDensityRatio);
+            w.Write(c.BoundaryParticles);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2073,6 +2082,7 @@ public static class Snapshot
             c.AdaptiveResolution = r.ReadBoolean();
             c.SplitDensityRatio = r.ReadSingle();
             c.MergeDensityRatio = r.ReadSingle();
+            c.BoundaryParticles = r.ReadBoolean();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2128,6 +2138,7 @@ public static class Snapshot
             w.Write(c.AdaptiveResolution);
             w.Write(c.SplitDensityRatio);
             w.Write(c.MergeDensityRatio);
+            w.Write(c.BoundaryParticles);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2155,6 +2166,7 @@ public static class Snapshot
             c.AdaptiveResolution = r.ReadBoolean();
             c.SplitDensityRatio = r.ReadSingle();
             c.MergeDensityRatio = r.ReadSingle();
+            c.BoundaryParticles = r.ReadBoolean();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();

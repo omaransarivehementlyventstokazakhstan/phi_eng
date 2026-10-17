@@ -239,6 +239,7 @@ public class SnapshotTests
         world.Fluid.Config.AdaptiveResolution = true;
         world.Fluid.Config.SplitDensityRatio = 0.4f;
         world.Fluid.Config.MergeDensityRatio = 1.8f;
+        world.Fluid.Config.BoundaryParticles = true;
         foreach (var mode in new[] { SnapshotLoadMode.Exact, SnapshotLoadMode.Fresh })
         {
             var rj = Snapshot.World2FromJson(
@@ -265,6 +266,7 @@ public class SnapshotTests
         Assert.Equal(a.Fluid.Config.AdaptiveResolution, b.Fluid.Config.AdaptiveResolution);
         Assert.Equal(a.Fluid.Config.SplitDensityRatio, b.Fluid.Config.SplitDensityRatio);
         Assert.Equal(a.Fluid.Config.MergeDensityRatio, b.Fluid.Config.MergeDensityRatio);
+        Assert.Equal(a.Fluid.Config.BoundaryParticles, b.Fluid.Config.BoundaryParticles);
         Assert.Equal(a.Fluid.Config.Viscosity, b.Fluid.Config.Viscosity);
         Assert.Equal(a.Fluid.Config.Drag, b.Fluid.Config.Drag);
         Assert.Equal(a.Fluid.Config.MaxVelocity, b.Fluid.Config.MaxVelocity);

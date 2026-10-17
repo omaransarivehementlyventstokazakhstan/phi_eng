@@ -374,6 +374,9 @@ struct FluidConfig2Dto {
         skip_serializing_if = "is_one_point_six"
     )]
     merge_density_ratio: f32,
+    /// Boundary-particle flag (schema v5; default false, elided).
+    #[serde(default, skip_serializing_if = "is_false")]
+    boundary_particles: bool,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -421,6 +424,8 @@ struct FluidConfig3Dto {
         skip_serializing_if = "is_one_point_six"
     )]
     merge_density_ratio: f32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    boundary_particles: bool,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -450,6 +455,7 @@ impl Default for FluidConfig2Dto {
             adaptive_resolution: c.adaptive_resolution,
             split_density_ratio: c.split_density_ratio,
             merge_density_ratio: c.merge_density_ratio,
+            boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -475,6 +481,7 @@ impl Default for FluidConfig3Dto {
             adaptive_resolution: c.adaptive_resolution,
             split_density_ratio: c.split_density_ratio,
             merge_density_ratio: c.merge_density_ratio,
+            boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -1035,6 +1042,7 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
             adaptive_resolution: c.adaptive_resolution,
             split_density_ratio: c.split_density_ratio,
             merge_density_ratio: c.merge_density_ratio,
+            boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -1069,6 +1077,7 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
             adaptive_resolution: c.adaptive_resolution,
             split_density_ratio: c.split_density_ratio,
             merge_density_ratio: c.merge_density_ratio,
+            boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -1977,6 +1986,7 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
         adaptive_resolution: c.adaptive_resolution,
         split_density_ratio: c.split_density_ratio,
         merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -2037,6 +2047,7 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
         adaptive_resolution: c.adaptive_resolution,
         split_density_ratio: c.split_density_ratio,
         merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -3417,6 +3428,7 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
         write_u8(out, c.adaptive_resolution as u8);
         write_f32(out, c.split_density_ratio);
         write_f32(out, c.merge_density_ratio);
+        write_u8(out, c.boundary_particles as u8);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3439,6 +3451,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         adaptive_resolution,
         split_density_ratio,
         merge_density_ratio,
+        boundary_particles,
     ) = if version >= SNAPSHOT_SCHEMA_VERSION {
         (
             r.read_f32()?,
@@ -3449,6 +3462,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             r.read_u8()? != 0,
             r.read_f32()?,
             r.read_f32()?,
+            r.read_u8()? != 0,
         )
     } else {
         (
@@ -3460,6 +3474,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             false,
             default_split_ratio(),
             default_merge_ratio(),
+            false,
         )
     };
     Ok(FluidConfig2Dto {
@@ -3475,6 +3490,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         adaptive_resolution,
         split_density_ratio,
         merge_density_ratio,
+        boundary_particles,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3544,6 +3560,7 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
         write_u8(out, c.adaptive_resolution as u8);
         write_f32(out, c.split_density_ratio);
         write_f32(out, c.merge_density_ratio);
+        write_u8(out, c.boundary_particles as u8);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3566,6 +3583,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         adaptive_resolution,
         split_density_ratio,
         merge_density_ratio,
+        boundary_particles,
     ) = if version >= SNAPSHOT_SCHEMA_VERSION {
         (
             r.read_f32()?,
@@ -3576,6 +3594,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             r.read_u8()? != 0,
             r.read_f32()?,
             r.read_f32()?,
+            r.read_u8()? != 0,
         )
     } else {
         (
@@ -3587,6 +3606,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             false,
             default_split_ratio(),
             default_merge_ratio(),
+            false,
         )
     };
     Ok(FluidConfig3Dto {
@@ -3602,6 +3622,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         adaptive_resolution,
         split_density_ratio,
         merge_density_ratio,
+        boundary_particles,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,

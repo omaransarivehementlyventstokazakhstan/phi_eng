@@ -47,6 +47,8 @@ public class FluidConfig2
     public float SplitDensityRatio { get; set; } = 0.5f;
     /// <summary>Merge density ratio (default 1.6).</summary>
     public float MergeDensityRatio { get; set; } = 1.6f;
+    /// <summary>Boundary particles (static bodies sampled into fixed ghosts).</summary>
+    public bool BoundaryParticles { get; set; }
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -131,6 +133,8 @@ public class FluidConfig3
     public float SplitDensityRatio { get; set; } = 0.5f;
     /// <summary>Merge density ratio (default 1.6).</summary>
     public float MergeDensityRatio { get; set; } = 1.6f;
+    /// <summary>Boundary particles (static bodies sampled into fixed ghosts).</summary>
+    public bool BoundaryParticles { get; set; }
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
