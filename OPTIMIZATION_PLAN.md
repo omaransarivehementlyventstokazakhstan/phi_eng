@@ -10,10 +10,18 @@ Current baseline: ~2ms/step for 1500 bodies (2D) on desktop. Target: <16ms/step 
 
 ## Priority 1: Zero-Cost / High-Impact Optimizations (Week 1-2)
 
-### 1.1 Object Pooling for Zero Allocations
+### 1.1 Object Pooling for Zero Allocations — ✅ DONE (0.4.x)
 - **Target**: Zero allocations/step after warmup
 - **Areas**: Contact constraints, broadphase pairs, narrowphase scratch buffers, joint arrays
 - **Implementation**: Pre-allocated `Vec` pools with `clear()` reuse, `Pool<T>` wrapper
+- **Shipped**: the broadphase grid (`SpatialHash2`) and the contact cache
+  (`World2/3::contact_cache`) now **recycle vacated per-cell / per-key
+  `Vec` buffers through internal pools** instead of freeing them. Measured:
+  dynamic pile 1500 bodies **~467 → 0.8 allocs/step** (2D), **14 → 0.0**
+  (3D); resting stack 0.00. Memory-only; `contact_cache.len()` stays
+  exact and every determinism hash is unchanged.
+- **Remaining**: Barnes-Hut tree arena + per-leaf index buffers (still
+  allocate per kick); parallel-island per-step buffers.
 
 ### 1.2 Configurable Solver Quality Tiers
 ```rust

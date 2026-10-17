@@ -7,6 +7,17 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Changed
+- **Near-zero-allocation steady state**: the broadphase grid
+  (`SpatialHash2`) and the contact cache (`World2/3::contact_cache`) now
+  recycle vacated per-cell / per-key `Vec` buffers through internal
+  pools instead of returning them to the allocator. Measured on the
+  1500-body dynamic pile: **~467 → 0.8 allocs/step** (2D), **14 → 0.0**
+  (3D), resting stack 0.00. Purely a memory optimization — `contact_cache
+  .len()` still counts live pairs exactly, the public API is unchanged,
+  and every determinism hash (pile 2D, islands, pile 3D) is
+  bit-identical.
+
 ### Added
 - **Ambient force fields (Rust + managed C#)**: a new
   `phieng_dynamics::ambient` module with three independently-toggled

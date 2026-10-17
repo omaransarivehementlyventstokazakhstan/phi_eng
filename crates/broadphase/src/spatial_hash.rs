@@ -26,6 +26,10 @@ pub struct SpatialHash2 {
     count: usize,
     /// Steps since vacated cells were compacted (see [`SpatialHash2::clear`]).
     clears_since_compact: u32,
+    /// Recycled cell buffers. Vacated cells return their `Vec` here instead
+    /// of freeing it; new cells draw from it, so re-appearing cells never
+    /// re-allocate. Internal (the public API is unchanged).
+    pool: Vec<Vec<usize>>,
 }
 
 impl SpatialHash2 {
@@ -42,6 +46,7 @@ impl SpatialHash2 {
             grid: HashMap::new(),
             count: 0,
             clears_since_compact: 0,
+            pool: Vec::new(),
         }
     }
 
@@ -61,7 +66,18 @@ impl SpatialHash2 {
         self.clears_since_compact += 1;
         if self.clears_since_compact >= 256 {
             self.clears_since_compact = 0;
-            self.grid.retain(|_, ids| !ids.is_empty());
+            // Drop vacated cells but recycle their buffers into the pool
+            // (not the allocator), so re-appearing cells never re-allocate.
+            let grid = &mut self.grid;
+            let pool = &mut self.pool;
+            grid.retain(|_, ids| {
+                if ids.is_empty() {
+                    pool.push(std::mem::take(ids));
+                    false
+                } else {
+                    true
+                }
+            });
         }
     }
 
@@ -86,7 +102,10 @@ impl SpatialHash2 {
         for cx in cell_min_x..=cell_max_x {
             for cy in cell_min_y..=cell_max_y {
                 let key = CellKey::new(cx, cy);
-                self.grid.entry(key).or_default().push(body_id);
+                self.grid
+                    .entry(key)
+                    .or_insert_with(|| self.pool.pop().unwrap_or_default())
+                    .push(body_id);
             }
         }
     }

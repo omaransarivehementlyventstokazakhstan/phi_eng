@@ -108,6 +108,12 @@ pub struct World2 {
     /// Fx-hashed: keys are internal body ids (never attacker-controlled),
     /// so SipHash's DOS resistance is pure overhead here.
     pub contact_cache: FxHashMap<(usize, usize), Vec<CachedContact>>,
+    /// Recycled per-key `CachedContact` buffers. Vacated contact-cache
+    /// entries return their `Vec` here instead of freeing it; new keys
+    /// draw from it, so the contact cache reaches zero steady-state
+    /// allocation even as pairs flicker. Internal (the public cache type
+    /// is unchanged and `contact_cache.len()` still counts live pairs).
+    contact_cache_pool: Vec<Vec<CachedContact>>,
     /// Fixed timestep
     pub dt: f32,
     /// Velocity threshold for sleeping
@@ -143,6 +149,7 @@ impl World2 {
             time: 0.0,
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
+            contact_cache_pool: Vec::new(),
             dt: 1.0 / 60.0,
             linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
             angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
@@ -524,14 +531,17 @@ impl World2 {
         }
 
         // 4b. Write back accumulated impulses for next frame's warm start.
-        for list in self.contact_cache.values_mut() {
+        // Disjoint field borrows: the cache map and its buffer pool.
+        let cache = &mut self.contact_cache;
+        let pool = &mut self.contact_cache_pool;
+        for list in cache.values_mut() {
             list.clear();
         }
         for constraint in &self.scratch.constraints {
             let key = (constraint.body_a, constraint.body_b);
-            self.contact_cache
+            cache
                 .entry(key)
-                .or_default()
+                .or_insert_with(|| pool.pop().unwrap_or_default())
                 .push(CachedContact {
                     point: constraint.point,
                     normal: constraint.normal,
@@ -539,7 +549,21 @@ impl World2 {
                     tangent_impulse: constraint.tangent_impulse,
                 });
         }
-        self.contact_cache.retain(|_, list| !list.is_empty());
+        // Drop vacated entries every frame (so `contact_cache.len()` keeps
+        // its exact meaning — number of live pairs) but RECYCLE their
+        // buffers into the pool instead of freeing them. New keys draw
+        // from the pool, so the cache reaches zero steady-state allocation
+        // even as pairs flicker. Memory-only; trajectories bit-identical.
+        let cache = &mut self.contact_cache;
+        let pool = &mut self.contact_cache_pool;
+        cache.retain(|_, list| {
+            if list.is_empty() {
+                pool.push(std::mem::take(list));
+                false
+            } else {
+                true
+            }
+        });
 
         if verlet {
             // 5v. Verlet drift (positions only — no linear damping) plus
@@ -1057,6 +1081,8 @@ pub struct World3 {
     pub next_joint_id: usize,
     /// Contact cache for warm starting (Fx-hashed, see [`World2::contact_cache`]).
     pub contact_cache: FxHashMap<(usize, usize), Vec<CachedContact3D>>,
+    /// See [`World2::contact_cache_pool`].
+    contact_cache_pool: Vec<Vec<CachedContact3D>>,
     /// SPH fluid state (see [`crate::fluid3`]). Empty by default, in
     /// which case the fluid phase is a no-op.
     pub fluid: super::fluid3::FluidState3,
@@ -1098,6 +1124,7 @@ impl World3 {
             linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
             angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
             contact_cache: FxHashMap::default(),
+            contact_cache_pool: Vec::new(),
             joints: Vec::new(),
             next_joint_id: 0,
             fluid: super::fluid3::FluidState3::new(),
@@ -1337,16 +1364,20 @@ impl World3 {
         }
 
         // 4b. Write back accumulated impulses for next frame's warm
-        // start. Entry vectors are cleared in place and reused; stale
-        // pairs are evicted. No allocations in the steady state.
-        for list in self.contact_cache.values_mut() {
+        // start. Entry vectors are cleared in place and reused; vacated
+        // entries are dropped (keeping `contact_cache.len()` exact) but
+        // their buffers are recycled via the pool. Zero steady-state
+        // allocation; trajectories bit-identical.
+        let cache = &mut self.contact_cache;
+        let pool = &mut self.contact_cache_pool;
+        for list in cache.values_mut() {
             list.clear();
         }
         for constraint in &constraints {
             let key = (constraint.body_a, constraint.body_b);
-            self.contact_cache
+            cache
                 .entry(key)
-                .or_default()
+                .or_insert_with(|| pool.pop().unwrap_or_default())
                 .push(CachedContact3D {
                     point: constraint.point,
                     normal: constraint.normal,
@@ -1355,7 +1386,14 @@ impl World3 {
                     tangent2_impulse: constraint.tangent2_impulse,
                 });
         }
-        self.contact_cache.retain(|_, list| !list.is_empty());
+        cache.retain(|_, list| {
+            if list.is_empty() {
+                pool.push(std::mem::take(list));
+                false
+            } else {
+                true
+            }
+        });
 
         if verlet {
             // 5v. Verlet drift (positions only — no linear damping) plus

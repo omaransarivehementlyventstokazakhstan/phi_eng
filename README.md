@@ -315,17 +315,21 @@ always read time *with* those counts, and with the solver sweep
 (`iters=1` vs `iters=8`), because cost is per-contact per-iteration:
 
 - **Empty world:** `0.00` allocs/step. **Resting stack, converged
-  (early exit):** `~0.15` allocs/step, `~5` B/step — the steady state
+  (early exit):** `0.00` allocs/step, `0` B/step — the steady state
   performs no per-frame allocation (broadphase pair buffers, contact
   cache entries, and EPA working sets are all reused caller-owned
   scratch). This is the number that matters for low-spec hardware.
-- **Dynamic pile (1500 bodies, ~1260 pairs, ~1400 contacts):** allocation
-  churn is dominated by contact-cache entry birth/death as fringe pairs
-  flicker, and is *trajectory-dependent* (pair order changes alter float
-  summation order, which alters the pile's evolution — both deterministic,
-  both correct). Compare builds by trajectory hash first; only compare
-  churn across identical hashes. Do not tune the allocator against a
-  single pile history.
+- **Dynamic pile (1500 bodies, ~1650 pairs, ~1850 contacts):** the
+  broadphase grid and the contact cache both **recycle their per-key /
+  per-cell buffers through internal pools** — vacated entries return
+  their `Vec` to a pool instead of the allocator, and new entries draw
+  from it. The pile now runs at **~0.8 allocs/step** (was ~467: the
+  churn was cell/entry birth-death, now effectively zero). Pooling is
+  memory-only and keeps `contact_cache.len()` exact, so trajectories are
+  bit-identical. Residual churn is *trajectory-dependent* (pair order
+  changes float summation order, which changes the pile's evolution —
+  both deterministic, both correct); compare builds by trajectory hash
+  first.
 - C# mirrors the same methodology (GC allocation counters, solver sweep).
 
 ## Baseline matrix 1a (AoS + islands control, 2026-10-14)
@@ -338,14 +342,14 @@ noise-sensitive (±40%); hashes are the determinism gate.
 |---|---|---|---|---|
 | pile 2D, iters=1 | 2.778 ms/step | — | 4.187 ms/step | — |
 | pile 2D, iters=8 | 5.314 ms/step | — | 4.469 ms/step | — |
-| pile 2D pairs/contacts | 1629 / 1785 | — | 1215–1766 / 1362–1959 | — |
-| pile 2D allocs | 466.8/step | — | gc0 ≤ 0.027/step | — |
+| pile 2D pairs/contacts | 1646 / 1846 | — | 1215–1766 / 1362–1959 | — |
+| pile 2D allocs | 0.8/step | — | gc0 ≤ 0.027/step | — |
 | islands (8×5 stacks) | 0.0473 ms/step | 0.0951 (0.50x) | 0.0693 ms/step | 0.1247 (0.56x) |
 | islands identical? | — | **true** | — | **true** |
 | pile 3D (400), iters=1 | 0.413 ms/step | n/a (2D-only) | 0.762 ms/step | n/a |
 | pile 3D (400), iters=8 | 0.723 ms/step | n/a | 1.230 ms/step | n/a |
 | pile 3D pairs/contacts | 592 / 904 | — | 561–579 / 891–913 | — |
-| pile 3D allocs | 14.0/step | — | gc0 0.000/step | — |
+| pile 3D allocs | 0.0/step | — | gc0 0.000/step | — |
 
 Hashes: pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`
 (serial == parallel), pile3d `0x3c0815ebe61347f4`. Hashes moved in
@@ -353,6 +357,8 @@ Hashes: pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
 seed-margin scaling). C# hashes are run-local (worlds keep evolving
 across windows); the gate is serial == parallel within a run.
+The 0.4.x broadphase/contact-cache buffer pools are memory-only and left
+every hash above unchanged.
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead

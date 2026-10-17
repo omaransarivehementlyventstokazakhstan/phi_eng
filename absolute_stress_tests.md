@@ -118,3 +118,27 @@ Result: **7 passed, 0 failed** (total suite wall time ≈ 4.3 s in release).
    tiny (exact 3.9e-4, BH 7.1e-6), so the integrator tracks the
    equilibrium well. BH remains ~4.6× slower than exact at N=1000
    (tree-build overhead dominates at this scale).
+
+## Memory / allocation census (2026-10-17)
+
+`bench_large` (release, counting allocator), dynamic pile 1500 bodies
+(2D) / 400 (3D), medians after settling:
+
+| Scene | allocs/step | bytes/step |
+|---|---|---|
+| pile 2D (before pools) | 466.8 | ~15 000 |
+| **pile 2D (after pools)** | **0.8** | **54** |
+| pile 3D (before) | 14.0 | — |
+| **pile 3D (after)** | **0.0** | **0** |
+| resting stack | 0.00 | 0 |
+| empty world | 0.00 | 0 |
+
+The broadphase grid (`SpatialHash2`) and contact cache
+(`World2/3::contact_cache`) recycle vacated per-cell / per-key `Vec`
+buffers through internal pools; vacated entries are still dropped every
+frame (so `contact_cache.len()` stays exact) and compaction every 256
+steps bounds the cell map for roaming worlds. All determinism hashes
+(pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`, pile3d
+`0x3c0815ebe61347f4`) are **unchanged** — the optimization is
+memory-only.
+

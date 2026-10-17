@@ -148,3 +148,19 @@ in form but tuned for gameplay, not CFD. Specific documented gaps:
   moves coherently; spring and drag divide by mass, giving the proper
   oscillator `ω = sqrt(k/m)` and terminal velocity `g*m/c`.
 
+## Residual per-step allocations
+
+The broadphase grid and contact cache now recycle their buffers through
+internal pools (dynamic pile: ~0.8 allocs/step 2D, 0.0 3D; resting 0.0).
+Two sources still allocate and are documented gaps, not regressions:
+
+- **Barnes-Hut** rebuilds its arena and per-leaf index `Vec`s every kick
+  (the tree is not pooled) — a gravity-scene cost only; the exact N-body
+  path stays allocation-free.
+- **Parallel island solve** allocates its per-step island/constraint
+  scratch (off by default; serial path is allocation-free).
+- The broadphase grid and contact cache still **compact vacated entries
+  every 256 steps** (recycling buffers to their pool) to bound memory for
+  roaming worlds; churn is bounded by the compaction cadence.
+
+
