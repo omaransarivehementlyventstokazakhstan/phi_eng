@@ -56,13 +56,15 @@ cargo build --workspace --release
 cargo test --workspace
 
 # Specific test suites
-cargo test --lib                          # 172 unit/integration tests
+cargo test --lib                          # workspace library unit tests
 cargo test --test brutal                  # 13 stress tests
 cargo test --test parallel_tests          # 4 parallel island tests
 cargo test --test snapshot_tests          # 7 snapshot round-trip tests
 cargo test --test differential_fuzz       # 1000-case EPA-vs-SAT fuzz
 cargo test --test property_tests          # Proptest stateful tests
 cargo test --test robustness              # Robustness suite (S/W/N/D/F/V/J)
+cargo test -p phieng --test gravity       # Gravity physics + v4 round-trips
+cargo test -p phieng --test ambient       # A01-A05 ambient forces (parity)
 cargo test --test integration             # Cross-crate integration
 ```
 
@@ -102,7 +104,7 @@ dotnet build PhiEng.slnx
 # Release build (used by NuGet pack)
 dotnet build PhiEng.slnx -c Release
 
-# Run all C# tests (147 tests)
+# Run all C# tests (177 tests)
 dotnet test tests/PhiEng.Tests/PhiEng.Tests.csproj
 
 # Or full solution

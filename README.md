@@ -101,7 +101,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v3 (v1/v2 files are rejected, never misparsed) |
+| Snapshot schema | v5 (loaders accept v3–v5; v1/v2 are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 
@@ -246,6 +246,24 @@ contact for that frame rather than a guessed depth.
   managed↔native polling to one transition per frame; gravity config,
   scales, and sleep thresholds all cross FFI with the same
   null-tolerant status-code conventions.
+- **Ambient force fields (2D and 3D, both languages):** three
+  independently-toggled fields applied as a pre-solve velocity kick at
+  the same pipeline slot as gravity (and with the same Verlet half-kick
+  contract). A **spring / simple-harmonic-motion** field
+  (`F = -k*(x - anchor) - c*v`, with an optional rest-length leash) gives
+  the textbook damped oscillator (`ω = sqrt(k/m)`, `ζ = c/(2*sqrt(k*m))`);
+  **air resistance** combines linear (Stokes) and quadratic
+  (`0.5*rho*Cd*A*|v_rel|*v_rel`) drag against an ambient wind plus an
+  angular-drag torque, with a per-shape reference area; and
+  **turbulence** is a deterministic seeded value-noise fBm field
+  (optionally divergence-free via curl noise), bounded to the configured
+  amplitude. Per-body `ambient_scale` (1.0 coupled, 0.0 immune, negative
+  is the caller's physics) mirrors `gravity_scale`; `World2/3::time`
+  advances by `dt` each step and drives time-varying turbulence.
+  Same-seed runs are bit-identical per backend; Rust↔C# cross-language
+  bit-equality is *not* claimed (the noise uses different float ops), so
+  parity binds to statistical/energy bounds. Ambient config, the clock,
+  and per-body scales cross FFI; a default config is a no-op.
 - **Runtime validation:** every step guards against NaN/Inf state and
   clamps runaway penetration, coordinates, and velocities
   (`ValidationConfig`: `Default`/`Strict`/`Permissive`; per-step
@@ -253,10 +271,12 @@ contact for that frame rather than a guessed depth.
   when the world holds no issues to correct; joint-less worlds step
   exactly as before (proven by unchanged determinism hashes).
 - **Snapshots:** save/load 2D and 3D worlds as JSON or versioned binary
-  (`snapshot.rs`, schema v4: v2 added convex-mesh shapes, v3 added fluid
-  state, v4 added the gravity block + per-body scales with conditional
-  versions — default-gravity worlds still write byte-identical v3,
-  loaders accept both). `Exact` mode restores warm-start caches, joint impulses,
+  (`snapshot.rs`, schema v5: v2 added convex-mesh shapes, v3 added fluid
+  state, v4 added the gravity block + per-body scales, v5 added the
+  ambient-force block + simulation clock + per-body ambient scales, all
+  with conditional versions — default worlds still write byte-identical
+  v3 and gravity-only worlds byte-identical v4, loaders accept v3–v5).
+  `Exact` mode restores warm-start caches, joint impulses,
   latched angles, and fluid particles for bit-identical continuation;
   `Fresh` mode restores structure + config with cold solver state.
   Mass is recomputed through the validated constructors on load, never
@@ -374,7 +394,7 @@ chase-dominated stalls — not on speculation.
   needle-overlap pair, strict-seed cases).
 - C#: same coverage via xUnit, including its own 1000-case fuzz with an
   independent xorshift implementation (stable across .NET versions).
-- Robustness suite (IDs S/W/N/D/F/V/J/E/P/G, mirrored both languages,
+- Robustness suite (IDs S/W/N/D/F/V/J/E/P/G/A, mirrored both languages,
   parity enforced by `tools/check_test_parity.py`): sleep semantics,
   warm-start/cache eviction, never-guess self-heal proofs, solver
   numerical limits, shape-edge validation, FFI boundary + dispose stress,
@@ -382,7 +402,9 @@ chase-dominated stalls — not on speculation.
   native joint bridge (F31–F33), snapshots (E01–E07) plus the native
   save/load bridge (F34–F36), gravitational physics (G01–G10: orbit,
   determinism, Verlet energy order, softening safety, probes, snapshot
-  round-trip, BH determinism, plus a compact 3D set), parallel island
+  round-trip, BH determinism, plus a compact 3D set), ambient forces
+  (A01–A05: spring/SHM period, drag terminal velocity, turbulence
+  determinism, default no-op, scale immunity), parallel island
   solver (P31–P34, bit-identical to serial; `Solver.Parallel`, off by
   default).
 - Cross-language equivalence (F28): identical fixed scenes through the

@@ -8,7 +8,7 @@ C# is enforced by `tools/check_test_parity.py`
 (ID blocks: S01–S05 sleep, W06–W10 warm start, N11–N15 never-guess,
 S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
-snapshots, P31–P34 parallel islands).
+snapshots, P31–P34 parallel islands, A01–A05 ambient forces).
 
 ## Sleep is partial (S01, S02)
 
@@ -46,7 +46,7 @@ report flipped axes, which is another reason penetration must be
 arrested early rather than resolved late. Conservative advancement is
 planned after 3D joints.
 
-## No raycasts, triggers — joints are 2D-only, snapshots are versioned v3
+## No raycasts, triggers — joints are 2D-only, snapshots are versioned v5
 
 2D joints exist (distance, hinge with angle limits, prismatic with travel
 limits, fixed weld — rigid only, see `crates/dynamics/src/joint.rs` and
@@ -99,3 +99,31 @@ bounded and convergent, never accumulating; box–box and sphere pairs
 never take this path. A skipped frame under Earth gravity at 60 Hz costs
 roughly ~3 mm / ~0.16 m/s on the affected pair, recovered over the
 following frames.
+
+## Ambient forces are a game-y approximation (A03, A05)
+
+The ambient fields (spring/SHM, air resistance, turbulence) are physical
+in form but tuned for gameplay, not CFD. Specific documented gaps:
+
+- **Cross-language noise is not bit-equal.** The seeded turbulence field
+  is bit-identical *within* one backend (A03 pins per-backend
+  determinism), but Rust and C# use different float operation orders, so
+  cross-language trajectories diverge — the same rule as gravity.
+  Parity binds to statistical/energy/amplitude bounds, never exact
+  positions.
+- **Drag reference area is a per-shape proxy** (2D: circle `2r`, box
+  `2*(hx+hy)`, polygon bounding diameter; 3D: sphere `πr²`, box mean
+  face area, capsule side+caps, hull bounding sphere) — an
+  orientation-independent characteristic area, not a projected-area
+  solve. Retune the quadratic coefficient or use per-body
+  `ambient_scale` for exact behavior.
+- **Statics and sleeping bodies are skipped.** Statics never receive
+  ambient force (as with gravity), and `ambient_scale == 0` makes a body
+  immune (A05). Sleeping bodies are not woken by ambient fields (see the
+  sleep limitation above); disable sleep (thresholds to `0.0`) for
+  scenes where turbulence must keep bodies in motion.
+- **Turbulence is an acceleration; spring and drag are forces.**
+  Turbulence is mass-independent (like gravity) so heterogeneous debris
+  moves coherently; spring and drag divide by mass, giving the proper
+  oscillator `ω = sqrt(k/m)` and terminal velocity `g*m/c`.
+
