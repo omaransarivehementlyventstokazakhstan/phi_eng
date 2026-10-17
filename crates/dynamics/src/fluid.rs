@@ -1735,4 +1735,137 @@ mod tests {
             "expected a flat profile (no-slip not modeled): bottom={bottom} middle={middle} top={top}"
         );
     }
+
+    /// Mean pressure of the bottom / top deciles plus the surface/bottom
+    /// heights of a settled column, for the hydrostatic benchmarks.
+    fn hydrostatic_stats(world: &crate::World2) -> (f32, f32, f32) {
+        let mut ys: Vec<f32> = world.fluid.particles.iter().map(|p| p.position.y).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let (n, tenth) = (ys.len(), ys.len() / 10);
+        let bottom = ys[..tenth].iter().sum::<f32>() / tenth as f32;
+        let surface = ys[n - tenth..].iter().sum::<f32>() / tenth as f32;
+        let (lo, hi) = (ys[tenth], ys[n - tenth]);
+        let (mut p_lo, mut n_lo, mut p_hi, mut n_hi) = (0.0f32, 0, 0.0f32, 0);
+        for p in world.fluid.particles.iter() {
+            if p.position.y <= lo {
+                p_lo += p.pressure;
+                n_lo += 1;
+            }
+            if p.position.y >= hi {
+                p_hi += p.pressure;
+                n_hi += 1;
+            }
+        }
+        (p_lo / n_lo as f32, p_hi / n_hi as f32, surface - bottom)
+    }
+
+    #[test]
+    fn sph_hydrostatic_tait() {
+        // Tait EOS (gamma = 7) supports the column with far less
+        // compression, so p_bottom tracks rho g h more tightly than the
+        // linear EOS.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        world.fluid.config.gamma = 7.0;
+        world.fluid.config.stiffness = 15.0;
+        lattice(&mut world, 0.0, 0.0, 18, 12, 0.25);
+        for _ in 0..1200 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "hydrostatic tait");
+        let (p_bottom, p_top, height) = hydrostatic_stats(&world);
+        let expected = world.fluid.config.rest_density * 9.81 * height;
+        assert!(p_bottom > p_top, "Tait pressure must rise with depth");
+        assert!(
+            p_bottom > 0.5 * expected && p_bottom < 2.0 * expected,
+            "Tait hydrostatic p_bottom={p_bottom} expected~{expected}"
+        );
+    }
+
+    #[test]
+    fn sph_dam_break_obstacle() {
+        // Dam break over a raised obstacle: the surge rides over it and
+        // reaches the far side without penetrating the box.
+        let mut world = crate::World2::new();
+        world
+            .add_static_body(
+                Vec2::new(5.0, -0.5),
+                Shape2::Box {
+                    half_extents: Vec2::new(11.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        for x in [-1.0f32, 11.0] {
+            world
+                .add_static_body(
+                    Vec2::new(x, 5.0),
+                    Shape2::Box {
+                        half_extents: Vec2::new(1.5, 6.0),
+                    },
+                )
+                .expect("valid shape");
+        }
+        let obs = Vec2::new(4.0, 0.4);
+        let obs_he = Vec2::new(0.6, 0.9); // top at y = 1.3
+        world
+            .add_static_body(
+                obs,
+                Shape2::Box {
+                    half_extents: obs_he,
+                },
+            )
+            .expect("valid shape");
+        lattice(&mut world, 0.5, 0.0, 8, 12, 0.25);
+        for _ in 0..400 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "obstacle");
+        let far = world
+            .fluid
+            .particles
+            .iter()
+            .filter(|p| p.position.x > 6.0)
+            .count();
+        assert!(far > 5, "flow did not pass the obstacle: far={far}");
+        for p in world.fluid.particles.iter() {
+            let d = p.position - obs;
+            assert!(
+                !(d.x.abs() < obs_he.x - 0.05 && d.y.abs() < obs_he.y - 0.05),
+                "particle penetrated the obstacle: p={}",
+                p.position
+            );
+        }
+    }
+
+    #[test]
+    fn sph_sloshing_settles() {
+        // A sideways kick starts a slosh that must damp out.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        lattice(&mut world, -0.5, -0.5, 12, 6, 0.25);
+        for p in world.fluid.particles.iter_mut() {
+            p.velocity = Vec2::new(2.0, 0.0);
+        }
+        let peak = |w: &crate::World2| {
+            w.fluid
+                .particles
+                .iter()
+                .map(|p| p.velocity.length())
+                .fold(0.0f32, f32::max)
+        };
+        let k0 = peak(&world);
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+        let k1 = peak(&world);
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+        let k2 = peak(&world);
+        finite_fluid(&world, "sloshing");
+        assert!(
+            k1 < k0 && k2 < k1,
+            "slosh must damp: k0={k0} k1={k1} k2={k2}"
+        );
+    }
 }

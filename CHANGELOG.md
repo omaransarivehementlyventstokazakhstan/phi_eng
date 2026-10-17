@@ -8,15 +8,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Tests
-- **SHM & SPH benchmark suite**: 12 canonical, well-known problems added
+- **SHM & SPH benchmark suite**: 18 canonical, well-known problems added
   (Rust-only). SHM: damped-oscillator regimes vs the closed-form
   solution, energy-decay rate, `T = 2π√(m/k)` mass scaling, gravity rest
-  point, and a driven-resonance curve (`ω_r = ω₀√(1-2ζ²)`). SPH:
-  hydrostatic column, Martin–Moyce dam-break surge, droplet cohesion,
-  free-blob energy, and channel flow. Where the method can't hit the
-  textbook result the test pins the gap instead of faking it (no-slip
-  walls, √t front law, penalty-floor hydrostatic overshoot) — documented
-  in `LIMITATIONS.md`, readings in `absolute_stress_tests.md`.
+  point, a driven-resonance curve (`ω_r = ω₀√(1-2ζ²)`), undamped-energy
+  boundedness (no secular drift), critical-damping fastest-settle, and
+  `ω ∝ √k` stiffness scaling. SPH: hydrostatic column (linear + Tait
+  EOS), Martin–Moyce dam-break surge, dam break over an obstacle,
+  droplet cohesion, free-blob energy, sloshing damping, and channel
+  flow. Where the method can't hit the textbook result the test pins the
+  gap instead of faking it (no-slip walls, √t front law, penalty-floor
+  hydrostatic overshoot) — documented in `LIMITATIONS.md`, readings in
+  `absolute_stress_tests.md`.
 
 ### Changed
 - **Near-zero-allocation steady state**: the broadphase grid

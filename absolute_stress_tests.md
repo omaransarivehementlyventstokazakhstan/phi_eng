@@ -146,37 +146,43 @@ memory-only.
 
 Canonical, well-known problems, checked against closed-form solutions
 where the method can hit them and against qualitative trends where it
-cannot (gaps pinned in `LIMITATIONS.md`). 12 new tests; all green
+cannot (gaps pinned in `LIMITATIONS.md`). 18 tests; all green
 (**debug** wall clock, Windows x64, single-threaded: **~0.1 s SHM +
-~25.6 s SPH ≈ 25.7 s total** — dominated by the 3D hydrostatic column).
+~29.4 s SPH ≈ 29.5 s total** — dominated by the 3D hydrostatic column).
 
 ### Simple harmonic motion (damped linear oscillator)
 The spring field is `m x'' + c x' + k x = 0`, so the analytic solution
 is exact:
 
 | Test                               | Check                                                                      | Wall (debug) | Result |
-| ---------------------------------- | -------------------------------------------------------------------------- | --- | ------ |
-| `shm_damped_regimes_analytic`      | under/critical/over vs closed form (<0.03)                                 | 0.01 s | pass   |
-| `shm_energy_decay_rate`            | envelope slope ≈ `-2 ζ ω₀` (log-fit)                                       | <0.01 s | pass   |
-| `shm_period_mass_scaling`          | `T = 2π√(m/k)` across masses                                               | 0.01 s | pass   |
-| `shm_vertical_gravity_equilibrium` | rest point shifts `mg/k`, period fixed                                     | 0.01 s | pass   |
-| `shm_driven_resonance_peak`        | amplitude peaks at `ω₀√(1-2ζ²)`; matches `F₀/(m√((ω₀²-ω_d²)²+(2ζω₀ω_d)²))` | 0.08 s | pass   |
-| `shm3_damped_regimes_analytic`     | 3D mirror (bit-identical to 2D)                                            | <0.01 s | pass   |
+| ---------------------------------- | -------------------------------------------------------------------------- | ------------ | ------ |
+| `shm_damped_regimes_analytic`      | under/critical/over vs closed form (<0.03)                                 | 0.01 s       | pass   |
+| `shm_energy_decay_rate`            | envelope slope ≈ `-2 ζ ω₀` (log-fit)                                       | <0.01 s      | pass   |
+| `shm_period_mass_scaling`          | `T = 2π√(m/k)` across masses                                               | 0.01 s       | pass   |
+| `shm_vertical_gravity_equilibrium` | rest point shifts `mg/k`, period fixed                                     | 0.01 s       | pass   |
+| `shm_driven_resonance_peak`        | amplitude peaks at `ω₀√(1-2ζ²)`; matches `F₀/(m√((ω₀²-ω_d²)²+(2ζω₀ω_d)²))` | 0.08 s       | pass   |
+| `shm_undamped_energy_bounded`      | symplectic Euler: no secular energy drift (band < 5%)                      | <0.01 s      | pass   |
+| `shm_critical_settles_fastest`     | ζ=1 reaches a rest band faster than under/over                             | 0.01 s       | pass   |
+| `shm_stiffness_scaling`            | `ω ∝ √k` (`period(k=160) = period(k=40)/2`)                                | <0.01 s      | pass   |
+| `shm3_damped_regimes_analytic`     | 3D mirror (bit-identical to 2D)                                            | <0.01 s      | pass   |
 
 ### SPH fluid
 
-| Test | Canonical problem | Assertion | Wall (debug) | Result |
-|---|---|---|---|---|
-| `sph_hydrostatic_pressure` | still column, `p ≈ ρgh` | order-of-magnitude + monotone depth | 2.55 s | pass |
-| `sph_dam_break_surge_front` | Martin & Moyce | advances + contained (√t law is a documented gap) | 0.14 s | pass |
-| `sph_droplet_cohesion` | surface tension holds a droplet | bounded radius | 0.41 s | pass |
-| `sph_free_blob_energy_bounded` | no gravity/visc/surface | energy conserved (bounded) | 0.28 s | pass |
-| `sph_poiseuille_no_slip_gap` | force-driven channel | **flat** profile (no-slip not modeled — pinned gap) | 0.89 s | pass |
-| `sph3_hydrostatic_pressure` | 3D column | order-of-magnitude `ρgh` | 21.37 s | pass |
+| Test                           | Canonical problem               | Assertion                                           | Wall (debug) | Result |
+| ------------------------------ | ------------------------------- | --------------------------------------------------- | ------------ | ------ |
+| `sph_hydrostatic_pressure`     | still column, `p ≈ ρgh`         | order-of-magnitude + monotone depth                 | 2.55 s       | pass   |
+| `sph_hydrostatic_tait`         | column, Tait EOS (γ=7)          | tighter `p ≈ ρgh` (0.5–2.0×)                        | 2.83 s       | pass   |
+| `sph_dam_break_surge_front`    | Martin & Moyce                  | advances + contained (√t law is a documented gap)   | 0.14 s       | pass   |
+| `sph_dam_break_obstacle`       | surge over a bump               | flow rides over, no obstacle penetration            | 0.50 s       | pass   |
+| `sph_droplet_cohesion`         | surface tension holds a droplet | bounded radius                                      | 0.41 s       | pass   |
+| `sph_free_blob_energy_bounded` | no gravity/visc/surface         | energy conserved (bounded)                          | 0.28 s       | pass   |
+| `sph_sloshing_settles`         | kicked tank                     | slosh damps monotonically (peak speed decays)       | 0.44 s       | pass   |
+| `sph_poiseuille_no_slip_gap`   | force-driven channel            | **flat** profile (no-slip not modeled — pinned gap) | 0.89 s       | pass   |
+| `sph3_hydrostatic_pressure`    | 3D column                       | order-of-magnitude `ρgh`                            | 21.37 s      | pass   |
 
 Findings worth knowing:
 - **The 3D hydrostatic column dominates the suite runtime** (~21 of
-  ~26 s debug: 512 particles × 900 steps × 3D neighbor search in an
+  ~29 s debug: 512 particles × 900 steps × 3D neighbor search in an
   unoptimized build); every other test is sub-second. Release is ~10×
   faster.
 - **SHM is analytically exact** (to the integrator's O(dt) accuracy);

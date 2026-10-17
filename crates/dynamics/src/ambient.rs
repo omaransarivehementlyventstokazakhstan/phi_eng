@@ -1191,4 +1191,97 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn shm_undamped_energy_bounded() {
+        // Symplectic Euler introduces no secular energy drift: the
+        // undamped oscillator's energy stays in a narrow band around E0.
+        let k = 40.0f32;
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let dt = 1.0 / 4000.0;
+        let s = spring_series(k, 0.0, 1.0, 0.0, dt, 4000 * 6);
+        let energy = |x: f32, v: f32| 0.5 * k * x * x + 0.5 * m * v * v;
+        let e0 = energy(1.0, 0.0);
+        let (mut emin, mut emax) = (e0, e0);
+        for &(_, x, v) in &s {
+            let e = energy(x, v);
+            emin = emin.min(e);
+            emax = emax.max(e);
+        }
+        assert!(
+            (emax - emin) < 0.05 * e0,
+            "energy band too wide: {emin}..{emax}"
+        );
+        assert!(
+            (emax - e0).abs() < 0.05 * e0,
+            "energy drifted up: {emax} vs {e0}"
+        );
+        assert!(
+            (emin - e0).abs() < 0.05 * e0,
+            "energy drifted down: {emin} vs {e0}"
+        );
+    }
+
+    #[test]
+    fn shm_critical_settles_fastest() {
+        // Critical damping reaches a rest band in the least time.
+        let k = 40.0f32;
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let dt = 1.0 / 2000.0;
+        let settle_time = |zeta: f32| -> f32 {
+            let c = 2.0 * zeta * (k * m).sqrt();
+            let s = spring_series(k, c, 1.0, 0.0, dt, 2000 * 10);
+            let band = 0.01;
+            let mut last = 0.0f32;
+            for &(t, x, _) in &s {
+                if x.abs() >= band {
+                    last = t;
+                }
+            }
+            last
+        };
+        let under = settle_time(0.3);
+        let crit = settle_time(1.0);
+        let over = settle_time(3.0);
+        assert!(
+            crit < under,
+            "critical ({crit}) should beat underdamped ({under})"
+        );
+        assert!(
+            crit < over,
+            "critical ({crit}) should beat overdamped ({over})"
+        );
+    }
+
+    #[test]
+    fn shm_stiffness_scaling() {
+        // omega = sqrt(k/m): the period scales as 1/sqrt(k).
+        let m = dyn2(Vec2::ZERO, 0.5, 1.0).mass;
+        let dt = 1.0 / 8000.0;
+        let period = |k: f32| -> f32 {
+            let mut b = dyn2(Vec2::new(1.0, 0.0), 0.5, 1.0);
+            let t_expected = 2.0 * std::f32::consts::PI * (m / k).sqrt();
+            let steps = (3.0 * t_expected / dt) as usize;
+            let mut cross_times: Vec<f32> = Vec::new();
+            let mut prev = b.transform.position.x;
+            let mut t = 0.0f32;
+            for _ in 0..steps {
+                ambient_kick_2(std::slice::from_mut(&mut b), &cfg_spring(k), 0.0, dt);
+                b.transform.position += b.velocity * dt;
+                t += dt;
+                let x = b.transform.position.x;
+                if prev > 0.0 && x <= 0.0 {
+                    cross_times.push(t);
+                }
+                prev = x;
+            }
+            cross_times[1] - cross_times[0]
+        };
+        let t40 = period(40.0);
+        let t160 = period(160.0);
+        assert!(
+            (t160 - t40 / 2.0).abs() < 0.05 * t40,
+            "period does not scale as 1/sqrt(k): k=40 T={t40}, k=160 T={t160}"
+        );
+    }
 }
