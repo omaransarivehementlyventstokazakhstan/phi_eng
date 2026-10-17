@@ -647,8 +647,10 @@ fn orbital_burrau_pythagorean() {
 /// density low enough that fixed-dt integration is meaningful — with a=1
 /// the cusp demands timesteps far below 1/60 s. Positions sampled from the
 /// Plummer density, velocities from the Plummer velocity distribution
-/// (rejection sampling with the local escape velocity). Asserts virial
-/// ratio Q≈0.5, energy drift bound, finite; compares exact vs BH.
+/// (rejection sampling with the local escape velocity). Asserts the
+/// virial ratio Q = 2K/|U| ≈ 1 (the self-gravitating equilibrium
+/// prediction), a bounded energy drift, and finiteness; compares exact
+/// vs BH.
 #[test]
 fn orbital_plummer_cluster() {
     const N: usize = 1000;
@@ -687,10 +689,12 @@ fn orbital_plummer_cluster() {
             r * cos_theta,
         ));
         // Rejection sampling for velocity magnitude.
+        // Target f(u) ∝ u²(1-u²)^(7/2) on [0,1] (max at u²=2/9, ≈0.076);
+        // proposal u ~ Uniform[0,1], so accept ∝ u²(1-u²)^(7/2).
         loop {
             let v = next_f32() * v_esc;
             let u_norm = v / v_esc;
-            let accept_prob = (1.0 - u_norm * u_norm).powf(3.5);
+            let accept_prob = u_norm * u_norm * (1.0 - u_norm * u_norm).powf(3.5) / 0.076;
             if next_f32() < accept_prob {
                 let cos_theta_v = 2.0 * next_f32() - 1.0;
                 let sin_theta_v = (1.0 - cos_theta_v * cos_theta_v).sqrt();
@@ -789,11 +793,15 @@ fn orbital_plummer_cluster() {
         peak_speed,
         &format!("e_drift={e_drift:.2e} Q={q:.3}"),
     );
-    // Plummer N=1000 is chaotic: energy drift ~50% over 200 steps is
-    // expected for a fixed-dt integrator with close encounters. The
-    // assertions check survival and bounded blowup, not precision.
+    // The initial conditions are a virialized Plummer sphere, so the
+    // measured ratio must sit near 1: this pins the sampler against the
+    // dropped-v² regression. Energy drift is bounded (not precise):
+    // N=1000 is chaotic, so only survival/blowup are asserted.
     assert!(e_drift < 1.0, "plummer exact energy drifted: {e_drift}");
-    assert!(q > 0.3 && q < 2.0, "plummer virial ratio off: Q={q}");
+    assert!(
+        q > 0.85 && q < 1.15,
+        "plummer virial ratio off equilibrium: Q={q}"
+    );
 
     // BH run.
     let mut bh = build(GravityMode::BarnesHut, 0.5, &positions, &velocities);

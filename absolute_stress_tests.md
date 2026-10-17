@@ -90,10 +90,10 @@ cargo test --release -p phieng --test orbital -- --nocapture --test-threads=1
 | leo_constellation_verlet | 66 | 2000 | 6.9 | 0.0034 | 10.000 | r_err=0.0000 |
 | molniya_euler | 1 | 3372 | 0.4 | 0.0001 | 5.323 | closure=0.077 r_apo=34.01 plane_err=0.00° |
 | molniya_verlet | 1 | 3372 | 0.4 | 0.0001 | 5.323 | closure=0.027 r_apo=34.00 plane_err=0.00° |
-| plummer_exact | 1000 | 200 | 1408.3 | 7.0415 | 1.419 | e_drift=4.9e-1 Q=0.847 |
-| plummer_bh | 1000 | 200 | 5338.9 | 26.6944 | 1.419 | e_drift=4.8e-1 |
+| plummer_exact | 1000 | 200 | 647.5 | 3.2377 | 0.361 | e_drift=3.9e-4 Q=1.016 |
+| plummer_bh | 1000 | 200 | 2956.4 | 14.7822 | 0.361 | e_drift=7.1e-6 |
 
-Result: **8 passed, 0 failed** (total suite wall time ≈ 10.2 s in release).
+Result: **7 passed, 0 failed** (total suite wall time ≈ 4.3 s in release).
 (Tested on a Ryzen 7 7745Hs with 16 gigs of ram.)
 
 ### Orbital findings
@@ -111,9 +111,10 @@ Result: **8 passed, 0 failed** (total suite wall time ≈ 10.2 s in release).
 4. **Molniya orbit closes.** One full period returns to within 0.027
    (Verlet) of start; apogee 34.00 vs analytic 34.0; orbital plane
    preserved to 0.00°.
-5. **Plummer cluster: BH is 3.8× slower than exact at N=1000** on
-   this machine (tree-build overhead dominates at this scale). Both
-   modes show ~50% energy drift over 200 steps — expected for a
-   virialized cluster with softening=0.05 and no regularization;
-   the drift is *bounded* (no runaway), confirming the integrator
-   is stable even in the chaotic core-collapse regime.
+5. **Plummer cluster is a proper virial equilibrium (Q = 1.016).** The
+   sampled initial conditions satisfy the virial theorem
+   (2K/|U| ≈ 1) — the correct Plummer velocity distribution gives the
+   equilibrium kinetic energy — and over 200 steps the energy drift is
+   tiny (exact 3.9e-4, BH 7.1e-6), so the integrator tracks the
+   equilibrium well. BH remains ~4.6× slower than exact at N=1000
+   (tree-build overhead dominates at this scale).
