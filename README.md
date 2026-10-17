@@ -320,10 +320,11 @@ always read time *with* those counts, and with the solver sweep
   cache entries, and EPA working sets are all reused caller-owned
   scratch). This is the number that matters for low-spec hardware.
 - **Dynamic pile (1500 bodies, ~1650 pairs, ~1850 contacts):** the
-  broadphase grid and the contact cache both **recycle their per-key /
-  per-cell buffers through internal pools** — vacated entries return
-  their `Vec` to a pool instead of the allocator, and new entries draw
-  from it. The pile now runs at **~0.8 allocs/step** (was ~467: the
+  broadphase grid, the contact cache, and the SPH fluid neighbor grids
+  all **recycle their per-key / per-cell buffers through internal
+  pools** — vacated entries return their `Vec` to a pool instead of the
+  allocator, and new entries draw from it. The pile now runs at
+  **~0.8 allocs/step** (was ~467: the
   churn was cell/entry birth-death, now effectively zero). Pooling is
   memory-only and keeps `contact_cache.len()` exact, so trajectories are
   bit-identical. Residual churn is *trajectory-dependent* (pair order

@@ -135,6 +135,8 @@ pub struct FluidState3 {
     sample_scratch: Vec<(Vec3, Vec3, f32)>,
     /// Steps since vacated grid cells were compacted.
     clears_since_compact: u32,
+    /// Recycled cell buffers for `grid` (see `rebuild_grid`). Memory-only.
+    grid_pool: Vec<Vec<usize>>,
     /// Boundary (ghost) particles for pressure coupling. Regenerated each
     /// substep; never persisted.
     boundary: Vec<Particle3>,
@@ -152,6 +154,7 @@ impl FluidState3 {
             forces: Vec::new(),
             sample_scratch: Vec::new(),
             clears_since_compact: 0,
+            grid_pool: Vec::new(),
             boundary: Vec::new(),
             boundary_grid: FxHashMap::default(),
         }
@@ -250,7 +253,16 @@ impl FluidState3 {
         self.clears_since_compact += 1;
         if self.clears_since_compact >= 256 {
             self.clears_since_compact = 0;
-            self.grid.retain(|_, ids| !ids.is_empty());
+            let grid = &mut self.grid;
+            let pool = &mut self.grid_pool;
+            grid.retain(|_, ids| {
+                if ids.is_empty() {
+                    pool.push(std::mem::take(ids));
+                    false
+                } else {
+                    true
+                }
+            });
         }
         let h = self.config.smoothing_length;
         for (i, p) in self.particles.iter().enumerate() {
@@ -262,7 +274,10 @@ impl FluidState3 {
                 (p.position.y / h).floor() as i32,
                 (p.position.z / h).floor() as i32,
             );
-            self.grid.entry(key).or_default().push(i);
+            self.grid
+                .entry(key)
+                .or_insert_with(|| self.grid_pool.pop().unwrap_or_default())
+                .push(i);
         }
     }
 
