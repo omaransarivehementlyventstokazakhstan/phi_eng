@@ -233,6 +233,8 @@ public class SnapshotTests
         world.Fluid.Config.Gamma = 7.0f;
         world.Fluid.Config.ArtificialViscosity = 1.2f;
         world.Fluid.Config.SurfaceTension = 0.7f;
+        world.Fluid.Config.Cfl = 0.4f;
+        world.Fluid.Config.MaxSubsteps = 4;
         foreach (var mode in new[] { SnapshotLoadMode.Exact, SnapshotLoadMode.Fresh })
         {
             var rj = Snapshot.World2FromJson(
@@ -254,6 +256,8 @@ public class SnapshotTests
         Assert.Equal(a.Fluid.Config.Gamma, b.Fluid.Config.Gamma);
         Assert.Equal(a.Fluid.Config.ArtificialViscosity, b.Fluid.Config.ArtificialViscosity);
         Assert.Equal(a.Fluid.Config.SurfaceTension, b.Fluid.Config.SurfaceTension);
+        Assert.Equal(a.Fluid.Config.Cfl, b.Fluid.Config.Cfl);
+        Assert.Equal(a.Fluid.Config.MaxSubsteps, b.Fluid.Config.MaxSubsteps);
         Assert.Equal(a.Fluid.Config.Viscosity, b.Fluid.Config.Viscosity);
         Assert.Equal(a.Fluid.Config.Drag, b.Fluid.Config.Drag);
         Assert.Equal(a.Fluid.Config.MaxVelocity, b.Fluid.Config.MaxVelocity);

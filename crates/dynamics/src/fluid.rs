@@ -18,6 +18,7 @@
 //! bodies may sleep exactly like resting contacts.
 
 use super::body::{RigidBody2, Shape2};
+use crate::noise::{curl_2, fbm_2};
 use glam::Vec2;
 use phieng_math::{EPS, EPS_SQ};
 use std::collections::HashMap;
@@ -72,6 +73,14 @@ pub struct FluidConfig2 {
     /// `0` = off). Neighbors feel a bounded attractive force that holds
     /// droplets together and rounds free surfaces; balanced by pressure.
     pub surface_tension: f32,
+    /// Courant–Friedrichs–Lewy factor for adaptive substepping (default
+    /// `0.0` = off, a single pass). Set to ~`0.4` to subdivide when the
+    /// signal speed would otherwise violate `dt < cfl*h/(c0+v)` — the way
+    /// to run stiff Tait configs stably at 60 Hz.
+    pub cfl: f32,
+    /// Maximum substeps per world step when `cfl` is enabled (default
+    /// `1` = off, i.e. a single pass). Clamps runaway cost.
+    pub max_substeps: u32,
     /// XSPH smoothing factor in `[0, 1]` (velocity diffusion strength).
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area
@@ -98,6 +107,8 @@ impl Default for FluidConfig2 {
             gamma: 1.0,
             artificial_viscosity: 0.0,
             surface_tension: 0.0,
+            cfl: 0.0,
+            max_substeps: 1,
             viscosity: 0.3,
             drag: 4.0,
             max_velocity: 30.0,
@@ -426,12 +437,70 @@ impl FluidState2 {
 
     /// Advance the fluid one step and couple it to `bodies` (two-way:
     /// particles collide with shapes; reactions wake and push dynamics).
-    /// Deterministic: particles and bodies are visited in index order
-    /// with fixed neighbor-cell order.
-    pub(crate) fn step_fluid(&mut self, bodies: &mut [RigidBody2], gravity: Vec2, dt: f32) {
+    /// When CFL substepping is enabled (`cfl > 0` and `max_substeps > 1`)
+    /// the pipeline runs `substeps` times with `dt / substeps`, so stiff
+    /// (high sound-speed) Tait configs stay stable; otherwise it is a
+    /// single deterministic pass (bit-identical to legacy behavior).
+    pub(crate) fn step_fluid(
+        &mut self,
+        bodies: &mut [RigidBody2],
+        gravity: Vec2,
+        ambient: &crate::ambient::AmbientConfig2,
+        time: f32,
+        dt: f32,
+    ) {
         if !self.config.enabled || self.particles.is_empty() || dt <= 0.0 {
             return;
         }
+        let substeps = self.cfl_substeps(dt);
+        let sub_dt = dt / substeps as f32;
+        for _ in 0..substeps {
+            self.substep(bodies, gravity, ambient, time, sub_dt);
+        }
+    }
+
+    /// Number of CFL substeps for this step (`1` when disabled). Uses the
+    /// sound speed `c0 = sqrt(gamma*k*rho0)` (or `sqrt(k)` for the linear
+    /// EOS) plus the peak particle speed against `dt < cfl*h/(c0+v)`.
+    fn cfl_substeps(&self, dt: f32) -> u32 {
+        let cfg = &self.config;
+        let max = cfg.max_substeps.max(1);
+        if cfg.cfl <= 0.0 || max <= 1 {
+            return 1;
+        }
+        let h = cfg.smoothing_length.max(EPS);
+        let rho0 = cfg.rest_density.max(EPS);
+        let c0 = if cfg.gamma == 1.0 {
+            cfg.stiffness.max(0.0).sqrt()
+        } else {
+            (cfg.gamma * cfg.stiffness.max(0.0) * rho0).sqrt()
+        };
+        let mut vmax = 0.0f32;
+        for p in &self.particles {
+            vmax = vmax.max(p.velocity.length());
+        }
+        let speed = c0 + vmax;
+        if !speed.is_finite() || speed <= EPS {
+            return 1;
+        }
+        let dt_max = cfg.cfl * h / speed;
+        if !dt_max.is_finite() || dt_max <= 0.0 {
+            return 1;
+        }
+        ((dt / dt_max).ceil() as i64).clamp(1, max as i64) as u32
+    }
+
+    /// One fluid substep (the full SPH pipeline) over interval `dt`.
+    /// Deterministic: particles and bodies are visited in index order with
+    /// fixed neighbor-cell order.
+    fn substep(
+        &mut self,
+        bodies: &mut [RigidBody2],
+        gravity: Vec2,
+        ambient: &crate::ambient::AmbientConfig2,
+        time: f32,
+        dt: f32,
+    ) {
         let cfg = self.config;
         let h = cfg.smoothing_length.max(EPS);
         let m = cfg.particle_mass.max(0.0);
@@ -504,12 +573,28 @@ impl FluidState2 {
             self.forces[i] = f;
         }
 
-        // 4. Integrate particles: gravity + pressure, XSPH viscosity,
-        // speed cap, advect.
+        // 4. Integrate particles: gravity + pressure + optional ambient
+        // turbulence, XSPH viscosity, speed cap, advect.
+        let turb = &ambient.turbulence;
+        let turb_on = turb.enabled && turb.amplitude > 0.0;
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
             let rho_i = self.particles[i].density.max(EPS);
-            let mut v = self.particles[i].velocity + (gravity + self.forces[i] / rho_i) * dt;
+            let mut acc = gravity + self.forces[i] / rho_i;
+            if turb_on {
+                let p = self.particles[i].position * turb.frequency;
+                let t = time * turb.time_scale;
+                let n = if turb.divergence_free {
+                    curl_2(p.x, p.y, t, turb.seed, turb.octaves)
+                } else {
+                    Vec2::new(
+                        fbm_2(p.x, p.y, t, turb.seed, turb.octaves),
+                        fbm_2(p.x, p.y, t, turb.seed ^ 0x55aa_55aa, turb.octaves),
+                    )
+                };
+                acc += n.clamp_length_max(1.0) * turb.amplitude;
+            }
+            let mut v = self.particles[i].velocity + acc * dt;
             // XSPH velocity smoothing against pre-update neighbors.
             if cfg.viscosity > 0.0 {
                 let pi = self.particles[i].position;
@@ -594,10 +679,12 @@ impl FluidState2 {
                     continue;
                 }
                 wet = true;
-                // Relative surface velocity (translation + rotation).
+                // Relative surface velocity (translation + rotation) against
+                // the ambient wind, so a current sweeps floating bodies.
                 let r = *point - body.transform.position;
                 let v_rel = body.velocity
-                    + Vec2::new(-body.angular_velocity * r.y, body.angular_velocity * r.x);
+                    + Vec2::new(-body.angular_velocity * r.y, body.angular_velocity * r.x)
+                    - ambient.drag.wind;
                 let speed = v_rel.length();
                 let mut force = -*normal * (p * area);
                 if speed > EPS {
@@ -885,5 +972,110 @@ mod tests {
             );
         }
         assert!(peak < 30.0, "expansion tank blew up, peak={peak}");
+    }
+
+    #[test]
+    fn test_fluid_cfl_substeps() {
+        let mut world = crate::World2::new();
+        world
+            .fluid
+            .add_particles(&[Vec2::new(0.0, 0.0), Vec2::new(0.25, 0.0)]);
+        // Disabled by default: always one pass.
+        assert_eq!(world.fluid.cfl_substeps(1.0 / 60.0), 1);
+        // Stiff Tait + a fast particle demands substeps.
+        world.fluid.config.gamma = 7.0;
+        world.fluid.config.stiffness = 200.0; // c0 ~ 37
+        world.fluid.config.cfl = 0.4;
+        world.fluid.config.max_substeps = 8;
+        world.fluid.particles[0].velocity = Vec2::new(20.0, 0.0);
+        let n = world.fluid.cfl_substeps(1.0 / 60.0);
+        assert!((2..=8).contains(&n), "expected substeps, got {n}");
+        // Capped by max_substeps.
+        world.fluid.config.max_substeps = 2;
+        assert_eq!(world.fluid.cfl_substeps(1.0 / 60.0), 2);
+    }
+
+    #[test]
+    fn test_fluid_cfl_stabilizes_stiff_tait() {
+        // A stiff Tait dam break that would violate CFL at a single pass
+        // stays finite and contained once substepping is enabled.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        lattice(&mut world, 0.0, 0.0, 8, 12, 0.25);
+        world.fluid.config.gamma = 7.0;
+        world.fluid.config.stiffness = 200.0;
+        world.fluid.config.cfl = 0.4;
+        world.fluid.config.max_substeps = 8;
+        let mut peak = 0.0f32;
+        for frame in 0..200 {
+            world.step(1.0 / 60.0);
+            for p in world.fluid.particles.iter() {
+                peak = peak.max(p.velocity.length());
+            }
+            if frame % 50 == 0 {
+                finite_fluid(&world, "cfl stiff tait");
+            }
+        }
+        finite_fluid(&world, "cfl stiff tait final");
+        for p in world.fluid.particles.iter() {
+            assert!(
+                p.position.x > -1.0 && p.position.x < 5.0 && p.position.y > -0.6,
+                "CFL stiff particle escaped: p={}",
+                p.position
+            );
+        }
+        assert!(peak < 30.0, "CFL stiff run blew up, peak={peak}");
+    }
+
+    #[test]
+    fn test_fluid_wind_drifts_floating_body() {
+        // Ambient wind drives the Morison drag, sweeping a floating body.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        lattice(&mut world, -0.5, -0.5, 12, 6, 0.25);
+        for _ in 0..200 {
+            world.step(1.0 / 60.0);
+        }
+        let b = world
+            .add_dynamic_body(
+                Vec2::new(2.0, 1.6),
+                Shape2::Box {
+                    half_extents: Vec2::new(0.3, 0.3),
+                },
+                0.5,
+            )
+            .expect("valid shape");
+        let x0 = world.bodies[b].transform.position.x;
+        world.ambient.drag.wind = Vec2::new(3.0, 0.0);
+        for _ in 0..400 {
+            world.step(1.0 / 60.0);
+        }
+        assert!(
+            world.bodies[b].transform.position.x > x0 + 0.05,
+            "wind did not drift the body: x0={x0} x={}",
+            world.bodies[b].transform.position.x
+        );
+    }
+
+    #[test]
+    fn test_fluid_turbulence_deterministic() {
+        fn run() -> Vec2 {
+            let mut world = crate::World2::new();
+            tank(&mut world);
+            lattice(&mut world, 0.0, 0.0, 6, 8, 0.25);
+            world.ambient.turbulence.enabled = true;
+            world.ambient.turbulence.amplitude = 5.0;
+            world.ambient.turbulence.frequency = 0.5;
+            world.ambient.turbulence.seed = 7;
+            world.ambient.turbulence.octaves = 3;
+            for _ in 0..120 {
+                world.step(1.0 / 60.0);
+            }
+            world.fluid.particles[0].velocity
+        }
+        let a = run();
+        let b = run();
+        assert_eq!(a.x.to_bits(), b.x.to_bits());
+        assert_eq!(a.y.to_bits(), b.y.to_bits());
     }
 }

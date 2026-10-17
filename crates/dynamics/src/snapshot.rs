@@ -353,6 +353,12 @@ struct FluidConfig2Dto {
     /// Surface-tension strength kappa (schema v5; default 0.0, elided).
     #[serde(default, skip_serializing_if = "is_zero")]
     surface_tension: f32,
+    /// CFL substepping factor (schema v5; default 0.0, elided).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    cfl: f32,
+    /// Maximum CFL substeps (schema v5; default 1, elided).
+    #[serde(default = "default_max_substeps", skip_serializing_if = "is_one_u32")]
+    max_substeps: u32,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -384,6 +390,10 @@ struct FluidConfig3Dto {
     artificial_viscosity: f32,
     #[serde(default, skip_serializing_if = "is_zero")]
     surface_tension: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    cfl: f32,
+    #[serde(default = "default_max_substeps", skip_serializing_if = "is_one_u32")]
+    max_substeps: u32,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -408,6 +418,8 @@ impl Default for FluidConfig2Dto {
             gamma: c.gamma,
             artificial_viscosity: c.artificial_viscosity,
             surface_tension: c.surface_tension,
+            cfl: c.cfl,
+            max_substeps: c.max_substeps,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -428,6 +440,8 @@ impl Default for FluidConfig3Dto {
             gamma: c.gamma,
             artificial_viscosity: c.artificial_viscosity,
             surface_tension: c.surface_tension,
+            cfl: c.cfl,
+            max_substeps: c.max_substeps,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -457,6 +471,16 @@ fn is_zero(v: &f32) -> bool {
 /// Default Tait exponent (linear EOS) for pre-v5 fluid configs.
 fn default_gamma() -> f32 {
     1.0
+}
+
+/// Default CFL max-substeps (off) for pre-v5 fluid configs.
+fn default_max_substeps() -> u32 {
+    1
+}
+
+/// `skip_serializing_if` companion for `max_substeps` (default 1, elided).
+fn is_one_u32(v: &u32) -> bool {
+    *v == 1
 }
 
 /// Gravity configuration DTO (schema v4). Field names mirror
@@ -948,6 +972,8 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
             gamma: c.gamma,
             artificial_viscosity: c.artificial_viscosity,
             surface_tension: c.surface_tension,
+            cfl: c.cfl,
+            max_substeps: c.max_substeps,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -976,6 +1002,8 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
             gamma: c.gamma,
             artificial_viscosity: c.artificial_viscosity,
             surface_tension: c.surface_tension,
+            cfl: c.cfl,
+            max_substeps: c.max_substeps,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -1525,7 +1553,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
         || w.fluid.config.gamma != 1.0
         || w.fluid.config.artificial_viscosity != 0.0
-        || w.fluid.config.surface_tension != 0.0;
+        || w.fluid.config.surface_tension != 0.0
+        || w.fluid.config.cfl != 0.0
+        || w.fluid.config.max_substeps != 1;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1703,7 +1733,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
         || w.fluid.config.gamma != 1.0
         || w.fluid.config.artificial_viscosity != 0.0
-        || w.fluid.config.surface_tension != 0.0;
+        || w.fluid.config.surface_tension != 0.0
+        || w.fluid.config.cfl != 0.0
+        || w.fluid.config.max_substeps != 1;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1856,6 +1888,7 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
     finite(c.gamma, "fluid.gamma")?;
     finite(c.artificial_viscosity, "fluid.artificial_viscosity")?;
     finite(c.surface_tension, "fluid.surface_tension")?;
+    finite(c.cfl, "fluid.cfl")?;
     finite(c.viscosity, "fluid.viscosity")?;
     finite(c.drag, "fluid.drag")?;
     finite(c.max_velocity, "fluid.max_velocity")?;
@@ -1871,6 +1904,8 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
         gamma: c.gamma,
         artificial_viscosity: c.artificial_viscosity,
         surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -1905,6 +1940,7 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
     finite(c.gamma, "fluid.gamma")?;
     finite(c.artificial_viscosity, "fluid.artificial_viscosity")?;
     finite(c.surface_tension, "fluid.surface_tension")?;
+    finite(c.cfl, "fluid.cfl")?;
     finite(c.viscosity, "fluid.viscosity")?;
     finite(c.drag, "fluid.drag")?;
     finite(c.max_velocity, "fluid.max_velocity")?;
@@ -1920,6 +1956,8 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
         gamma: c.gamma,
         artificial_viscosity: c.artificial_viscosity,
         surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -3290,6 +3328,8 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
         write_f32(out, c.gamma);
         write_f32(out, c.artificial_viscosity);
         write_f32(out, c.surface_tension);
+        write_f32(out, c.cfl);
+        write_u32(out, c.max_substeps);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3303,11 +3343,18 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
     let rest_density = r.read_f32()?;
     let smoothing_length = r.read_f32()?;
     let stiffness = r.read_f32()?;
-    let (gamma, artificial_viscosity, surface_tension) = if version >= SNAPSHOT_SCHEMA_VERSION {
-        (r.read_f32()?, r.read_f32()?, r.read_f32()?)
-    } else {
-        (default_gamma(), 0.0, 0.0)
-    };
+    let (gamma, artificial_viscosity, surface_tension, cfl, max_substeps) =
+        if version >= SNAPSHOT_SCHEMA_VERSION {
+            (
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_u32()?,
+            )
+        } else {
+            (default_gamma(), 0.0, 0.0, 0.0, default_max_substeps())
+        };
     Ok(FluidConfig2Dto {
         particle_mass,
         rest_density,
@@ -3316,6 +3363,8 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         gamma,
         artificial_viscosity,
         surface_tension,
+        cfl,
+        max_substeps,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3372,6 +3421,8 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
         write_f32(out, c.gamma);
         write_f32(out, c.artificial_viscosity);
         write_f32(out, c.surface_tension);
+        write_f32(out, c.cfl);
+        write_u32(out, c.max_substeps);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3385,11 +3436,18 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
     let rest_density = r.read_f32()?;
     let smoothing_length = r.read_f32()?;
     let stiffness = r.read_f32()?;
-    let (gamma, artificial_viscosity, surface_tension) = if version >= SNAPSHOT_SCHEMA_VERSION {
-        (r.read_f32()?, r.read_f32()?, r.read_f32()?)
-    } else {
-        (default_gamma(), 0.0, 0.0)
-    };
+    let (gamma, artificial_viscosity, surface_tension, cfl, max_substeps) =
+        if version >= SNAPSHOT_SCHEMA_VERSION {
+            (
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_f32()?,
+                r.read_u32()?,
+            )
+        } else {
+            (default_gamma(), 0.0, 0.0, 0.0, default_max_substeps())
+        };
     Ok(FluidConfig3Dto {
         particle_mass,
         rest_density,
@@ -3398,6 +3456,8 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         gamma,
         artificial_viscosity,
         surface_tension,
+        cfl,
+        max_substeps,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -4503,7 +4563,8 @@ mod tests {
 
     #[test]
     fn test_snapshot_fluid_roundtrip_2d() {
-        let mut w = World2::new();        w.add_static_body(
+        let mut w = World2::new();
+        w.add_static_body(
             Vec2::new(0.0, -1.0),
             Shape2::Box {
                 half_extents: Vec2::new(10.0, 0.5),

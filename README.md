@@ -228,8 +228,11 @@ contact for that frame rather than a guessed depth.
   classic water `7.0`) that supports deep columns with less artificial
   stiffness; optional **Monaghan artificial viscosity** damps
   approaching particles, and optional **Akinci-style surface tension**
-  (cohesion) holds droplets together and rounds free surfaces. All
-  three default off, so existing fluids are bit-identical. New
+  (cohesion) holds droplets together and rounds free surfaces. Optional
+  **CFL substepping** (`cfl`, `max_substeps`) keeps stiff Tait configs
+  stable, and the fluid feels ambient **weather** — the body drag uses
+  the ambient wind and turbulence drives the particles. All default
+  off, so existing fluids are bit-identical. New
   `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
   state persists in snapshots (config block extended at schema v5) and
   crosses FFI; C# carries fluid state but does not step it yet.

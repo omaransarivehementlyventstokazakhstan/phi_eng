@@ -35,6 +35,10 @@ public class FluidConfig2
     public float ArtificialViscosity { get; set; } = 0.0f;
     /// <summary>Akinci-style surface-tension (cohesion) strength kappa (0 = off).</summary>
     public float SurfaceTension { get; set; } = 0.0f;
+    /// <summary>CFL substepping factor (0 = off; ~0.4 enables adaptive substepping).</summary>
+    public float Cfl { get; set; } = 0.0f;
+    /// <summary>Maximum CFL substeps per step (1 = off).</summary>
+    public int MaxSubsteps { get; set; } = 1;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -107,6 +111,10 @@ public class FluidConfig3
     public float ArtificialViscosity { get; set; } = 0.0f;
     /// <summary>Akinci-style surface-tension (cohesion) strength kappa (0 = off).</summary>
     public float SurfaceTension { get; set; } = 0.0f;
+    /// <summary>CFL substepping factor (0 = off; ~0.4 enables adaptive substepping).</summary>
+    public float Cfl { get; set; } = 0.0f;
+    /// <summary>Maximum CFL substeps per step (1 = off).</summary>
+    public int MaxSubsteps { get; set; } = 1;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>

@@ -535,6 +535,8 @@ public static class Snapshot
         [JsonPropertyName("gamma")] public float Gamma { get; set; } = 1.0f;
         [JsonPropertyName("artificial_viscosity")] public float ArtificialViscosity { get; set; }
         [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
+        [JsonPropertyName("cfl")] public float Cfl { get; set; }
+        [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 1;
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -563,6 +565,8 @@ public static class Snapshot
         [JsonPropertyName("gamma")] public float Gamma { get; set; } = 1.0f;
         [JsonPropertyName("artificial_viscosity")] public float ArtificialViscosity { get; set; }
         [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
+        [JsonPropertyName("cfl")] public float Cfl { get; set; }
+        [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 1;
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -609,7 +613,8 @@ public static class Snapshot
             // v5. Mirrors the Rust writer rule.
             bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
-                || w.Fluid.Config.SurfaceTension != 0.0f;
+                || w.Fluid.Config.SurfaceTension != 0.0f
+                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
@@ -792,6 +797,8 @@ public static class Snapshot
                     Gamma = w.Fluid.Config.Gamma,
                     ArtificialViscosity = w.Fluid.Config.ArtificialViscosity,
                     SurfaceTension = w.Fluid.Config.SurfaceTension,
+                    Cfl = w.Fluid.Config.Cfl,
+                    MaxSubsteps = w.Fluid.Config.MaxSubsteps,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -863,7 +870,8 @@ public static class Snapshot
             // Conditional schema: see World2Dto.From.
             bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
-                || w.Fluid.Config.SurfaceTension != 0.0f;
+                || w.Fluid.Config.SurfaceTension != 0.0f
+                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
@@ -1101,6 +1109,8 @@ public static class Snapshot
                     Gamma = w.Fluid.Config.Gamma,
                     ArtificialViscosity = w.Fluid.Config.ArtificialViscosity,
                     SurfaceTension = w.Fluid.Config.SurfaceTension,
+                    Cfl = w.Fluid.Config.Cfl,
+                    MaxSubsteps = w.Fluid.Config.MaxSubsteps,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -1462,6 +1472,8 @@ public static class Snapshot
             Gamma = Fin(cfg.Gamma, "fluid"),
             ArtificialViscosity = Fin(cfg.ArtificialViscosity, "fluid"),
             SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
+            Cfl = Fin(cfg.Cfl, "fluid"),
+            MaxSubsteps = cfg.MaxSubsteps,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1687,6 +1699,8 @@ public static class Snapshot
             Gamma = Fin(cfg.Gamma, "fluid"),
             ArtificialViscosity = Fin(cfg.ArtificialViscosity, "fluid"),
             SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
+            Cfl = Fin(cfg.Cfl, "fluid"),
+            MaxSubsteps = cfg.MaxSubsteps,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -2001,6 +2015,8 @@ public static class Snapshot
             w.Write(c.Gamma);
             w.Write(c.ArtificialViscosity);
             w.Write(c.SurfaceTension);
+            w.Write(c.Cfl);
+            w.Write(c.MaxSubsteps);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2023,6 +2039,8 @@ public static class Snapshot
             c.Gamma = r.ReadSingle();
             c.ArtificialViscosity = r.ReadSingle();
             c.SurfaceTension = r.ReadSingle();
+            c.Cfl = r.ReadSingle();
+            c.MaxSubsteps = r.ReadInt32();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2071,6 +2089,8 @@ public static class Snapshot
             w.Write(c.Gamma);
             w.Write(c.ArtificialViscosity);
             w.Write(c.SurfaceTension);
+            w.Write(c.Cfl);
+            w.Write(c.MaxSubsteps);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2093,6 +2113,8 @@ public static class Snapshot
             c.Gamma = r.ReadSingle();
             c.ArtificialViscosity = r.ReadSingle();
             c.SurfaceTension = r.ReadSingle();
+            c.Cfl = r.ReadSingle();
+            c.MaxSubsteps = r.ReadInt32();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();

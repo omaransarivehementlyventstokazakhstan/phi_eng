@@ -53,6 +53,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
   - **Surface tension / cohesion** (`surface_tension`): a bounded
     Akinci-style attractive force that holds droplets together and
     rounds free surfaces.
+  - **CFL substepping** (`cfl`, `max_substeps`): when enabled, the fluid
+    pipeline runs `ceil(dt / (cfl*h/(c0+v)))` times (capped) so stiff
+    Tait configs stay stable at 60 Hz. Off by default (single pass,
+    bit-identical).
+  - **Fluid weather coupling**: the SPH body drag now uses the ambient
+    wind as the relative velocity (a current sweeps floating bodies),
+    and the ambient turbulence field drives fluid particles directly.
   - Preserved through snapshot schema v5 (fluid config block extended,
     version-gated); the schema switches to v5 when any fluid-expansion
     field is non-default.

@@ -437,7 +437,8 @@ impl World2 {
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
-        self.fluid.step_fluid(&mut self.bodies, self.gravity, dt);
+        self.fluid
+            .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         // Reset scratch buffers (keeps capacity, including parallel slots).
@@ -1252,7 +1253,8 @@ impl World3 {
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
-        self.fluid.step_fluid(&mut self.bodies, self.gravity, dt);
+        self.fluid
+            .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         self.update_broadphase();

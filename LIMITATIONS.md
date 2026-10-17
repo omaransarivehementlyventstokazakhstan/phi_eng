@@ -77,12 +77,15 @@ SPH particles (`FluidState2`/`FluidState3`) step inside
 drag). The pressure model is linear by default (`gamma == 1`); setting
 `gamma > 1` selects the Tait/WCSPH EOS, and `artificial_viscosity` /
 `surface_tension` add Monaghan viscosity / simplified Akinci cohesion.
-Two caveats on the expansion: the solver runs at a fixed `dt`, so stiff
-Tait settings (high `stiffness`, high `gamma`) can violate the CFL
-condition (`dt < h / c0`, `c0 ~ sqrt(gamma*stiffness)`) and diverge —
-tune `stiffness` so `c0` stays near the linear default's `sqrt(k)`; and
-the cohesion kernel is a bounded linear spline, not the full Akinci
-spline (stable and tunable, not a surface-energy match). Fluid state
+CFL substepping (`cfl`, `max_substeps`) keeps stiff Tait configs stable
+by subdividing the step when `dt >= cfl*h/(c0+v)`; it is off by default
+and costs `substeps`× the fluid work. Two remaining caveats: the
+cohesion kernel is a bounded linear spline, not the full Akinci spline
+(stable and tunable, not a surface-energy match), and boundaries are
+still penalty-based (positional push-out + reaction impulses), not
+boundary/ghost particles — a particle can still outrun pressure buildup
+at extreme speeds (the `drag` coefficient caps entry speed instead).
+Fluid state
 persists through snapshots (config block extended at schema v5, both
 languages) and crosses the FFI bridge, and C# carries fluid state for
 round-trips — but C# does not step fluids yet, so managed worlds with
