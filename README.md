@@ -231,7 +231,9 @@ contact for that frame rather than a guessed depth.
   (cohesion) holds droplets together and rounds free surfaces. Optional
   **CFL substepping** (`cfl`, `max_substeps`) keeps stiff Tait configs
   stable, and the fluid feels ambient **weather** — the body drag uses
-  the ambient wind and turbulence drives the particles. All default
+  the ambient wind and turbulence drives the particles. Optional
+  **adaptive resolution** (per-particle mass; split under-dense / merge
+  over-dense, mass-conserving) refines resolved regions. All default
   off, so existing fluids are bit-identical. New
   `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
   state persists in snapshots (config block extended at schema v5) and

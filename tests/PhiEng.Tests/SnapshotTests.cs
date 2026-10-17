@@ -228,6 +228,7 @@ public class SnapshotTests
         {
             Position = world.Fluid.Particles[0].Position,
             Velocity = new Vector2(1.0f, -2.0f),
+            Mass = world.Fluid.Particles[0].Mass,
         };
         // Schema v5 fluid expansion fields must round-trip.
         world.Fluid.Config.Gamma = 7.0f;
@@ -235,6 +236,9 @@ public class SnapshotTests
         world.Fluid.Config.SurfaceTension = 0.7f;
         world.Fluid.Config.Cfl = 0.4f;
         world.Fluid.Config.MaxSubsteps = 4;
+        world.Fluid.Config.AdaptiveResolution = true;
+        world.Fluid.Config.SplitDensityRatio = 0.4f;
+        world.Fluid.Config.MergeDensityRatio = 1.8f;
         foreach (var mode in new[] { SnapshotLoadMode.Exact, SnapshotLoadMode.Fresh })
         {
             var rj = Snapshot.World2FromJson(
@@ -258,6 +262,9 @@ public class SnapshotTests
         Assert.Equal(a.Fluid.Config.SurfaceTension, b.Fluid.Config.SurfaceTension);
         Assert.Equal(a.Fluid.Config.Cfl, b.Fluid.Config.Cfl);
         Assert.Equal(a.Fluid.Config.MaxSubsteps, b.Fluid.Config.MaxSubsteps);
+        Assert.Equal(a.Fluid.Config.AdaptiveResolution, b.Fluid.Config.AdaptiveResolution);
+        Assert.Equal(a.Fluid.Config.SplitDensityRatio, b.Fluid.Config.SplitDensityRatio);
+        Assert.Equal(a.Fluid.Config.MergeDensityRatio, b.Fluid.Config.MergeDensityRatio);
         Assert.Equal(a.Fluid.Config.Viscosity, b.Fluid.Config.Viscosity);
         Assert.Equal(a.Fluid.Config.Drag, b.Fluid.Config.Drag);
         Assert.Equal(a.Fluid.Config.MaxVelocity, b.Fluid.Config.MaxVelocity);
@@ -267,6 +274,7 @@ public class SnapshotTests
         {
             Assert.Equal(a.Fluid.Particles[i].Position, b.Fluid.Particles[i].Position);
             Assert.Equal(a.Fluid.Particles[i].Velocity, b.Fluid.Particles[i].Velocity);
+            Assert.Equal(a.Fluid.Particles[i].Mass, b.Fluid.Particles[i].Mass);
         }
     }
 

@@ -85,7 +85,12 @@ cohesion kernel is a bounded linear spline, not the full Akinci spline
 still penalty-based (positional push-out + reaction impulses), not
 boundary/ghost particles — a particle can still outrun pressure buildup
 at extreme speeds (the `drag` coefficient caps entry speed instead).
-Fluid state
+Adaptive resolution (`adaptive_resolution`) is opt-in and conserves
+mass (verified), but its split criterion keys on low density, which also
+describes free surfaces — so it is stable for calm/settled scenes and
+should be avoided in violent dam-break-style transients where surface
+splitting can over-refine and destabilize; merging is a simple
+closest-pair combine, not a full resampling scheme. Fluid state
 persists through snapshots (config block extended at schema v5, both
 languages) and crosses the FFI bridge, and C# carries fluid state for
 round-trips — but C# does not step fluids yet, so managed worlds with

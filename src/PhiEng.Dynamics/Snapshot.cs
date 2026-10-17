@@ -524,6 +524,7 @@ public static class Snapshot
     {
         [JsonPropertyName("position")] public Vec2Dto Position { get; set; } = new();
         [JsonPropertyName("velocity")] public Vec2Dto Velocity { get; set; } = new();
+        [JsonPropertyName("mass")] public float Mass { get; set; }
     }
 
     private sealed class FluidConfig2Dto
@@ -537,6 +538,9 @@ public static class Snapshot
         [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
         [JsonPropertyName("cfl")] public float Cfl { get; set; }
         [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 1;
+        [JsonPropertyName("adaptive_resolution")] public bool AdaptiveResolution { get; set; }
+        [JsonPropertyName("split_density_ratio")] public float SplitDensityRatio { get; set; } = 0.5f;
+        [JsonPropertyName("merge_density_ratio")] public float MergeDensityRatio { get; set; } = 1.6f;
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -554,6 +558,7 @@ public static class Snapshot
     {
         [JsonPropertyName("position")] public Vec3Dto Position { get; set; } = new();
         [JsonPropertyName("velocity")] public Vec3Dto Velocity { get; set; } = new();
+        [JsonPropertyName("mass")] public float Mass { get; set; }
     }
 
     private sealed class FluidConfig3Dto
@@ -567,6 +572,9 @@ public static class Snapshot
         [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
         [JsonPropertyName("cfl")] public float Cfl { get; set; }
         [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 1;
+        [JsonPropertyName("adaptive_resolution")] public bool AdaptiveResolution { get; set; }
+        [JsonPropertyName("split_density_ratio")] public float SplitDensityRatio { get; set; } = 0.5f;
+        [JsonPropertyName("merge_density_ratio")] public float MergeDensityRatio { get; set; } = 1.6f;
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -614,7 +622,8 @@ public static class Snapshot
             bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
                 || w.Fluid.Config.SurfaceTension != 0.0f
-                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1;
+                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
+                || w.Fluid.Config.AdaptiveResolution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
@@ -799,6 +808,9 @@ public static class Snapshot
                     SurfaceTension = w.Fluid.Config.SurfaceTension,
                     Cfl = w.Fluid.Config.Cfl,
                     MaxSubsteps = w.Fluid.Config.MaxSubsteps,
+                    AdaptiveResolution = w.Fluid.Config.AdaptiveResolution,
+                    SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
+                    MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -812,6 +824,7 @@ public static class Snapshot
                 {
                     Position = V2(p.Position),
                     Velocity = V2(p.Velocity),
+                    Mass = p.Mass,
                 });
             }
             return dto;
@@ -871,7 +884,8 @@ public static class Snapshot
             bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
                 || w.Fluid.Config.SurfaceTension != 0.0f
-                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1;
+                || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
+                || w.Fluid.Config.AdaptiveResolution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
@@ -1111,6 +1125,9 @@ public static class Snapshot
                     SurfaceTension = w.Fluid.Config.SurfaceTension,
                     Cfl = w.Fluid.Config.Cfl,
                     MaxSubsteps = w.Fluid.Config.MaxSubsteps,
+                    AdaptiveResolution = w.Fluid.Config.AdaptiveResolution,
+                    SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
+                    MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -1124,6 +1141,7 @@ public static class Snapshot
                 {
                     Position = V3(p.Position),
                     Velocity = V3(p.Velocity),
+                    Mass = p.Mass,
                 });
             }
             return dto;
@@ -1474,6 +1492,9 @@ public static class Snapshot
             SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
             Cfl = Fin(cfg.Cfl, "fluid"),
             MaxSubsteps = cfg.MaxSubsteps,
+            AdaptiveResolution = cfg.AdaptiveResolution,
+            SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
+            MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1487,6 +1508,7 @@ public static class Snapshot
             {
                 Position = UV2(p.Position),
                 Velocity = UV2(p.Velocity),
+                Mass = p.Mass > 0.0f ? p.Mass : cfg.ParticleMass,
             });
         }
     }
@@ -1701,6 +1723,9 @@ public static class Snapshot
             SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
             Cfl = Fin(cfg.Cfl, "fluid"),
             MaxSubsteps = cfg.MaxSubsteps,
+            AdaptiveResolution = cfg.AdaptiveResolution,
+            SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
+            MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1714,6 +1739,7 @@ public static class Snapshot
             {
                 Position = UV3(p.Position),
                 Velocity = UV3(p.Velocity),
+                Mass = p.Mass > 0.0f ? p.Mass : cfg.ParticleMass,
             });
         }
     }
@@ -2017,6 +2043,9 @@ public static class Snapshot
             w.Write(c.SurfaceTension);
             w.Write(c.Cfl);
             w.Write(c.MaxSubsteps);
+            w.Write(c.AdaptiveResolution);
+            w.Write(c.SplitDensityRatio);
+            w.Write(c.MergeDensityRatio);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2041,6 +2070,9 @@ public static class Snapshot
             c.SurfaceTension = r.ReadSingle();
             c.Cfl = r.ReadSingle();
             c.MaxSubsteps = r.ReadInt32();
+            c.AdaptiveResolution = r.ReadBoolean();
+            c.SplitDensityRatio = r.ReadSingle();
+            c.MergeDensityRatio = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2058,6 +2090,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y);
+            if (version >= SchemaVersion) w.Write(p.Mass);
         }
     }
 
@@ -2073,6 +2106,7 @@ public static class Snapshot
             {
                 Position = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 Velocity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
+                Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
             });
         }
         return f;
@@ -2091,6 +2125,9 @@ public static class Snapshot
             w.Write(c.SurfaceTension);
             w.Write(c.Cfl);
             w.Write(c.MaxSubsteps);
+            w.Write(c.AdaptiveResolution);
+            w.Write(c.SplitDensityRatio);
+            w.Write(c.MergeDensityRatio);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2115,6 +2152,9 @@ public static class Snapshot
             c.SurfaceTension = r.ReadSingle();
             c.Cfl = r.ReadSingle();
             c.MaxSubsteps = r.ReadInt32();
+            c.AdaptiveResolution = r.ReadBoolean();
+            c.SplitDensityRatio = r.ReadSingle();
+            c.MergeDensityRatio = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2132,6 +2172,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y); w.Write(p.Position.Z);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y); w.Write(p.Velocity.Z);
+            if (version >= SchemaVersion) w.Write(p.Mass);
         }
     }
 
@@ -2147,6 +2188,7 @@ public static class Snapshot
             {
                 Position = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
+                Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
             });
         }
         return f;

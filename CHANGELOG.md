@@ -60,6 +60,11 @@ This project follows [Semantic Versioning](https://semver.org/) and
   - **Fluid weather coupling**: the SPH body drag now uses the ambient
     wind as the relative velocity (a current sweeps floating bodies),
     and the ambient turbulence field drives fluid particles directly.
+  - **Adaptive resolution** (`adaptive_resolution`): particles carry a
+    per-particle mass; under-dense particles split (mass halved) and
+    over-dense close pairs merge (mass/momentum combined), conserving
+    total mass, bounded by the particle cap and a minimum child mass.
+    Off by default; best suited to calm/settled scenes.
   - Preserved through snapshot schema v5 (fluid config block extended,
     version-gated); the schema switches to v5 when any fluid-expansion
     field is non-default.

@@ -39,6 +39,9 @@ pub struct Particle2 {
     pub density: f32,
     /// Pressure from the equation of state (recomputed every step).
     pub pressure: f32,
+    /// Per-particle mass. Uniform `config.particle_mass` unless adaptive
+    /// resolution split/merged the particle (children carry a share).
+    pub mass: f32,
 }
 
 /// Tunables for the 2D SPH fluid. Defaults suit unit-scale scenes
@@ -81,6 +84,16 @@ pub struct FluidConfig2 {
     /// Maximum substeps per world step when `cfl` is enabled (default
     /// `1` = off, i.e. a single pass). Clamps runaway cost.
     pub max_substeps: u32,
+    /// Adaptive resolution (default off): under-dense particles split and
+    /// over-dense neighbors merge, conserving total mass. Changes the
+    /// particle count dynamically (capped at [`MAX_PARTICLES_2D`]).
+    pub adaptive_resolution: bool,
+    /// Split a particle when `density < split_density_ratio * rest_density`
+    /// (isolated / free-surface particle). Finite, `> 0`.
+    pub split_density_ratio: f32,
+    /// Merge a particle into a close neighbor when both exceed
+    /// `merge_density_ratio * rest_density`. Finite, `> 1`.
+    pub merge_density_ratio: f32,
     /// XSPH smoothing factor in `[0, 1]` (velocity diffusion strength).
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area
@@ -109,6 +122,9 @@ impl Default for FluidConfig2 {
             surface_tension: 0.0,
             cfl: 0.0,
             max_substeps: 1,
+            adaptive_resolution: false,
+            split_density_ratio: 0.5,
+            merge_density_ratio: 1.6,
             viscosity: 0.3,
             drag: 4.0,
             max_velocity: 30.0,
@@ -166,6 +182,7 @@ impl FluidState2 {
                 velocity: Vec2::ZERO,
                 density: self.config.rest_density,
                 pressure: 0.0,
+                mass: self.config.particle_mass.max(0.0),
             });
         }
         n
@@ -293,7 +310,6 @@ impl FluidState2 {
     /// Callers must have rebuilt the grid after the latest advection.
     fn sample_pressure(&self, point: Vec2) -> f32 {
         let h = self.config.smoothing_length.max(EPS);
-        let m = self.config.particle_mass.max(0.0);
         let cx = (point.x / h).floor() as i32;
         let cy = (point.y / h).floor() as i32;
         let mut p = 0.0f32;
@@ -304,7 +320,7 @@ impl FluidState2 {
                         let pj = self.particles[j];
                         let r2 = (pj.position - point).length_squared();
                         if r2 < h * h {
-                            p += m * (pj.pressure / pj.density.max(EPS)) * Self::poly6(r2, h);
+                            p += pj.mass * (pj.pressure / pj.density.max(EPS)) * Self::poly6(r2, h);
                         }
                     }
                 }
@@ -490,6 +506,103 @@ impl FluidState2 {
         ((dt / dt_max).ceil() as i64).clamp(1, max as i64) as u32
     }
 
+    /// Recompute per-particle density (poly6 sum, self included, clamped
+    /// against collapse) and pressure (configured EOS, tension-free).
+    fn compute_density_pressure(&mut self, h: f32, nbrs: &mut Vec<usize>) {
+        let cfg = self.config;
+        for i in 0..self.particles.len() {
+            self.neighbors(i, nbrs);
+            let pi = self.particles[i].position;
+            let mut rho = 0.0f32;
+            for &j in nbrs.iter() {
+                let r2 = (self.particles[j].position - pi).length_squared();
+                rho += self.particles[j].mass * Self::poly6(r2, h);
+            }
+            // Safety net against collapse singularities (same role as
+            // MIN_DENSITY for rigid mass): densities above 3x rest are
+            // unphysical packing, not information.
+            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
+        }
+        for p in self.particles.iter_mut() {
+            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
+        }
+    }
+
+    /// Adaptive-resolution pass (opt-in via `adaptive_resolution`): merge
+    /// over-dense close pairs (mass/momentum conserved), then split
+    /// under-dense particles into two half-mass children. Bounded by the
+    /// particle cap and a minimum child mass (so refinement terminates).
+    /// Deterministic (index order, fixed offsets). O(n²) merge scan —
+    /// intended for modest particle counts.
+    fn resample(&mut self, h: f32) {
+        let cfg = self.config;
+        let rest = cfg.rest_density.max(EPS);
+        let split_lo = cfg.split_density_ratio * rest;
+        let merge_hi = cfg.merge_density_ratio * rest;
+        let min_mass = cfg.particle_mass.max(EPS) * 0.125;
+
+        // Merge: combine a high-density particle with a close low-index
+        // high-density neighbor.
+        let n = self.particles.len();
+        let mut absorbed = vec![false; n];
+        let merge_dist_sq = (0.25 * h) * (0.25 * h);
+        for i in 0..n {
+            if absorbed[i] || self.particles[i].density <= merge_hi {
+                continue;
+            }
+            for j in (0..i).rev() {
+                if absorbed[j] || self.particles[j].density <= merge_hi {
+                    continue;
+                }
+                let d2 = (self.particles[i].position - self.particles[j].position).length_squared();
+                if d2 < merge_dist_sq {
+                    let mi = self.particles[i].mass;
+                    let mj = self.particles[j].mass;
+                    let mt = mi + mj;
+                    if mt > EPS {
+                        self.particles[i].velocity = (self.particles[i].velocity * mi
+                            + self.particles[j].velocity * mj)
+                            / mt;
+                        self.particles[i].mass = mt;
+                    }
+                    absorbed[j] = true;
+                    break;
+                }
+            }
+        }
+        if absorbed.iter().any(|&a| a) {
+            let mut kept = Vec::with_capacity(n);
+            for (idx, p) in std::mem::take(&mut self.particles).into_iter().enumerate() {
+                if !absorbed[idx] {
+                    kept.push(p);
+                }
+            }
+            self.particles = kept;
+        }
+
+        // Split: under-dense particles with room to refine spawn a child.
+        let mut out: Vec<Particle2> = Vec::with_capacity(self.particles.len());
+        for p in std::mem::take(&mut self.particles) {
+            if p.density < split_lo && p.mass > min_mass && out.len() + 1 < MAX_PARTICLES_2D {
+                let half = p.mass * 0.5;
+                let off = Vec2::new(0.25 * h, 0.0);
+                out.push(Particle2 {
+                    mass: half,
+                    position: p.position + off,
+                    ..p
+                });
+                out.push(Particle2 {
+                    mass: half,
+                    position: p.position - off,
+                    ..p
+                });
+            } else {
+                out.push(p);
+            }
+        }
+        self.particles = out;
+    }
+
     /// One fluid substep (the full SPH pipeline) over interval `dt`.
     /// Deterministic: particles and bodies are visited in index order with
     /// fixed neighbor-cell order.
@@ -503,29 +616,20 @@ impl FluidState2 {
     ) {
         let cfg = self.config;
         let h = cfg.smoothing_length.max(EPS);
-        let m = cfg.particle_mass.max(0.0);
 
         self.rebuild_grid();
 
-        // 1. Densities (poly6 sum, self included).
+        // 1+2. Densities (poly6 sum) and pressures (EOS, tension-free).
         let mut nbrs: Vec<usize> = Vec::new();
-        for i in 0..self.particles.len() {
-            self.neighbors(i, &mut nbrs);
-            let pi = self.particles[i].position;
-            let mut rho = 0.0f32;
-            for &j in nbrs.iter() {
-                let r2 = (self.particles[j].position - pi).length_squared();
-                rho += m * Self::poly6(r2, h);
-            }
-            // Safety net against collapse singularities (same role as
-            // MIN_DENSITY for rigid mass): densities above 3x rest are
-            // unphysical packing, not information.
-            self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
-        }
+        self.compute_density_pressure(h, &mut nbrs);
 
-        // 2. Pressures (linear or Tait equation of state, tension-free).
-        for p in self.particles.iter_mut() {
-            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
+        // 2b. Adaptive resolution (opt-in): resample, rebuild the grid,
+        // then recompute densities/pressures for the new particle set so
+        // force/integrate see fresh values.
+        if cfg.adaptive_resolution {
+            self.resample(h);
+            self.rebuild_grid();
+            self.compute_density_pressure(h, &mut nbrs);
         }
 
         // 3. Pressure forces (symmetric spiky form) into scratch, plus
@@ -562,11 +666,12 @@ impl FluidState2 {
                         cfg.artificial_viscosity,
                     );
                 }
-                f -= grad * (m * term);
+                f -= grad * (pj.mass * term);
                 if cfg.surface_tension > 0.0 && dist > EPS {
                     let coh = Self::cohesion(dist, h);
                     if coh > 0.0 {
-                        f -= (delta / dist) * (cfg.surface_tension * m * m * coh);
+                        f -= (delta / dist)
+                            * (cfg.surface_tension * self.particles[i].mass * pj.mass * coh);
                     }
                 }
             }
@@ -606,7 +711,7 @@ impl FluidState2 {
                     let pj = self.particles[j];
                     let rho_bar = 0.5 * (rho_i + pj.density.max(EPS));
                     smooth += (pj.velocity - self.particles[i].velocity)
-                        * (m / rho_bar)
+                        * (pj.mass / rho_bar)
                         * Self::poly6((pj.position - pi).length_squared(), h);
                 }
                 v += smooth * cfg.viscosity;
@@ -648,7 +753,7 @@ impl FluidState2 {
                 if vn < 0.0 {
                     self.particles[i].velocity -= normal * vn;
                     // Reaction on the body (statics ignore it internally).
-                    body.apply_impulse(normal * (vn * m), point);
+                    body.apply_impulse(normal * (vn * self.particles[i].mass), point);
                     if !body.is_static {
                         body.is_sleeping = false;
                     }
@@ -1077,5 +1182,57 @@ mod tests {
         let b = run();
         assert_eq!(a.x.to_bits(), b.x.to_bits());
         assert_eq!(a.y.to_bits(), b.y.to_bits());
+    }
+
+    #[test]
+    fn test_fluid_adaptive_resolution_conserves_mass() {
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        // Calm still water (adaptive resolution targets resolved regions,
+        // not the violent surface of a dam break).
+        lattice(&mut world, -0.5, -0.5, 12, 6, 0.25);
+        world.fluid.config.adaptive_resolution = true;
+        let total0: f32 = world.fluid.particles.iter().map(|p| p.mass).sum();
+        for frame in 0..200 {
+            world.step(1.0 / 60.0);
+            if frame % 50 == 0 {
+                finite_fluid(&world, "adaptive");
+            }
+        }
+        finite_fluid(&world, "adaptive final");
+        let total1: f32 = world.fluid.particles.iter().map(|p| p.mass).sum();
+        assert!(
+            (total1 - total0).abs() < 1e-3,
+            "adaptive resolution lost mass: {total0} -> {total1}"
+        );
+        // Count stays within the cap and particles stay contained/calm.
+        assert!(world.fluid.particles.len() <= MAX_PARTICLES_2D);
+        for p in world.fluid.particles.iter() {
+            assert!(
+                p.position.x > -1.0 && p.position.x < 5.0 && p.position.y > -0.6,
+                "adaptive particle escaped: p={}",
+                p.position
+            );
+        }
+    }
+
+    #[test]
+    fn test_fluid_split_conserves_mass_and_caps() {
+        // Directly exercise the split path on under-dense particles.
+        let mut world = crate::World2::new();
+        let added = world.fluid.add_particles(&[Vec2::new(0.0, 0.0)]);
+        assert_eq!(added, 1);
+        for p in world.fluid.particles.iter_mut() {
+            p.density = 0.1; // well under the 0.5 split threshold
+        }
+        let before: f32 = world.fluid.particles.iter().map(|p| p.mass).sum();
+        world.fluid.resample(0.5);
+        assert_eq!(
+            world.fluid.particles.len(),
+            2,
+            "under-dense particle should split"
+        );
+        let after: f32 = world.fluid.particles.iter().map(|p| p.mass).sum();
+        assert!((after - before).abs() < 1e-6, "split must conserve mass");
     }
 }

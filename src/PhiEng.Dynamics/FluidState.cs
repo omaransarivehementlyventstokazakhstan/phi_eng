@@ -14,6 +14,8 @@ public struct FluidParticle2
     public Vector2 Position { get; set; }
     /// <summary>World-space velocity.</summary>
     public Vector2 Velocity { get; set; }
+    /// <summary>Per-particle mass (0 = use config mass).</summary>
+    public float Mass { get; set; }
 }
 
 /// <summary>
@@ -39,6 +41,12 @@ public class FluidConfig2
     public float Cfl { get; set; } = 0.0f;
     /// <summary>Maximum CFL substeps per step (1 = off).</summary>
     public int MaxSubsteps { get; set; } = 1;
+    /// <summary>Adaptive resolution (split under-dense / merge over-dense particles).</summary>
+    public bool AdaptiveResolution { get; set; }
+    /// <summary>Split density ratio (default 0.5).</summary>
+    public float SplitDensityRatio { get; set; } = 0.5f;
+    /// <summary>Merge density ratio (default 1.6).</summary>
+    public float MergeDensityRatio { get; set; } = 1.6f;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -71,7 +79,7 @@ public class FluidState2
         foreach (var p in positions)
         {
             if (Particles.Count >= MaxParticles) break;
-            Particles.Add(new FluidParticle2 { Position = p, Velocity = Vector2.Zero });
+            Particles.Add(new FluidParticle2 { Position = p, Velocity = Vector2.Zero, Mass = Config.ParticleMass });
             added++;
         }
         return added;
@@ -90,6 +98,8 @@ public struct FluidParticle3
     public Vector3 Position { get; set; }
     /// <summary>World-space velocity.</summary>
     public Vector3 Velocity { get; set; }
+    /// <summary>Per-particle mass (0 = use config mass).</summary>
+    public float Mass { get; set; }
 }
 
 /// <summary>
@@ -115,6 +125,12 @@ public class FluidConfig3
     public float Cfl { get; set; } = 0.0f;
     /// <summary>Maximum CFL substeps per step (1 = off).</summary>
     public int MaxSubsteps { get; set; } = 1;
+    /// <summary>Adaptive resolution (split under-dense / merge over-dense particles).</summary>
+    public bool AdaptiveResolution { get; set; }
+    /// <summary>Split density ratio (default 0.5).</summary>
+    public float SplitDensityRatio { get; set; } = 0.5f;
+    /// <summary>Merge density ratio (default 1.6).</summary>
+    public float MergeDensityRatio { get; set; } = 1.6f;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -147,7 +163,7 @@ public class FluidState3
         foreach (var p in positions)
         {
             if (Particles.Count >= MaxParticles) break;
-            Particles.Add(new FluidParticle3 { Position = p, Velocity = Vector3.Zero });
+            Particles.Add(new FluidParticle3 { Position = p, Velocity = Vector3.Zero, Mass = Config.ParticleMass });
             added++;
         }
         return added;
