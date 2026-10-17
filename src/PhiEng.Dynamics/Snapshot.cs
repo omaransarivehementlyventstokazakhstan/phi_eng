@@ -532,6 +532,9 @@ public static class Snapshot
         [JsonPropertyName("rest_density")] public float RestDensity { get; set; } = 1.0f;
         [JsonPropertyName("smoothing_length")] public float SmoothingLength { get; set; } = 0.5f;
         [JsonPropertyName("stiffness")] public float Stiffness { get; set; } = 100.0f;
+        [JsonPropertyName("gamma")] public float Gamma { get; set; } = 1.0f;
+        [JsonPropertyName("artificial_viscosity")] public float ArtificialViscosity { get; set; }
+        [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -557,6 +560,9 @@ public static class Snapshot
         [JsonPropertyName("rest_density")] public float RestDensity { get; set; } = 1.0f;
         [JsonPropertyName("smoothing_length")] public float SmoothingLength { get; set; } = 0.5f;
         [JsonPropertyName("stiffness")] public float Stiffness { get; set; } = 100.0f;
+        [JsonPropertyName("gamma")] public float Gamma { get; set; } = 1.0f;
+        [JsonPropertyName("artificial_viscosity")] public float ArtificialViscosity { get; set; }
+        [JsonPropertyName("surface_tension")] public float SurfaceTension { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
@@ -601,7 +607,9 @@ public static class Snapshot
             // Conditional schema: default worlds stay v3 (byte-compatible
             // with older files); gravity-only worlds v4; ambient worlds
             // v5. Mirrors the Rust writer rule.
-            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f);
+            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
+                || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
+                || w.Fluid.Config.SurfaceTension != 0.0f;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
@@ -781,6 +789,9 @@ public static class Snapshot
                     RestDensity = w.Fluid.Config.RestDensity,
                     SmoothingLength = w.Fluid.Config.SmoothingLength,
                     Stiffness = w.Fluid.Config.Stiffness,
+                    Gamma = w.Fluid.Config.Gamma,
+                    ArtificialViscosity = w.Fluid.Config.ArtificialViscosity,
+                    SurfaceTension = w.Fluid.Config.SurfaceTension,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -850,7 +861,9 @@ public static class Snapshot
         public static World3Dto From(World3 w, SnapshotLoadMode mode)
         {
             // Conditional schema: see World2Dto.From.
-            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f);
+            bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
+                || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
+                || w.Fluid.Config.SurfaceTension != 0.0f;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
@@ -1085,6 +1098,9 @@ public static class Snapshot
                     RestDensity = w.Fluid.Config.RestDensity,
                     SmoothingLength = w.Fluid.Config.SmoothingLength,
                     Stiffness = w.Fluid.Config.Stiffness,
+                    Gamma = w.Fluid.Config.Gamma,
+                    ArtificialViscosity = w.Fluid.Config.ArtificialViscosity,
+                    SurfaceTension = w.Fluid.Config.SurfaceTension,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
@@ -1443,6 +1459,9 @@ public static class Snapshot
             RestDensity = Fin(cfg.RestDensity, "fluid"),
             SmoothingLength = Fin(cfg.SmoothingLength, "fluid"),
             Stiffness = Fin(cfg.Stiffness, "fluid"),
+            Gamma = Fin(cfg.Gamma, "fluid"),
+            ArtificialViscosity = Fin(cfg.ArtificialViscosity, "fluid"),
+            SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1665,6 +1684,9 @@ public static class Snapshot
             RestDensity = Fin(cfg.RestDensity, "fluid"),
             SmoothingLength = Fin(cfg.SmoothingLength, "fluid"),
             Stiffness = Fin(cfg.Stiffness, "fluid"),
+            Gamma = Fin(cfg.Gamma, "fluid"),
+            ArtificialViscosity = Fin(cfg.ArtificialViscosity, "fluid"),
+            SurfaceTension = Fin(cfg.SurfaceTension, "fluid"),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
@@ -1965,15 +1987,21 @@ public static class Snapshot
                 w.Write(e.TangentImpulse);
             }
         }
-        WriteFluid2(w, dto.Fluid);
+        WriteFluid2(w, dto.Fluid, dto.Schema);
     }
 
-    private static void WriteFluidConfig2(BinaryWriter w, FluidConfig2Dto c)
+    private static void WriteFluidConfig2(BinaryWriter w, FluidConfig2Dto c, uint version)
     {
         w.Write(c.ParticleMass);
         w.Write(c.RestDensity);
         w.Write(c.SmoothingLength);
         w.Write(c.Stiffness);
+        if (version >= SchemaVersion)
+        {
+            w.Write(c.Gamma);
+            w.Write(c.ArtificialViscosity);
+            w.Write(c.SurfaceTension);
+        }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
         w.Write(c.MaxVelocity);
@@ -1981,22 +2009,32 @@ public static class Snapshot
         w.Write(c.Enabled);
     }
 
-    private static FluidConfig2Dto ReadFluidConfig2(BinaryReader r) => new()
+    private static FluidConfig2Dto ReadFluidConfig2(BinaryReader r, uint version)
     {
-        ParticleMass = r.ReadSingle(),
-        RestDensity = r.ReadSingle(),
-        SmoothingLength = r.ReadSingle(),
-        Stiffness = r.ReadSingle(),
-        Viscosity = r.ReadSingle(),
-        Drag = r.ReadSingle(),
-        MaxVelocity = r.ReadSingle(),
-        ParticleRadius = r.ReadSingle(),
-        Enabled = r.ReadBoolean(),
-    };
+        var c = new FluidConfig2Dto
+        {
+            ParticleMass = r.ReadSingle(),
+            RestDensity = r.ReadSingle(),
+            SmoothingLength = r.ReadSingle(),
+            Stiffness = r.ReadSingle(),
+        };
+        if (version >= SchemaVersion)
+        {
+            c.Gamma = r.ReadSingle();
+            c.ArtificialViscosity = r.ReadSingle();
+            c.SurfaceTension = r.ReadSingle();
+        }
+        c.Viscosity = r.ReadSingle();
+        c.Drag = r.ReadSingle();
+        c.MaxVelocity = r.ReadSingle();
+        c.ParticleRadius = r.ReadSingle();
+        c.Enabled = r.ReadBoolean();
+        return c;
+    }
 
-    private static void WriteFluid2(BinaryWriter w, FluidState2Dto f)
+    private static void WriteFluid2(BinaryWriter w, FluidState2Dto f, uint version)
     {
-        WriteFluidConfig2(w, f.Config);
+        WriteFluidConfig2(w, f.Config, version);
         w.Write(f.Particles.Count);
         foreach (var p in f.Particles)
         {
@@ -2005,9 +2043,9 @@ public static class Snapshot
         }
     }
 
-    private static FluidState2Dto ReadFluid2(BinaryReader r)
+    private static FluidState2Dto ReadFluid2(BinaryReader r, uint version)
     {
-        var f = new FluidState2Dto { Config = ReadFluidConfig2(r) };
+        var f = new FluidState2Dto { Config = ReadFluidConfig2(r, version) };
         int n = r.ReadInt32();
         if (n < 0 || n > FluidState2.MaxParticles)
             throw new ArgumentException("Fluid particle count out of range.");
@@ -2022,12 +2060,18 @@ public static class Snapshot
         return f;
     }
 
-    private static void WriteFluidConfig3(BinaryWriter w, FluidConfig3Dto c)
+    private static void WriteFluidConfig3(BinaryWriter w, FluidConfig3Dto c, uint version)
     {
         w.Write(c.ParticleMass);
         w.Write(c.RestDensity);
         w.Write(c.SmoothingLength);
         w.Write(c.Stiffness);
+        if (version >= SchemaVersion)
+        {
+            w.Write(c.Gamma);
+            w.Write(c.ArtificialViscosity);
+            w.Write(c.SurfaceTension);
+        }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
         w.Write(c.MaxVelocity);
@@ -2035,22 +2079,32 @@ public static class Snapshot
         w.Write(c.Enabled);
     }
 
-    private static FluidConfig3Dto ReadFluidConfig3(BinaryReader r) => new()
+    private static FluidConfig3Dto ReadFluidConfig3(BinaryReader r, uint version)
     {
-        ParticleMass = r.ReadSingle(),
-        RestDensity = r.ReadSingle(),
-        SmoothingLength = r.ReadSingle(),
-        Stiffness = r.ReadSingle(),
-        Viscosity = r.ReadSingle(),
-        Drag = r.ReadSingle(),
-        MaxVelocity = r.ReadSingle(),
-        ParticleRadius = r.ReadSingle(),
-        Enabled = r.ReadBoolean(),
-    };
+        var c = new FluidConfig3Dto
+        {
+            ParticleMass = r.ReadSingle(),
+            RestDensity = r.ReadSingle(),
+            SmoothingLength = r.ReadSingle(),
+            Stiffness = r.ReadSingle(),
+        };
+        if (version >= SchemaVersion)
+        {
+            c.Gamma = r.ReadSingle();
+            c.ArtificialViscosity = r.ReadSingle();
+            c.SurfaceTension = r.ReadSingle();
+        }
+        c.Viscosity = r.ReadSingle();
+        c.Drag = r.ReadSingle();
+        c.MaxVelocity = r.ReadSingle();
+        c.ParticleRadius = r.ReadSingle();
+        c.Enabled = r.ReadBoolean();
+        return c;
+    }
 
-    private static void WriteFluid3(BinaryWriter w, FluidState3Dto f)
+    private static void WriteFluid3(BinaryWriter w, FluidState3Dto f, uint version)
     {
-        WriteFluidConfig3(w, f.Config);
+        WriteFluidConfig3(w, f.Config, version);
         w.Write(f.Particles.Count);
         foreach (var p in f.Particles)
         {
@@ -2059,9 +2113,9 @@ public static class Snapshot
         }
     }
 
-    private static FluidState3Dto ReadFluid3(BinaryReader r)
+    private static FluidState3Dto ReadFluid3(BinaryReader r, uint version)
     {
-        var f = new FluidState3Dto { Config = ReadFluidConfig3(r) };
+        var f = new FluidState3Dto { Config = ReadFluidConfig3(r, version) };
         int n = r.ReadInt32();
         if (n < 0 || n > FluidState3.MaxParticles)
             throw new ArgumentException("Fluid particle count out of range.");
@@ -2151,7 +2205,7 @@ public static class Snapshot
             }
             dto.Contacts.Add(c);
         }
-        dto.Fluid = ReadFluid2(r);
+        dto.Fluid = ReadFluid2(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;
@@ -2384,7 +2438,7 @@ public static class Snapshot
                 w.Write(e.Tangent2Impulse);
             }
         }
-        WriteFluid3(w, dto.Fluid);
+        WriteFluid3(w, dto.Fluid, dto.Schema);
     }
 
     private static World3Dto ReadWorld3Payload(BinaryReader r, uint version)
@@ -2457,7 +2511,7 @@ public static class Snapshot
             }
             dto.Contacts.Add(c);
         }
-        dto.Fluid = ReadFluid3(r);
+        dto.Fluid = ReadFluid3(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;

@@ -229,6 +229,10 @@ public class SnapshotTests
             Position = world.Fluid.Particles[0].Position,
             Velocity = new Vector2(1.0f, -2.0f),
         };
+        // Schema v5 fluid expansion fields must round-trip.
+        world.Fluid.Config.Gamma = 7.0f;
+        world.Fluid.Config.ArtificialViscosity = 1.2f;
+        world.Fluid.Config.SurfaceTension = 0.7f;
         foreach (var mode in new[] { SnapshotLoadMode.Exact, SnapshotLoadMode.Fresh })
         {
             var rj = Snapshot.World2FromJson(
@@ -247,6 +251,9 @@ public class SnapshotTests
         Assert.Equal(a.Fluid.Config.RestDensity, b.Fluid.Config.RestDensity);
         Assert.Equal(a.Fluid.Config.SmoothingLength, b.Fluid.Config.SmoothingLength);
         Assert.Equal(a.Fluid.Config.Stiffness, b.Fluid.Config.Stiffness);
+        Assert.Equal(a.Fluid.Config.Gamma, b.Fluid.Config.Gamma);
+        Assert.Equal(a.Fluid.Config.ArtificialViscosity, b.Fluid.Config.ArtificialViscosity);
+        Assert.Equal(a.Fluid.Config.SurfaceTension, b.Fluid.Config.SurfaceTension);
         Assert.Equal(a.Fluid.Config.Viscosity, b.Fluid.Config.Viscosity);
         Assert.Equal(a.Fluid.Config.Drag, b.Fluid.Config.Drag);
         Assert.Equal(a.Fluid.Config.MaxVelocity, b.Fluid.Config.MaxVelocity);

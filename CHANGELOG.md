@@ -40,6 +40,22 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Ambient parity block A01–A05** (mirrored Rust↔C#): spring period,
   drag terminal velocity, turbulence determinism, default no-op, and
   scale immunity.
+- **Fluid SPH expansion (Rust; config mirrored to C#)**: new
+  `FluidConfig2/3` tunables, all default-off so existing fluids are
+  bit-identical:
+  - **Tait equation of state** (`gamma`, classic water value `7`):
+    `p = max(0, k*rho0*((rho/rho0)^gamma - 1))` replaces the linear EOS
+    when `gamma > 1`, supporting deep hydrostatic columns with far less
+    artificial stiffness. `gamma == 1` keeps the legacy linear form.
+  - **Monaghan artificial viscosity** (`artificial_viscosity`, `[0, 2]`):
+    a pairwise viscous pressure damping approaching particles; stable at
+    low XSPH settings.
+  - **Surface tension / cohesion** (`surface_tension`): a bounded
+    Akinci-style attractive force that holds droplets together and
+    rounds free surfaces.
+  - Preserved through snapshot schema v5 (fluid config block extended,
+    version-gated); the schema switches to v5 when any fluid-expansion
+    field is non-default.
 
 ## [0.4.0] - 2026-10-16
 

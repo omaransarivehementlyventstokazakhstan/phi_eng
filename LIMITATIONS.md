@@ -74,7 +74,16 @@ jitter/drift — unmeasured territory, not a supported regime.
 SPH particles (`FluidState2`/`FluidState3`) step inside
 `World2::step`/`World3::step` and couple two-way with rigid bodies
 (SAT/analytic boundary impulses plus pressure-sampled buoyancy and
-drag). Fluid state persists through snapshots (schema v3, both
+drag). The pressure model is linear by default (`gamma == 1`); setting
+`gamma > 1` selects the Tait/WCSPH EOS, and `artificial_viscosity` /
+`surface_tension` add Monaghan viscosity / simplified Akinci cohesion.
+Two caveats on the expansion: the solver runs at a fixed `dt`, so stiff
+Tait settings (high `stiffness`, high `gamma`) can violate the CFL
+condition (`dt < h / c0`, `c0 ~ sqrt(gamma*stiffness)`) and diverge —
+tune `stiffness` so `c0` stays near the linear default's `sqrt(k)`; and
+the cohesion kernel is a bounded linear spline, not the full Akinci
+spline (stable and tunable, not a surface-energy match). Fluid state
+persists through snapshots (config block extended at schema v5, both
 languages) and crosses the FFI bridge, and C# carries fluid state for
 round-trips — but C# does not step fluids yet, so managed worlds with
 fluid only round-trip data. 2D polygons and 3D hulls/meshes are

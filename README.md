@@ -220,13 +220,19 @@ contact for that frame rather than a guessed depth.
   is rejected, not faked. `min > max` bounds select the free/limitless
   mode explicitly. Removal drops touching joints and remaps survivors.
 - **SPH fluids (2D and 3D, Rust stepping):** weakly-compressible
-  particles (poly6 density, linear pressure EOS, spiky pressure force,
-  XSPH viscosity) stepped as phase 1b of each world step, with two-way
-  rigid coupling (boundary impulses, pressure-sampled buoyancy,
-  Morison-style drag). New `ConvexMesh` shape carries exact
-  Mirtich-style mass properties. Fluid state persists in snapshots
-  (schema v3) and crosses FFI; C# carries fluid state but does not step
-  it yet.
+  particles (poly6 density, spiky pressure force, XSPH viscosity)
+  stepped as phase 1b of each world step, with two-way rigid coupling
+  (boundary impulses, pressure-sampled buoyancy, Morison-style drag).
+  The pressure model is selectable: the legacy **linear EOS**
+  (`gamma == 1`) or a **Tait/WCSPH** equation of state (`gamma > 1`,
+  classic water `7.0`) that supports deep columns with less artificial
+  stiffness; optional **Monaghan artificial viscosity** damps
+  approaching particles, and optional **Akinci-style surface tension**
+  (cohesion) holds droplets together and rounds free surfaces. All
+  three default off, so existing fluids are bit-identical. New
+  `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
+  state persists in snapshots (config block extended at schema v5) and
+  crosses FFI; C# carries fluid state but does not step it yet.
 - **Gravitational physics (2D and 3D, both languages):** uniform field
   (status quo, bit-identical when untouched), central attractor
   (`mu` at a fixed point, O(n)), full N-body pairwise Newtonian

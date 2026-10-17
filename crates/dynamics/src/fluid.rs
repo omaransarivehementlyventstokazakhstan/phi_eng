@@ -51,12 +51,27 @@ pub struct FluidConfig2 {
     pub rest_density: f32,
     /// Kernel support radius. Should cover ~2 particle spacings.
     pub smoothing_length: f32,
-    /// Pressure stiffness `k` in `p = max(0, k * (rho - rho0))`.
-    /// Must be large enough to support hydrostatic columns: at depth
-    /// `d`, equilibrium needs `k * (rho - rho0) = rho0 * g * d`, so
-    /// soft `k` caps out (via the density clamp) long before deep
-    /// water is supported. Default suits meter-scale 60 Hz scenes.
+    /// Pressure stiffness `k` in `p = max(0, k * (rho - rho0))` (linear
+    /// EOS, `gamma == 1`). Must be large enough to support hydrostatic
+    /// columns: at depth `d`, equilibrium needs `k * (rho - rho0) =
+    /// rho0 * g * d`. In Tait mode (`gamma > 1`) this acts as the
+    /// `B`-scale of `p = max(0, k*rho0*((rho/rho0)^gamma - 1))`.
     pub stiffness: f32,
+    /// Equation-of-state exponent. `1.0` selects the legacy linear EOS
+    /// (bit-identical); values `> 1` select the Tait/WCSPH form
+    /// `p = max(0, k*rho0*((rho/rho0)^gamma - 1))`, which supports deep
+    /// columns with far less artificial stiffness. Classic water value
+    /// is `7.0`.
+    pub gamma: f32,
+    /// Monaghan artificial-viscosity `alpha` in `[0, 2]` (default `0` =
+    /// off). Adds a pairwise viscous pressure `Π = -alpha*c*mu/rho_bar`
+    /// that damps approaching particles; `c` is approximated by
+    /// `sqrt(stiffness)`. Stable at low XSPH settings.
+    pub artificial_viscosity: f32,
+    /// Akinci-style surface-tension (cohesion) strength `kappa` (default
+    /// `0` = off). Neighbors feel a bounded attractive force that holds
+    /// droplets together and rounds free surfaces; balanced by pressure.
+    pub surface_tension: f32,
     /// XSPH smoothing factor in `[0, 1]` (velocity diffusion strength).
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area
@@ -80,6 +95,9 @@ impl Default for FluidConfig2 {
             rest_density: 1.0,
             smoothing_length: 0.5,
             stiffness: 100.0,
+            gamma: 1.0,
+            artificial_viscosity: 0.0,
+            surface_tension: 0.0,
             viscosity: 0.3,
             drag: 4.0,
             max_velocity: 30.0,
@@ -168,6 +186,47 @@ impl FluidState2 {
         use std::f32::consts::PI;
         let s = -30.0 / (PI * h * h * h * h * h) * (h - r) * (h - r);
         r_vec / r * s
+    }
+
+    /// Pressure from the configured equation of state (tension-free).
+    /// `gamma == 1` is the legacy linear form (bit-identical); `gamma > 1`
+    /// is the Tait/WCSPH form `B*((rho/rho0)^gamma - 1)` with `B = k*rho0`.
+    fn pressure(density: f32, rest_density: f32, stiffness: f32, gamma: f32) -> f32 {
+        if gamma == 1.0 {
+            (stiffness * (density - rest_density)).max(0.0)
+        } else {
+            let rho0 = rest_density.max(EPS);
+            (stiffness * rho0 * ((density / rho0).powf(gamma) - 1.0)).max(0.0)
+        }
+    }
+
+    /// Monaghan artificial-viscosity pressure term for an approaching
+    /// pair (`(v_i - v_j) · (x_i - x_j) < 0`), else zero. `r_sq` is
+    /// `|x_i - x_j|^2`; `c` is the (approximate) speed of sound.
+    fn artificial_pressure(
+        delta: Vec2,
+        v_rel: Vec2,
+        r_sq: f32,
+        h: f32,
+        rho_bar: f32,
+        c: f32,
+        alpha: f32,
+    ) -> f32 {
+        let vd = v_rel.dot(delta);
+        if vd >= 0.0 {
+            return 0.0;
+        }
+        let mu = h * vd / (r_sq + 0.01 * h * h);
+        -alpha * c * mu / rho_bar.max(EPS)
+    }
+
+    /// Bounded cohesion kernel (simplified Akinci): `1 - r/h` on `[0, h)`.
+    fn cohesion(dist: f32, h: f32) -> f32 {
+        if dist >= h {
+            0.0
+        } else {
+            1.0 - dist / h
+        }
     }
 
     /// Rebuild the neighbor grid from current positions. Non-finite
@@ -395,17 +454,20 @@ impl FluidState2 {
             self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
 
-        // 2. Pressures (linear equation of state, tension-free).
+        // 2. Pressures (linear or Tait equation of state, tension-free).
         for p in self.particles.iter_mut() {
-            p.pressure = (cfg.stiffness * (p.density - cfg.rest_density)).max(0.0);
+            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
         }
 
-        // 3. Pressure forces (symmetric spiky form) into scratch.
+        // 3. Pressure forces (symmetric spiky form) into scratch, plus
+        // optional Monaghan artificial viscosity and surface tension.
+        let c_s = cfg.stiffness.max(0.0).sqrt();
         self.forces.clear();
         self.forces.resize(self.particles.len(), Vec2::ZERO);
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
             let pi = self.particles[i].position;
+            let vi = self.particles[i].velocity;
             let rho_i = self.particles[i].density.max(EPS);
             let p_i = self.particles[i].pressure;
             let mut f = Vec2::ZERO;
@@ -418,7 +480,26 @@ impl FluidState2 {
                 let delta = pi - pj.position;
                 let dist = delta.length();
                 let grad = Self::spiky_grad(delta, dist, h);
-                f -= grad * (m * (p_i / (rho_i * rho_i) + pj.pressure / (rho_j * rho_j)));
+                let mut term = p_i / (rho_i * rho_i) + pj.pressure / (rho_j * rho_j);
+                if cfg.artificial_viscosity > 0.0 && dist > EPS {
+                    let rho_bar = 0.5 * (rho_i + rho_j);
+                    term += Self::artificial_pressure(
+                        delta,
+                        vi - pj.velocity,
+                        dist * dist,
+                        h,
+                        rho_bar,
+                        c_s,
+                        cfg.artificial_viscosity,
+                    );
+                }
+                f -= grad * (m * term);
+                if cfg.surface_tension > 0.0 && dist > EPS {
+                    let coh = Self::cohesion(dist, h);
+                    if coh > 0.0 {
+                        f -= (delta / dist) * (cfg.surface_tension * m * m * coh);
+                    }
+                }
             }
             self.forces[i] = f;
         }
@@ -700,5 +781,109 @@ mod tests {
             assert_eq!(pa.x.to_bits(), pb.x.to_bits());
             assert_eq!(pa.y.to_bits(), pb.y.to_bits());
         }
+    }
+
+    #[test]
+    fn test_fluid_tait_eos_pressure() {
+        let (k, rho0) = (100.0f32, 1.0f32);
+        // At and below rest density: tension-free (zero).
+        assert_eq!(FluidState2::pressure(rho0, rho0, k, 7.0), 0.0);
+        assert_eq!(FluidState2::pressure(0.5, rho0, k, 7.0), 0.0);
+        // Above rest density: Tait pressure exceeds the linear EOS and
+        // grows faster (gamma > 1).
+        let linear = FluidState2::pressure(1.2, rho0, k, 1.0);
+        let tait = FluidState2::pressure(1.2, rho0, k, 7.0);
+        assert!(linear > 0.0);
+        assert!(
+            tait > linear,
+            "Tait {tait} should exceed linear {linear} at rho=1.2"
+        );
+        // gamma == 1 is exactly the legacy linear form.
+        assert_eq!(
+            FluidState2::pressure(1.2, rho0, k, 1.0).to_bits(),
+            (k * (1.2 - rho0)).to_bits()
+        );
+    }
+
+    #[test]
+    fn test_fluid_artificial_pressure_sign() {
+        let delta = Vec2::new(1.0, 0.0);
+        // Approaching (v_rel · delta < 0) -> positive viscous pressure.
+        let p_app =
+            FluidState2::artificial_pressure(delta, Vec2::new(-2.0, 0.0), 1.0, 0.5, 1.0, 10.0, 1.0);
+        // Separating -> no term.
+        let p_sep =
+            FluidState2::artificial_pressure(delta, Vec2::new(2.0, 0.0), 1.0, 0.5, 1.0, 10.0, 1.0);
+        assert!(
+            p_app > 0.0,
+            "approaching pair needs a positive viscous term"
+        );
+        assert_eq!(p_sep, 0.0, "separating pair gets no viscous term");
+        // alpha = 0 disables it entirely.
+        let p0 =
+            FluidState2::artificial_pressure(delta, Vec2::new(-2.0, 0.0), 1.0, 0.5, 1.0, 10.0, 0.0);
+        assert_eq!(p0, 0.0);
+    }
+
+    #[test]
+    fn test_fluid_cohesion_kernel() {
+        let h = 0.5f32;
+        assert!(FluidState2::cohesion(0.1, h) > FluidState2::cohesion(0.4, h));
+        assert_eq!(FluidState2::cohesion(h, h), 0.0);
+        assert_eq!(FluidState2::cohesion(0.9, h), 0.0);
+    }
+
+    #[test]
+    fn test_fluid_cohesion_attracts() {
+        // Two isolated particles with pressure disabled and strong
+        // cohesion must accelerate toward each other.
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::ZERO;
+        let added = world
+            .fluid
+            .add_particles(&[Vec2::new(0.0, 0.0), Vec2::new(0.4, 0.0)]);
+        assert_eq!(added, 2);
+        world.fluid.config.stiffness = 0.0;
+        world.fluid.config.viscosity = 0.0;
+        world.fluid.config.surface_tension = 1000.0;
+        world.step(1.0 / 60.0);
+        let v0 = world.fluid.particles[0].velocity;
+        let v1 = world.fluid.particles[1].velocity;
+        assert!(v0.x > 0.0, "particle 0 not attracted toward +x: {v0:?}");
+        assert!(v1.x < 0.0, "particle 1 not attracted toward -x: {v1:?}");
+    }
+
+    #[test]
+    fn test_fluid_expansion_tank_stable() {
+        // Tait EOS + Monaghan viscosity + surface tension, in the dam
+        // tank: must stay finite, contained, and calm.
+        let mut world = crate::World2::new();
+        tank(&mut world);
+        // Still-water tank (settling transient, hydrostatic support).
+        lattice(&mut world, -0.5, -0.5, 12, 6, 0.25);
+        world.fluid.config.gamma = 7.0;
+        world.fluid.config.stiffness = 15.0;
+        world.fluid.config.artificial_viscosity = 1.0;
+        world.fluid.config.surface_tension = 0.5;
+        let dt = 1.0 / 60.0;
+        let mut peak = 0.0f32;
+        for frame in 0..400 {
+            world.step(dt);
+            for p in world.fluid.particles.iter() {
+                peak = peak.max(p.velocity.length());
+            }
+            if frame % 100 == 0 {
+                finite_fluid(&world, "expansion tank");
+            }
+        }
+        finite_fluid(&world, "expansion tank final");
+        for p in world.fluid.particles.iter() {
+            assert!(
+                p.position.x > -1.0 && p.position.x < 5.0 && p.position.y > -0.6,
+                "expansion particle escaped: p={}",
+                p.position
+            );
+        }
+        assert!(peak < 30.0, "expansion tank blew up, peak={peak}");
     }
 }

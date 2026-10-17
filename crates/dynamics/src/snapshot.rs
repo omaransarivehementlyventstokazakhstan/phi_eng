@@ -344,6 +344,15 @@ struct FluidConfig2Dto {
     rest_density: f32,
     smoothing_length: f32,
     stiffness: f32,
+    /// Tait EOS exponent (schema v5; default 1.0 = linear, elided).
+    #[serde(default = "default_gamma", skip_serializing_if = "is_one")]
+    gamma: f32,
+    /// Monaghan artificial viscosity alpha (schema v5; default 0.0, elided).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    artificial_viscosity: f32,
+    /// Surface-tension strength kappa (schema v5; default 0.0, elided).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    surface_tension: f32,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -369,6 +378,12 @@ struct FluidConfig3Dto {
     rest_density: f32,
     smoothing_length: f32,
     stiffness: f32,
+    #[serde(default = "default_gamma", skip_serializing_if = "is_one")]
+    gamma: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    artificial_viscosity: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    surface_tension: f32,
     viscosity: f32,
     drag: f32,
     max_velocity: f32,
@@ -390,6 +405,9 @@ impl Default for FluidConfig2Dto {
             rest_density: c.rest_density,
             smoothing_length: c.smoothing_length,
             stiffness: c.stiffness,
+            gamma: c.gamma,
+            artificial_viscosity: c.artificial_viscosity,
+            surface_tension: c.surface_tension,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -407,6 +425,9 @@ impl Default for FluidConfig3Dto {
             rest_density: c.rest_density,
             smoothing_length: c.smoothing_length,
             stiffness: c.stiffness,
+            gamma: c.gamma,
+            artificial_viscosity: c.artificial_viscosity,
+            surface_tension: c.surface_tension,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -431,6 +452,11 @@ fn is_one(v: &f32) -> bool {
 /// that never used ambient features serialize exactly like schema v3/v4.
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
+}
+
+/// Default Tait exponent (linear EOS) for pre-v5 fluid configs.
+fn default_gamma() -> f32 {
+    1.0
 }
 
 /// Gravity configuration DTO (schema v4). Field names mirror
@@ -919,6 +945,9 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
             rest_density: c.rest_density,
             smoothing_length: c.smoothing_length,
             stiffness: c.stiffness,
+            gamma: c.gamma,
+            artificial_viscosity: c.artificial_viscosity,
+            surface_tension: c.surface_tension,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -944,6 +973,9 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
             rest_density: c.rest_density,
             smoothing_length: c.smoothing_length,
             stiffness: c.stiffness,
+            gamma: c.gamma,
+            artificial_viscosity: c.artificial_viscosity,
+            surface_tension: c.surface_tension,
             viscosity: c.viscosity,
             drag: c.drag,
             max_velocity: c.max_velocity,
@@ -1489,7 +1521,11 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // ambient features (or a non-unit ambient scale) uses v5. The clock
     // is only persisted at v5 (it is irrelevant without ambient fields),
     // keeping v3/v4 output byte-identical.
-    let has_ambient = w.ambient.is_active() || w.bodies.iter().any(|b| b.ambient_scale != 1.0);
+    let has_ambient = w.ambient.is_active()
+        || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
+        || w.fluid.config.gamma != 1.0
+        || w.fluid.config.artificial_viscosity != 0.0
+        || w.fluid.config.surface_tension != 0.0;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1663,7 +1699,11 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     };
 
     // Conditional schema: see `world2_dto`.
-    let has_ambient = w.ambient.is_active() || w.bodies.iter().any(|b| b.ambient_scale != 1.0);
+    let has_ambient = w.ambient.is_active()
+        || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
+        || w.fluid.config.gamma != 1.0
+        || w.fluid.config.artificial_viscosity != 0.0
+        || w.fluid.config.surface_tension != 0.0;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1813,6 +1853,9 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
     finite(c.rest_density, "fluid.rest_density")?;
     finite(c.smoothing_length, "fluid.smoothing_length")?;
     finite(c.stiffness, "fluid.stiffness")?;
+    finite(c.gamma, "fluid.gamma")?;
+    finite(c.artificial_viscosity, "fluid.artificial_viscosity")?;
+    finite(c.surface_tension, "fluid.surface_tension")?;
     finite(c.viscosity, "fluid.viscosity")?;
     finite(c.drag, "fluid.drag")?;
     finite(c.max_velocity, "fluid.max_velocity")?;
@@ -1825,6 +1868,9 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
         rest_density: c.rest_density,
         smoothing_length: c.smoothing_length,
         stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -1856,6 +1902,9 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
     finite(c.rest_density, "fluid.rest_density")?;
     finite(c.smoothing_length, "fluid.smoothing_length")?;
     finite(c.stiffness, "fluid.stiffness")?;
+    finite(c.gamma, "fluid.gamma")?;
+    finite(c.artificial_viscosity, "fluid.artificial_viscosity")?;
+    finite(c.surface_tension, "fluid.surface_tension")?;
     finite(c.viscosity, "fluid.viscosity")?;
     finite(c.drag, "fluid.drag")?;
     finite(c.max_velocity, "fluid.max_velocity")?;
@@ -1868,6 +1917,9 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
         rest_density: c.rest_density,
         smoothing_length: c.smoothing_length,
         stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
         viscosity: c.viscosity,
         drag: c.drag,
         max_velocity: c.max_velocity,
@@ -3156,7 +3208,7 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
             write_f32(&mut p, e.tangent_impulse);
         }
     }
-    encode_fluid2(&mut p, &dto.fluid);
+    encode_fluid2(&mut p, &dto.fluid, dto.schema);
     Ok(encode_envelope(KIND_WORLD2, dto.schema, &p))
 }
 
@@ -3228,11 +3280,17 @@ fn decode_opt_time(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
     }
 }
 
-fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto) {
+fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
     write_f32(out, c.particle_mass);
     write_f32(out, c.rest_density);
     write_f32(out, c.smoothing_length);
     write_f32(out, c.stiffness);
+    // Schema v5: EOS/viscosity/surface-tension block.
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        write_f32(out, c.gamma);
+        write_f32(out, c.artificial_viscosity);
+        write_f32(out, c.surface_tension);
+    }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
     write_f32(out, c.max_velocity);
@@ -3240,12 +3298,24 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto) {
     write_u8(out, c.enabled as u8);
 }
 
-fn decode_fluid_config2(r: &mut Reader) -> Result<FluidConfig2Dto, SnapshotError> {
-    let c = FluidConfig2Dto {
-        particle_mass: r.read_f32()?,
-        rest_density: r.read_f32()?,
-        smoothing_length: r.read_f32()?,
-        stiffness: r.read_f32()?,
+fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto, SnapshotError> {
+    let particle_mass = r.read_f32()?;
+    let rest_density = r.read_f32()?;
+    let smoothing_length = r.read_f32()?;
+    let stiffness = r.read_f32()?;
+    let (gamma, artificial_viscosity, surface_tension) = if version >= SNAPSHOT_SCHEMA_VERSION {
+        (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+    } else {
+        (default_gamma(), 0.0, 0.0)
+    };
+    Ok(FluidConfig2Dto {
+        particle_mass,
+        rest_density,
+        smoothing_length,
+        stiffness,
+        gamma,
+        artificial_viscosity,
+        surface_tension,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3255,12 +3325,11 @@ fn decode_fluid_config2(r: &mut Reader) -> Result<FluidConfig2Dto, SnapshotError
             1 => true,
             _ => return Err(SnapshotError::Parse("bad fluid enabled flag".into())),
         },
-    };
-    Ok(c)
+    })
 }
 
-fn encode_fluid2(out: &mut Vec<u8>, f: &Fluid2Dto) {
-    encode_fluid_config2(out, &f.config);
+fn encode_fluid2(out: &mut Vec<u8>, f: &Fluid2Dto, version: u32) {
+    encode_fluid_config2(out, &f.config, version);
     write_u32(out, f.particles.len() as u32);
     for p in &f.particles {
         write_f32(out, p.position.x);
@@ -3270,8 +3339,8 @@ fn encode_fluid2(out: &mut Vec<u8>, f: &Fluid2Dto) {
     }
 }
 
-fn decode_fluid2(r: &mut Reader) -> Result<Fluid2Dto, SnapshotError> {
-    let config = decode_fluid_config2(r)?;
+fn decode_fluid2(r: &mut Reader, version: u32) -> Result<Fluid2Dto, SnapshotError> {
+    let config = decode_fluid_config2(r, version)?;
     let n = r.read_u32()? as usize;
     if n > super::fluid::MAX_PARTICLES_2D {
         return Err(SnapshotError::Parse(
@@ -3294,11 +3363,16 @@ fn decode_fluid2(r: &mut Reader) -> Result<Fluid2Dto, SnapshotError> {
     Ok(Fluid2Dto { config, particles })
 }
 
-fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto) {
+fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
     write_f32(out, c.particle_mass);
     write_f32(out, c.rest_density);
     write_f32(out, c.smoothing_length);
     write_f32(out, c.stiffness);
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        write_f32(out, c.gamma);
+        write_f32(out, c.artificial_viscosity);
+        write_f32(out, c.surface_tension);
+    }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
     write_f32(out, c.max_velocity);
@@ -3306,12 +3380,24 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto) {
     write_u8(out, c.enabled as u8);
 }
 
-fn decode_fluid_config3(r: &mut Reader) -> Result<FluidConfig3Dto, SnapshotError> {
-    let c = FluidConfig3Dto {
-        particle_mass: r.read_f32()?,
-        rest_density: r.read_f32()?,
-        smoothing_length: r.read_f32()?,
-        stiffness: r.read_f32()?,
+fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto, SnapshotError> {
+    let particle_mass = r.read_f32()?;
+    let rest_density = r.read_f32()?;
+    let smoothing_length = r.read_f32()?;
+    let stiffness = r.read_f32()?;
+    let (gamma, artificial_viscosity, surface_tension) = if version >= SNAPSHOT_SCHEMA_VERSION {
+        (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+    } else {
+        (default_gamma(), 0.0, 0.0)
+    };
+    Ok(FluidConfig3Dto {
+        particle_mass,
+        rest_density,
+        smoothing_length,
+        stiffness,
+        gamma,
+        artificial_viscosity,
+        surface_tension,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3321,12 +3407,11 @@ fn decode_fluid_config3(r: &mut Reader) -> Result<FluidConfig3Dto, SnapshotError
             1 => true,
             _ => return Err(SnapshotError::Parse("bad fluid enabled flag".into())),
         },
-    };
-    Ok(c)
+    })
 }
 
-fn encode_fluid3(out: &mut Vec<u8>, f: &Fluid3Dto) {
-    encode_fluid_config3(out, &f.config);
+fn encode_fluid3(out: &mut Vec<u8>, f: &Fluid3Dto, version: u32) {
+    encode_fluid_config3(out, &f.config, version);
     write_u32(out, f.particles.len() as u32);
     for p in &f.particles {
         write_f32(out, p.position.x);
@@ -3338,8 +3423,8 @@ fn encode_fluid3(out: &mut Vec<u8>, f: &Fluid3Dto) {
     }
 }
 
-fn decode_fluid3(r: &mut Reader) -> Result<Fluid3Dto, SnapshotError> {
-    let config = decode_fluid_config3(r)?;
+fn decode_fluid3(r: &mut Reader, version: u32) -> Result<Fluid3Dto, SnapshotError> {
+    let config = decode_fluid_config3(r, version)?;
     let n = r.read_u32()? as usize;
     if n > super::fluid3::MAX_PARTICLES_3D {
         return Err(SnapshotError::Parse(
@@ -3955,7 +4040,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
             }
             v
         },
-        fluid: decode_fluid2(&mut r)?,
+        fluid: decode_fluid2(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(
@@ -4043,7 +4128,7 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
             write_f32(&mut p, e.tangent2_impulse);
         }
     }
-    encode_fluid3(&mut p, &dto.fluid);
+    encode_fluid3(&mut p, &dto.fluid, dto.schema);
     Ok(encode_envelope(KIND_WORLD3, dto.schema, &p))
 }
 
@@ -4171,7 +4256,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             }
             v
         },
-        fluid: decode_fluid3(&mut r)?,
+        fluid: decode_fluid3(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(
@@ -4378,9 +4463,47 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_fluid_roundtrip_2d() {
+    fn test_snapshot_fluid_expansion_roundtrip() {
+        use crate::body::Shape2;
         let mut w = World2::new();
         w.add_static_body(
+            Vec2::new(0.0, -1.0),
+            Shape2::Box {
+                half_extents: Vec2::new(10.0, 0.5),
+            },
+        )
+        .expect("valid shape");
+        w.fluid
+            .add_particles(&[Vec2::new(0.0, 0.0), Vec2::new(0.25, 0.0)]);
+        w.fluid.config.gamma = 7.0;
+        w.fluid.config.stiffness = 15.0;
+        w.fluid.config.artificial_viscosity = 1.2;
+        w.fluid.config.surface_tension = 0.7;
+        for _ in 0..10 {
+            w.step(1.0 / 60.0);
+        }
+        // JSON + binary round-trips preserve the new fluid config (v5).
+        let r = world2_from_json(
+            &world2_to_json(&w, LoadMode::Exact).expect("json"),
+            LoadMode::Exact,
+        )
+        .expect("json load");
+        assert_eq!(r.fluid.config.gamma, 7.0);
+        assert_eq!(r.fluid.config.artificial_viscosity, 1.2);
+        assert_eq!(r.fluid.config.surface_tension, 0.7);
+        let b = world2_from_binary(
+            &world2_to_binary(&w, LoadMode::Exact).expect("bin"),
+            LoadMode::Exact,
+        )
+        .expect("bin load");
+        assert_eq!(b.fluid.config.gamma, 7.0);
+        assert_eq!(b.fluid.config.artificial_viscosity, 1.2);
+        assert_eq!(b.fluid.config.surface_tension, 0.7);
+    }
+
+    #[test]
+    fn test_snapshot_fluid_roundtrip_2d() {
+        let mut w = World2::new();        w.add_static_body(
             Vec2::new(0.0, -1.0),
             Shape2::Box {
                 half_extents: Vec2::new(10.0, 0.5),
@@ -4765,7 +4888,7 @@ mod tests {
             pos: 0,
         };
         assert!(matches!(
-            decode_fluid2(&mut r),
+            decode_fluid2(&mut r, SNAPSHOT_SCHEMA_GRAVITY),
             Err(SnapshotError::Parse(_))
         ));
         let mut r = Reader {
@@ -4773,7 +4896,7 @@ mod tests {
             pos: 0,
         };
         assert!(matches!(
-            decode_fluid2(&mut r),
+            decode_fluid2(&mut r, SNAPSHOT_SCHEMA_GRAVITY),
             Err(SnapshotError::Parse(_))
         ));
         let mut r = Reader {
@@ -4782,7 +4905,7 @@ mod tests {
         };
         // Same caps apply in 3D (fewer fields per particle, same guard).
         assert!(matches!(
-            decode_fluid3(&mut r),
+            decode_fluid3(&mut r, SNAPSHOT_SCHEMA_GRAVITY),
             Err(SnapshotError::Parse(_))
         ));
     }

@@ -51,8 +51,17 @@ pub struct FluidConfig3 {
     pub rest_density: f32,
     /// Kernel support radius. Should cover ~2 particle spacings.
     pub smoothing_length: f32,
-    /// Pressure stiffness `k` in `p = max(0, k * (rho - rho0))`.
+    /// Pressure stiffness `k` in `p = max(0, k * (rho - rho0))` (linear
+    /// EOS, `gamma == 1`). In Tait mode (`gamma > 1`) this acts as the
+    /// `B`-scale of `p = max(0, k*rho0*((rho/rho0)^gamma - 1))`.
     pub stiffness: f32,
+    /// Equation-of-state exponent: `1.0` = legacy linear (bit-identical),
+    /// `> 1` = Tait/WCSPH (classic water value `7.0`).
+    pub gamma: f32,
+    /// Monaghan artificial-viscosity `alpha` in `[0, 2]` (default `0`).
+    pub artificial_viscosity: f32,
+    /// Akinci-style surface-tension (cohesion) strength `kappa` (default `0`).
+    pub surface_tension: f32,
     /// XSPH smoothing factor in `[0, 1]` (velocity diffusion strength).
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area.
@@ -72,6 +81,9 @@ impl Default for FluidConfig3 {
             rest_density: 1.0,
             smoothing_length: 0.5,
             stiffness: 100.0,
+            gamma: 1.0,
+            artificial_viscosity: 0.0,
+            surface_tension: 0.0,
             viscosity: 0.3,
             drag: 4.0,
             max_velocity: 30.0,
@@ -155,6 +167,45 @@ impl FluidState3 {
         use std::f32::consts::PI;
         let s = -45.0 / (PI * h * h * h * h * h * h) * (h - r) * (h - r);
         r_vec / r * s
+    }
+
+    /// Pressure from the configured equation of state (tension-free).
+    /// See [`crate::fluid::FluidState2::pressure`] (private there; kept
+    /// in sync). `gamma == 1` is the legacy linear form.
+    fn pressure(density: f32, rest_density: f32, stiffness: f32, gamma: f32) -> f32 {
+        if gamma == 1.0 {
+            (stiffness * (density - rest_density)).max(0.0)
+        } else {
+            let rho0 = rest_density.max(EPS);
+            (stiffness * rho0 * ((density / rho0).powf(gamma) - 1.0)).max(0.0)
+        }
+    }
+
+    /// Monaghan artificial-viscosity pressure term (see 2D counterpart).
+    fn artificial_pressure(
+        delta: Vec3,
+        v_rel: Vec3,
+        r_sq: f32,
+        h: f32,
+        rho_bar: f32,
+        c: f32,
+        alpha: f32,
+    ) -> f32 {
+        let vd = v_rel.dot(delta);
+        if vd >= 0.0 {
+            return 0.0;
+        }
+        let mu = h * vd / (r_sq + 0.01 * h * h);
+        -alpha * c * mu / rho_bar.max(EPS)
+    }
+
+    /// Bounded cohesion kernel (see 2D counterpart).
+    fn cohesion(dist: f32, h: f32) -> f32 {
+        if dist >= h {
+            0.0
+        } else {
+            1.0 - dist / h
+        }
     }
 
     /// Rebuild the neighbor grid from current positions. Non-finite
@@ -479,17 +530,20 @@ impl FluidState3 {
             self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
 
-        // 2. Pressures (linear equation of state, tension-free).
+        // 2. Pressures (linear or Tait equation of state, tension-free).
         for p in self.particles.iter_mut() {
-            p.pressure = (cfg.stiffness * (p.density - cfg.rest_density)).max(0.0);
+            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
         }
 
-        // 3. Pressure forces (symmetric spiky form) into scratch.
+        // 3. Pressure forces (symmetric spiky form) into scratch, plus
+        // optional Monaghan artificial viscosity and surface tension.
+        let c_s = cfg.stiffness.max(0.0).sqrt();
         self.forces.clear();
         self.forces.resize(self.particles.len(), Vec3::ZERO);
         for i in 0..self.particles.len() {
             self.neighbors(i, &mut nbrs);
             let pi = self.particles[i].position;
+            let vi = self.particles[i].velocity;
             let rho_i = self.particles[i].density.max(EPS);
             let p_i = self.particles[i].pressure;
             let mut f = Vec3::ZERO;
@@ -502,7 +556,26 @@ impl FluidState3 {
                 let delta = pi - pj.position;
                 let dist = delta.length();
                 let grad = Self::spiky_grad(delta, dist, h);
-                f -= grad * (m * (p_i / (rho_i * rho_i) + pj.pressure / (rho_j * rho_j)));
+                let mut term = p_i / (rho_i * rho_i) + pj.pressure / (rho_j * rho_j);
+                if cfg.artificial_viscosity > 0.0 && dist > EPS {
+                    let rho_bar = 0.5 * (rho_i + rho_j);
+                    term += Self::artificial_pressure(
+                        delta,
+                        vi - pj.velocity,
+                        dist * dist,
+                        h,
+                        rho_bar,
+                        c_s,
+                        cfg.artificial_viscosity,
+                    );
+                }
+                f -= grad * (m * term);
+                if cfg.surface_tension > 0.0 && dist > EPS {
+                    let coh = Self::cohesion(dist, h);
+                    if coh > 0.0 {
+                        f -= (delta / dist) * (cfg.surface_tension * m * m * coh);
+                    }
+                }
             }
             self.forces[i] = f;
         }
@@ -805,5 +878,60 @@ mod tests {
             assert_eq!(pa.y.to_bits(), pb.y.to_bits());
             assert_eq!(pa.z.to_bits(), pb.z.to_bits());
         }
+    }
+
+    #[test]
+    fn test_fluid3_tait_and_cohesion() {
+        let (k, rho0) = (100.0f32, 1.0f32);
+        assert_eq!(FluidState3::pressure(rho0, rho0, k, 7.0), 0.0);
+        assert_eq!(FluidState3::pressure(0.5, rho0, k, 7.0), 0.0);
+        let linear = FluidState3::pressure(1.2, rho0, k, 1.0);
+        let tait = FluidState3::pressure(1.2, rho0, k, 7.0);
+        assert!(tait > linear && linear > 0.0);
+        // Cohesion kernel bounded, zero at support.
+        let h = 0.5f32;
+        assert!(FluidState3::cohesion(0.1, h) > FluidState3::cohesion(0.4, h));
+        assert_eq!(FluidState3::cohesion(h, h), 0.0);
+        // Artificial viscosity: approaching -> positive, separating -> 0.
+        let delta = Vec3::new(1.0, 0.0, 0.0);
+        assert!(
+            FluidState3::artificial_pressure(
+                delta,
+                Vec3::new(-2.0, 0.0, 0.0),
+                1.0,
+                0.5,
+                1.0,
+                10.0,
+                1.0
+            ) > 0.0
+        );
+        assert_eq!(
+            FluidState3::artificial_pressure(
+                delta,
+                Vec3::new(2.0, 0.0, 0.0),
+                1.0,
+                0.5,
+                1.0,
+                10.0,
+                1.0
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_fluid3_cohesion_attracts() {
+        let mut world = crate::World3::new();
+        world.gravity = Vec3::ZERO;
+        let added = world
+            .fluid
+            .add_particles(&[Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.4, 0.0, 0.0)]);
+        assert_eq!(added, 2);
+        world.fluid.config.stiffness = 0.0;
+        world.fluid.config.viscosity = 0.0;
+        world.fluid.config.surface_tension = 1000.0;
+        world.step(1.0 / 60.0);
+        assert!(world.fluid.particles[0].velocity.x > 0.0);
+        assert!(world.fluid.particles[1].velocity.x < 0.0);
     }
 }

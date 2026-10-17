@@ -29,6 +29,12 @@ public class FluidConfig2
     public float SmoothingLength { get; set; } = 0.5f;
     /// <summary>Pressure stiffness in the linear equation of state.</summary>
     public float Stiffness { get; set; } = 100.0f;
+    /// <summary>Equation-of-state exponent: 1.0 = linear (legacy), &gt; 1 = Tait/WCSPH (water ~7.0).</summary>
+    public float Gamma { get; set; } = 1.0f;
+    /// <summary>Monaghan artificial-viscosity alpha in [0, 2] (0 = off).</summary>
+    public float ArtificialViscosity { get; set; } = 0.0f;
+    /// <summary>Akinci-style surface-tension (cohesion) strength kappa (0 = off).</summary>
+    public float SurfaceTension { get; set; } = 0.0f;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -95,6 +101,12 @@ public class FluidConfig3
     public float SmoothingLength { get; set; } = 0.5f;
     /// <summary>Pressure stiffness in the linear equation of state.</summary>
     public float Stiffness { get; set; } = 100.0f;
+    /// <summary>Equation-of-state exponent: 1.0 = linear (legacy), &gt; 1 = Tait/WCSPH.</summary>
+    public float Gamma { get; set; } = 1.0f;
+    /// <summary>Monaghan artificial-viscosity alpha in [0, 2] (0 = off).</summary>
+    public float ArtificialViscosity { get; set; } = 0.0f;
+    /// <summary>Akinci-style surface-tension (cohesion) strength kappa (0 = off).</summary>
+    public float SurfaceTension { get; set; } = 0.0f;
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
