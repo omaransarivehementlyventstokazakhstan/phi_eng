@@ -146,9 +146,9 @@ memory-only.
 
 Canonical, well-known problems, checked against closed-form solutions
 where the method can hit them and against qualitative trends where it
-cannot (gaps pinned in `LIMITATIONS.md`). 19 tests; all green
+cannot (gaps pinned in `LIMITATIONS.md`). 20 tests; all green
 (**debug** wall clock, Windows x64, single-threaded: **~0.1 s SHM +
-~31.9 s SPH ≈ 32.0 s total** — dominated by the 3D hydrostatic column).
+~32.9 s SPH ≈ 33.0 s total** — dominated by the 3D hydrostatic column).
 
 ### Simple harmonic motion (damped linear oscillator)
 The spring field is `m x'' + c x' + k x = 0`, so the analytic solution
@@ -179,6 +179,7 @@ is exact:
 | `sph_sloshing_settles`         | kicked tank                     | slosh damps monotonically (peak speed decays)       | 0.44 s       | pass   |
 | `sph_poiseuille_profile`       | channel + wall friction         | center fastest (curved, no-slip)                    | 1.04 s       | pass   |
 | `sph_wall_friction_slows_flow` | channel, free vs no-slip        | no-slip removes tangential momentum                 | 2.37 s       | pass   |
+| `sph_two_phase_heavy_sinks`   | heavy droplet in light fluid    | heavy phase sinks under gravity                    | 0.98 s       | pass   |
 | `sph3_hydrostatic_pressure`    | 3D column                       | order-of-magnitude `ρgh`                            | 21.37 s      | pass   |
 
 Findings worth knowing:

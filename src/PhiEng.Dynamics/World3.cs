@@ -240,6 +240,10 @@ public class World3
             AmbientIntegration.Kick3(Bodies, Ambient, Time, h);
         }
 
+        // Fluid phase - SPH particles and two-way body coupling (no-op
+        // when the fluid holds no particles).
+        FluidIntegration3.StepFluid3(Fluid, Bodies, Gravity, Ambient, Time, dt);
+
         UpdateBroadphase();
         _pairs.Clear();
         Broadphase.CollectPairs(_pairs);

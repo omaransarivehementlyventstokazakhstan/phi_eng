@@ -118,4 +118,109 @@ public class EquivalenceTests
             Assert.True(dq < 1e-1f, $"f28-3d {name}: orientations diverged (tol 1e-1): {mq} vs {nq}");
         }
     }
+
+    [Fact]
+    public void Fluid_Native_Managed_BehaviorParity()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        var pts = new List<Vector2>();
+        for (int iy = 0; iy < 6; iy++)
+        {
+            for (int ix = 0; ix < 8; ix++)
+            {
+                pts.Add(new Vector2(ix * 0.25f, iy * 0.25f));
+            }
+        }
+
+        var managed = new World2();
+        managed.Gravity = new Vector2(0.0f, -9.81f);
+        managed.AddStaticBody(new Vector2(2.0f, -1.0f), new BoxShape2(new Vector2(3.0f, 0.5f)));
+        managed.AddStaticBody(new Vector2(-1.0f, 2.0f), new BoxShape2(new Vector2(0.5f, 3.5f)));
+        managed.AddStaticBody(new Vector2(5.0f, 2.0f), new BoxShape2(new Vector2(0.5f, 3.5f)));
+        managed.Fluid.AddParticles(pts);
+
+        using var native = new PhiNativeWorld();
+        native.AddStaticBody(new Vector2(2.0f, -1.0f), new Vector2(3.0f, 0.5f));
+        // Native wrapper has box-only statics; side walls are thin boxes.
+        native.AddStaticBody(new Vector2(-1.0f, 2.0f), new Vector2(0.5f, 3.5f));
+        native.AddStaticBody(new Vector2(5.0f, 2.0f), new Vector2(0.5f, 3.5f));
+        native.AddFluidParticles(pts);
+
+        for (int i = 0; i < 60; i++)
+        {
+            managed.Step(Dt);
+            native.Step(Dt);
+        }
+
+        var got = native.GetFluidParticles(pts.Count);
+        Assert.Equal(managed.Fluid.Particles.Count, got.Count);
+        for (int i = 0; i < got.Count; i++)
+        {
+            var mp = managed.Fluid.Particles[i].Position;
+            float dp = (mp - got[i].Position).Length();
+            var mv = managed.Fluid.Particles[i].Velocity;
+            float dv = (mv - got[i].Velocity).Length();
+            if (i < 3)
+            {
+                _output.WriteLine($"[fluid-parity] p{i}: dpos={dp} dvel={dv}");
+            }
+            Assert.True(dp < 1e-4f, $"fluid particle {i} positions diverged (tol 1e-4): {mp} vs {got[i].Position}");
+            Assert.True(dv < 1e-3f, $"fluid particle {i} velocities diverged (tol 1e-3): {mv} vs {got[i].Velocity}");
+        }
+    }
+
+    [Fact]
+    public void Fluid3_Native_Managed_BehaviorParity()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        var pts = new List<Vector3>();
+        for (int iz = 0; iz < 3; iz++)
+        {
+            for (int iy = 0; iy < 3; iy++)
+            {
+                for (int ix = 0; ix < 3; ix++)
+                {
+                    pts.Add(new Vector3(ix * 0.25f, iy * 0.25f, iz * 0.25f));
+                }
+            }
+        }
+
+        var managed = new World3();
+        managed.Gravity = new Vector3(0.0f, -9.81f, 0.0f);
+        managed.AddStaticBody(new Vector3(1.0f, -1.0f, 1.0f), new BoxShape3(new Vector3(2.0f, 0.5f, 2.0f)));
+        managed.Fluid.AddParticles(pts);
+
+        using var native = new PhiNativeWorld3();
+        native.AddStaticBody(new Vector3(1.0f, -1.0f, 1.0f), new Vector3(2.0f, 0.5f, 2.0f));
+        native.AddFluidParticles(pts);
+
+        for (int i = 0; i < 30; i++)
+        {
+            managed.Step(Dt);
+            native.Step(Dt);
+        }
+
+        var got = native.GetFluidParticles(pts.Count);
+        Assert.Equal(managed.Fluid.Particles.Count, got.Count);
+        for (int i = 0; i < got.Count; i++)
+        {
+            var mp = managed.Fluid.Particles[i].Position;
+            float dp = (mp - got[i].Position).Length();
+            if (i < 3)
+            {
+                _output.WriteLine($"[fluid3-parity] p{i}: dpos={dp}");
+            }
+            Assert.True(dp < 1e-4f, $"3D fluid particle {i} positions diverged (tol 1e-4): {mp} vs {got[i].Position}");
+        }
+    }
 }

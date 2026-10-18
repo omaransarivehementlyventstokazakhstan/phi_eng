@@ -237,6 +237,202 @@ public sealed class PhiNativeWorld3 : IDisposable
         },
     };
 
+    /// <summary>Set the 3D SPH fluid config (EOS, viscosity, CFL, phases, ...).</summary>
+    public unsafe void SetFluidConfig(Dynamics.FluidConfig3 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = ToFfi(config);
+            int ok = NativeMethods.phieng_world3_set_fluid_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected fluid config (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the 3D SPH fluid config from the native world.</summary>
+    public unsafe Dynamics.FluidConfig3 GetFluidConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.FluidConfig3Ffi ffi;
+            int ok = NativeMethods.phieng_world3_get_fluid_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native 3D fluid config read failed.");
+            }
+            return FromFfi(ffi);
+        }
+    }
+
+    private static unsafe NativeMethods.FluidConfig3Ffi ToFfi(Dynamics.FluidConfig3 c)
+    {
+        var f = new NativeMethods.FluidConfig3Ffi
+        {
+            ParticleMass = c.ParticleMass,
+            RestDensity = c.RestDensity,
+            SmoothingLength = c.SmoothingLength,
+            Stiffness = c.Stiffness,
+            Gamma = c.Gamma,
+            ArtificialViscosity = c.ArtificialViscosity,
+            SurfaceTension = c.SurfaceTension,
+            Cfl = c.Cfl,
+            MaxSubsteps = (uint)c.MaxSubsteps,
+            AdaptiveResolution = c.AdaptiveResolution ? (byte)1 : (byte)0,
+            SplitDensityRatio = c.SplitDensityRatio,
+            MergeDensityRatio = c.MergeDensityRatio,
+            BoundaryParticles = c.BoundaryParticles ? (byte)1 : (byte)0,
+            Viscosity = c.Viscosity,
+            Drag = c.Drag,
+            WallFriction = c.WallFriction,
+            PhaseCount = c.PhaseCount,
+            MaxVelocity = c.MaxVelocity,
+            ParticleRadius = c.ParticleRadius,
+            Enabled = c.Enabled ? (byte)1 : (byte)0,
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            f.PhaseRestDensity[i] = c.PhaseRestDensity[i];
+            f.PhaseMass[i] = c.PhaseMass[i];
+        }
+        return f;
+    }
+
+    private static unsafe Dynamics.FluidConfig3 FromFfi(NativeMethods.FluidConfig3Ffi f)
+    {
+        var rho = new float[4];
+        var mass = new float[4];
+        for (int i = 0; i < 4; i++)
+        {
+            rho[i] = f.PhaseRestDensity[i];
+            mass[i] = f.PhaseMass[i];
+        }
+        return new Dynamics.FluidConfig3
+        {
+            ParticleMass = f.ParticleMass,
+            RestDensity = f.RestDensity,
+            SmoothingLength = f.SmoothingLength,
+            Stiffness = f.Stiffness,
+            Gamma = f.Gamma,
+            ArtificialViscosity = f.ArtificialViscosity,
+            SurfaceTension = f.SurfaceTension,
+            Cfl = f.Cfl,
+            MaxSubsteps = (int)f.MaxSubsteps,
+            AdaptiveResolution = f.AdaptiveResolution != 0,
+            SplitDensityRatio = f.SplitDensityRatio,
+            MergeDensityRatio = f.MergeDensityRatio,
+            BoundaryParticles = f.BoundaryParticles != 0,
+            Viscosity = f.Viscosity,
+            Drag = f.Drag,
+            WallFriction = f.WallFriction,
+            PhaseCount = f.PhaseCount,
+            PhaseRestDensity = rho,
+            PhaseMass = mass,
+            MaxVelocity = f.MaxVelocity,
+            ParticleRadius = f.ParticleRadius,
+            Enabled = f.Enabled != 0,
+        };
+    }
+
+    /// <summary>Add 3D SPH fluid particles. Returns the number added.</summary>
+    public unsafe uint AddFluidParticles(System.Collections.Generic.IEnumerable<Vector3> positions)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var list = positions as System.Collections.Generic.IList<Vector3> ?? new System.Collections.Generic.List<Vector3>(positions);
+            var flat = new float[list.Count * 3];
+            for (int i = 0; i < list.Count; i++)
+            {
+                flat[i * 3] = list[i].X;
+                flat[i * 3 + 1] = list[i].Y;
+                flat[i * 3 + 2] = list[i].Z;
+            }
+            fixed (float* p = flat)
+            {
+                return NativeMethods.phieng_world3_fluid_add(_handle, p, (uint)list.Count);
+            }
+        }
+    }
+
+    /// <summary>Add 3D SPH fluid particles with per-particle phases. Returns the number added.</summary>
+    public unsafe uint AddFluidParticlesPhase(System.Collections.Generic.IEnumerable<Vector3> positions, System.Collections.Generic.IEnumerable<byte> phases)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var posList = positions as System.Collections.Generic.IList<Vector3> ?? new System.Collections.Generic.List<Vector3>(positions);
+            var phaseList = phases as System.Collections.Generic.IList<byte> ?? new System.Collections.Generic.List<byte>(phases);
+            if (posList.Count != phaseList.Count)
+            {
+                throw new ArgumentException("positions and phases must have the same length.");
+            }
+            var flat = new float[posList.Count * 3];
+            var ph = new byte[phaseList.Count];
+            for (int i = 0; i < posList.Count; i++)
+            {
+                flat[i * 3] = posList[i].X;
+                flat[i * 3 + 1] = posList[i].Y;
+                flat[i * 3 + 2] = posList[i].Z;
+                ph[i] = phaseList[i];
+            }
+            fixed (float* p = flat)
+            fixed (byte* q = ph)
+            {
+                return NativeMethods.phieng_world3_fluid_add_phase(_handle, p, q, (uint)posList.Count);
+            }
+        }
+    }
+
+    /// <summary>Number of fluid particles in the native 3D world.</summary>
+    public uint FluidCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                return NativeMethods.phieng_world3_fluid_count(_handle);
+            }
+        }
+    }
+
+    /// <summary>Remove all 3D fluid particles (keeps allocations).</summary>
+    public void FluidClear()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.phieng_world3_fluid_clear(_handle);
+        }
+    }
+
+    /// <summary>Read up to <paramref name="max"/> 3D fluid particles (position, velocity).</summary>
+    public unsafe List<(Vector3 Position, Vector3 Velocity)> GetFluidParticles(int max)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var flat = new float[System.Math.Max(0, max) * 6];
+            uint n;
+            fixed (float* p = flat)
+            {
+                n = NativeMethods.phieng_world3_fluid_get(_handle, p, (uint)System.Math.Max(0, max));
+            }
+            var result = new List<(Vector3, Vector3)>((int)n);
+            for (int i = 0; i < n; i++)
+            {
+                result.Add((
+                    new Vector3(flat[i * 6], flat[i * 6 + 1], flat[i * 6 + 2]),
+                    new Vector3(flat[i * 6 + 3], flat[i * 6 + 4], flat[i * 6 + 5])));
+            }
+            return result;
+        }
+    }
+
     public int BodyCount
     {
         get

@@ -18,6 +18,10 @@ public struct FluidParticle2
     public float Mass { get; set; }
     /// <summary>Phase index for multi-phase fluids (0 = default phase).</summary>
     public byte Phase { get; set; }
+    /// <summary>Smoothed density from the poly6 sum (recomputed every step, never persisted).</summary>
+    internal float Density { get; set; }
+    /// <summary>Pressure from the equation of state (recomputed every step, never persisted).</summary>
+    internal float Pressure { get; set; }
 }
 
 /// <summary>
@@ -84,6 +88,27 @@ public class FluidState2
     /// <summary>Live particles in insertion order.</summary>
     public List<FluidParticle2> Particles { get; } = new();
 
+    /// <summary>Uniform-grid neighbor index (rebuilt every step). Never persisted.</summary>
+    internal Dictionary<(int, int), List<int>> Grid { get; } = new();
+    /// <summary>Per-particle force scratch, resized as needed. Never persisted.</summary>
+    internal List<Vector2> Forces { get; } = new();
+    /// <summary>Reused world-space polygon scratch for boundary tests. Never persisted.</summary>
+    internal List<Vector2> PolyScratch { get; } = new();
+    /// <summary>Reused (point, normal, area) surface samples for buoyancy. Never persisted.</summary>
+    internal List<(Vector2 Point, Vector2 Normal, float Area)> SampleScratch { get; } = new();
+    /// <summary>Steps since vacated grid cells were compacted. Never persisted.</summary>
+    internal int ClearsSinceCompact { get; set; }
+    /// <summary>Recycled cell buffers for <see cref="Grid"/>. Never persisted.</summary>
+    internal List<List<int>> GridPool { get; } = new();
+    /// <summary>Boundary (ghost) particles for pressure coupling. Regenerated when enabled. Never persisted.</summary>
+    internal List<FluidParticle2> Boundary { get; } = new();
+    /// <summary>Cell -&gt; boundary indices (rebuilt with <see cref="Boundary"/>). Never persisted.</summary>
+    internal Dictionary<(int, int), List<int>> BoundaryGrid { get; } = new();
+    /// <summary>Fingerprint of the static bodies + kernel config that produced <see cref="Boundary"/>. Never persisted.</summary>
+    internal ulong BoundaryRevision { get; set; }
+    /// <summary>Boundary regeneration counter (cache observability; not persisted).</summary>
+    public ulong BoundaryRegenCount { get; internal set; }
+
     /// <summary>Adds particles, capped at <see cref="MaxParticles"/> total. Returns the count added.</summary>
     public int AddParticles(IEnumerable<Vector2> positions)
     {
@@ -129,6 +154,10 @@ public struct FluidParticle3
     public float Mass { get; set; }
     /// <summary>Phase index for multi-phase fluids (0 = default phase).</summary>
     public byte Phase { get; set; }
+    /// <summary>Smoothed density from the poly6 sum (recomputed every step, never persisted).</summary>
+    internal float Density { get; set; }
+    /// <summary>Pressure from the equation of state (recomputed every step, never persisted).</summary>
+    internal float Pressure { get; set; }
 }
 
 /// <summary>
@@ -194,6 +223,27 @@ public class FluidState3
     public FluidConfig3 Config { get; set; } = new();
     /// <summary>Live particles in insertion order.</summary>
     public List<FluidParticle3> Particles { get; } = new();
+
+    /// <summary>Uniform-grid neighbor index (rebuilt every step). Never persisted.</summary>
+    internal Dictionary<(int, int, int), List<int>> Grid { get; } = new();
+    /// <summary>Per-particle force scratch, resized as needed. Never persisted.</summary>
+    internal List<Vector3> Forces { get; } = new();
+    /// <summary>Reused world-space hull-vertex scratch for boundary tests. Never persisted.</summary>
+    internal List<Vector3> HullScratch { get; } = new();
+    /// <summary>Reused (point, normal, area) surface samples for buoyancy. Never persisted.</summary>
+    internal List<(Vector3 Point, Vector3 Normal, float Area)> SampleScratch { get; } = new();
+    /// <summary>Steps since vacated grid cells were compacted. Never persisted.</summary>
+    internal int ClearsSinceCompact { get; set; }
+    /// <summary>Recycled cell buffers for <see cref="Grid"/>. Never persisted.</summary>
+    internal List<List<int>> GridPool { get; } = new();
+    /// <summary>Boundary (ghost) particles for pressure coupling. Regenerated when enabled. Never persisted.</summary>
+    internal List<FluidParticle3> Boundary { get; } = new();
+    /// <summary>Cell -&gt; boundary indices (rebuilt with <see cref="Boundary"/>). Never persisted.</summary>
+    internal Dictionary<(int, int, int), List<int>> BoundaryGrid { get; } = new();
+    /// <summary>Fingerprint of the static bodies + kernel config that produced <see cref="Boundary"/>. Never persisted.</summary>
+    internal ulong BoundaryRevision { get; set; }
+    /// <summary>Boundary regeneration counter (cache observability; not persisted).</summary>
+    public ulong BoundaryRegenCount { get; internal set; }
 
     /// <summary>Adds particles, capped at <see cref="MaxParticles"/> total. Returns the count added.</summary>
     public int AddParticles(IEnumerable<Vector3> positions)

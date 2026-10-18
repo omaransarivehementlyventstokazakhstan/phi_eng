@@ -241,6 +241,16 @@ public class SnapshotTests
         world.Fluid.Config.MergeDensityRatio = 1.8f;
         world.Fluid.Config.BoundaryParticles = true;
         world.Fluid.Config.WallFriction = 0.4f;
+        world.Fluid.Config.PhaseCount = 2;
+        world.Fluid.Config.PhaseRestDensity = new float[] { 1.0f, 2.0f, 1.0f, 1.0f };
+        world.Fluid.Config.PhaseMass = new float[] { 0.0625f, 0.125f, 0.0625f, 0.0625f };
+        world.Fluid.Particles[1] = new FluidParticle2
+        {
+            Position = world.Fluid.Particles[1].Position,
+            Velocity = world.Fluid.Particles[1].Velocity,
+            Mass = world.Fluid.Particles[1].Mass,
+            Phase = 1,
+        };
         foreach (var mode in new[] { SnapshotLoadMode.Exact, SnapshotLoadMode.Fresh })
         {
             var rj = Snapshot.World2FromJson(
@@ -269,6 +279,9 @@ public class SnapshotTests
         Assert.Equal(a.Fluid.Config.MergeDensityRatio, b.Fluid.Config.MergeDensityRatio);
         Assert.Equal(a.Fluid.Config.BoundaryParticles, b.Fluid.Config.BoundaryParticles);
         Assert.Equal(a.Fluid.Config.WallFriction, b.Fluid.Config.WallFriction);
+        Assert.Equal(a.Fluid.Config.PhaseCount, b.Fluid.Config.PhaseCount);
+        Assert.Equal(a.Fluid.Config.PhaseRestDensity, b.Fluid.Config.PhaseRestDensity);
+        Assert.Equal(a.Fluid.Config.PhaseMass, b.Fluid.Config.PhaseMass);
         Assert.Equal(a.Fluid.Config.Viscosity, b.Fluid.Config.Viscosity);
         Assert.Equal(a.Fluid.Config.Drag, b.Fluid.Config.Drag);
         Assert.Equal(a.Fluid.Config.MaxVelocity, b.Fluid.Config.MaxVelocity);
@@ -279,6 +292,7 @@ public class SnapshotTests
             Assert.Equal(a.Fluid.Particles[i].Position, b.Fluid.Particles[i].Position);
             Assert.Equal(a.Fluid.Particles[i].Velocity, b.Fluid.Particles[i].Velocity);
             Assert.Equal(a.Fluid.Particles[i].Mass, b.Fluid.Particles[i].Mass);
+            Assert.Equal(a.Fluid.Particles[i].Phase, b.Fluid.Particles[i].Phase);
         }
     }
 

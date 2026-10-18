@@ -236,13 +236,18 @@ contact for that frame rather than a guessed depth.
   over-dense, mass-conserving) refines resolved regions, and optional
   **boundary particles** sample static bodies into fixed ghost particles
   that exert SPH pressure on the fluid (a pressure-based wall that
-  reduces tunneling), and optional **wall no-slip** (`wall_friction`,
-  free-slip by default) drives the tangential velocity toward the wall's
-  for a curved Poiseuille-like channel profile. All default
-  off, so existing fluids are bit-identical. New
-  `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
-  state persists in snapshots (config block extended at schema v5) and
-  crosses FFI; C# carries fluid state but does not step it yet.
+   reduces tunneling), and optional **wall no-slip** (`wall_friction`,
+   free-slip by default) drives the tangential velocity toward the wall's
+   for a curved Poiseuille-like channel profile. Optional **two-phase**
+   fluids give each particle a phase index (0..=3) with per-phase rest
+   density and mass, so a heavier phase sinks under gravity
+   (Rayleigh–Taylor, oil/water buoyancy). All default
+   off, so existing fluids are bit-identical. New
+   `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
+   state persists in snapshots (config block extended at schema v5) and
+   crosses FFI (config set/get plus phase-aware insert); the managed C#
+   solver mirrors the Rust pipeline stage-by-stage (behavior parity,
+   tolerance-based) and steps as phase 1b of managed world steps.
 - **Gravitational physics (2D and 3D, both languages):** uniform field
   (status quo, bit-identical when untouched), central attractor
   (`mu` at a fixed point, O(n)), full N-body pairwise Newtonian

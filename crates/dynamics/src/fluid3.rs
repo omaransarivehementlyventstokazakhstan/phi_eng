@@ -153,11 +153,17 @@ pub struct FluidState3 {
     clears_since_compact: u32,
     /// Recycled cell buffers for `grid` (see `rebuild_grid`). Memory-only.
     grid_pool: Vec<Vec<usize>>,
-    /// Boundary (ghost) particles for pressure coupling. Regenerated each
-    /// substep; never persisted.
+    /// Boundary (ghost) particles for pressure coupling. Regenerated only
+    /// when the static-body set/transforms or kernel config change
+    /// (see `boundary_revision`); never persisted.
     boundary: Vec<Particle3>,
     /// Cell -> boundary indices (rebuilt with `boundary`).
     boundary_grid: FxHashMap<(i32, i32, i32), Vec<usize>>,
+    /// Fingerprint of the static bodies + kernel config that produced
+    /// the current `boundary` ghosts (see the 2D counterpart).
+    boundary_revision: u64,
+    /// Boundary regeneration counter (observability for tests).
+    boundary_regens: u64,
 }
 
 impl FluidState3 {
@@ -173,6 +179,8 @@ impl FluidState3 {
             grid_pool: Vec::new(),
             boundary: Vec::new(),
             boundary_grid: FxHashMap::default(),
+            boundary_revision: 0,
+            boundary_regens: 0,
         }
     }
 
@@ -646,6 +654,65 @@ impl FluidState3 {
         }
     }
 
+    /// Fingerprint of everything `refresh_boundaries` depends on (3D):
+    /// kernel config plus each static body's transform and shape.
+    /// FNV-1a over little-endian field bytes (see the 2D counterpart).
+    fn boundary_fingerprint(cfg: &FluidConfig3, bodies: &[RigidBody3]) -> u64 {
+        const FNV_OFFSET: u64 = 1469598103934665603;
+        const FNV_PRIME: u64 = 1099511628211;
+        let mut h = FNV_OFFSET;
+        let mut mix = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= b as u64;
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+        };
+        mix(&cfg.smoothing_length.to_le_bytes());
+        mix(&cfg.particle_mass.to_le_bytes());
+        mix(&cfg.rest_density.to_le_bytes());
+        for body in bodies.iter().filter(|b| b.is_static) {
+            mix(&body.transform.position.x.to_le_bytes());
+            mix(&body.transform.position.y.to_le_bytes());
+            mix(&body.transform.position.z.to_le_bytes());
+            mix(&body.transform.rotation.x.to_le_bytes());
+            mix(&body.transform.rotation.y.to_le_bytes());
+            mix(&body.transform.rotation.z.to_le_bytes());
+            mix(&body.transform.rotation.w.to_le_bytes());
+            match &body.shape {
+                Some(Shape3::Sphere { radius }) => {
+                    mix(&[1u8]);
+                    mix(&radius.to_le_bytes());
+                }
+                Some(Shape3::Box { half_extents }) => {
+                    mix(&[2u8]);
+                    mix(&half_extents.x.to_le_bytes());
+                    mix(&half_extents.y.to_le_bytes());
+                    mix(&half_extents.z.to_le_bytes());
+                }
+                Some(Shape3::Capsule {
+                    radius,
+                    half_length,
+                }) => {
+                    mix(&[3u8]);
+                    mix(&radius.to_le_bytes());
+                    mix(&half_length.to_le_bytes());
+                }
+                Some(Shape3::ConvexHull { vertices })
+                | Some(Shape3::ConvexMesh { vertices, .. }) => {
+                    mix(&[4u8]);
+                    mix(&(vertices.len() as u64).to_le_bytes());
+                    for v in vertices.iter() {
+                        mix(&v.x.to_le_bytes());
+                        mix(&v.y.to_le_bytes());
+                        mix(&v.z.to_le_bytes());
+                    }
+                }
+                None => mix(&[0u8]),
+            }
+        }
+        h
+    }
+
     /// Regenerate boundary (ghost) particles from static bodies (3D).
     /// Sphere/box/capsule surfaces; hulls/meshes use a per-vertex sphere
     /// approximation (same policy as the 2D impulse path).
@@ -944,11 +1011,18 @@ impl FluidState3 {
             self.compute_density_pressure(h, &mut nbrs);
         }
 
-        // 2c. Boundary particles (opt-in): regenerate ghosts, build grid,
-        // compute their density/pressure from the fluid.
+        // 2c. Boundary particles (opt-in): regenerate ghosts only when
+        // the static set/transforms or kernel config changed
+        // (fingerprinted), build their grid, and compute their
+        // density/pressure from the fluid (every substep).
         if cfg.boundary_particles {
-            self.refresh_boundaries(bodies, h * 0.5);
-            self.rebuild_boundary_grid(h);
+            let fp = Self::boundary_fingerprint(&cfg, bodies);
+            if self.boundary_revision != fp || self.boundary.is_empty() {
+                self.refresh_boundaries(bodies, h * 0.5);
+                self.rebuild_boundary_grid(h);
+                self.boundary_revision = fp;
+                self.boundary_regens += 1;
+            }
             self.compute_boundary_density_pressure(h, &mut nbrs);
         }
 
@@ -1439,6 +1513,46 @@ mod tests {
             );
         }
         assert!(peak < 30.0, "3D boundary run blew up, peak={peak}");
+    }
+
+    #[test]
+    fn test_fluid3_boundary_particles_persisted() {
+        let mut world = crate::World3::new();
+        tank(&mut world);
+        lattice(&mut world, Vec3::new(0.0, 0.0, 0.0), 4, 6, 4, 0.25);
+        world.fluid.config.boundary_particles = true;
+        for _ in 0..5 {
+            world.step(1.0 / 60.0);
+        }
+        assert_eq!(
+            world.fluid.boundary_regens, 1,
+            "static scene should regenerate ghosts once"
+        );
+        let snapshot: Vec<(f32, f32, f32)> = world
+            .fluid
+            .boundary
+            .iter()
+            .map(|p| (p.position.x, p.position.y, p.position.z))
+            .collect();
+        for _ in 0..5 {
+            world.step(1.0 / 60.0);
+        }
+        assert_eq!(
+            world.fluid.boundary_regens, 1,
+            "unchanged statics must not regenerate ghosts"
+        );
+        assert_eq!(world.fluid.boundary.len(), snapshot.len());
+        for (p, (x, y, z)) in world.fluid.boundary.iter().zip(snapshot.iter()) {
+            assert_eq!(p.position.x.to_bits(), x.to_bits());
+            assert_eq!(p.position.y.to_bits(), y.to_bits());
+            assert_eq!(p.position.z.to_bits(), z.to_bits());
+        }
+        world.bodies[0].transform.position.x += 1.0;
+        world.step(1.0 / 60.0);
+        assert_eq!(
+            world.fluid.boundary_regens, 2,
+            "moved static must regenerate ghosts"
+        );
     }
 
     #[test]

@@ -576,6 +576,355 @@ pub unsafe extern "C" fn phieng_world3_get_ambient_config(
     1
 }
 
+/// SPH fluid config layout (2D) mirrored to C#. `#[repr(C)]`; the
+/// `phase_rest_density` / `phase_mass` arrays are 4 floats each.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FluidConfig2Ffi {
+    pub particle_mass: f32,
+    pub rest_density: f32,
+    pub smoothing_length: f32,
+    pub stiffness: f32,
+    pub gamma: f32,
+    pub artificial_viscosity: f32,
+    pub surface_tension: f32,
+    pub cfl: f32,
+    pub max_substeps: u32,
+    pub adaptive_resolution: bool,
+    pub split_density_ratio: f32,
+    pub merge_density_ratio: f32,
+    pub boundary_particles: bool,
+    pub viscosity: f32,
+    pub drag: f32,
+    pub wall_friction: f32,
+    pub phase_count: u8,
+    pub phase_rest_density: [f32; 4],
+    pub phase_mass: [f32; 4],
+    pub max_velocity: f32,
+    pub particle_radius: f32,
+    pub enabled: bool,
+}
+
+/// 3D counterpart (identical field set to the 2D config).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FluidConfig3Ffi {
+    pub particle_mass: f32,
+    pub rest_density: f32,
+    pub smoothing_length: f32,
+    pub stiffness: f32,
+    pub gamma: f32,
+    pub artificial_viscosity: f32,
+    pub surface_tension: f32,
+    pub cfl: f32,
+    pub max_substeps: u32,
+    pub adaptive_resolution: bool,
+    pub split_density_ratio: f32,
+    pub merge_density_ratio: f32,
+    pub boundary_particles: bool,
+    pub viscosity: f32,
+    pub drag: f32,
+    pub wall_friction: f32,
+    pub phase_count: u8,
+    pub phase_rest_density: [f32; 4],
+    pub phase_mass: [f32; 4],
+    pub max_velocity: f32,
+    pub particle_radius: f32,
+    pub enabled: bool,
+}
+
+fn valid_fluid_config_f32(v: f32) -> bool {
+    v.is_finite()
+}
+
+fn fluid2_from_ffi(c: &FluidConfig2Ffi) -> Option<phieng_dynamics::FluidConfig2> {
+    use phieng_dynamics::FluidConfig2;
+    for v in [
+        c.particle_mass,
+        c.rest_density,
+        c.smoothing_length,
+        c.stiffness,
+        c.gamma,
+        c.artificial_viscosity,
+        c.surface_tension,
+        c.cfl,
+        c.split_density_ratio,
+        c.merge_density_ratio,
+        c.viscosity,
+        c.drag,
+        c.wall_friction,
+        c.max_velocity,
+        c.particle_radius,
+        c.phase_rest_density[0],
+        c.phase_rest_density[1],
+        c.phase_rest_density[2],
+        c.phase_rest_density[3],
+        c.phase_mass[0],
+        c.phase_mass[1],
+        c.phase_mass[2],
+        c.phase_mass[3],
+    ] {
+        if !valid_fluid_config_f32(v) {
+            return None;
+        }
+    }
+    if c.particle_mass <= 0.0
+        || c.rest_density <= 0.0
+        || c.smoothing_length <= 0.0
+        || c.stiffness < 0.0
+        || c.gamma < 1.0
+        || c.artificial_viscosity < 0.0
+        || c.artificial_viscosity > 2.0
+        || c.surface_tension < 0.0
+        || c.cfl < 0.0
+        || c.cfl > 1.0
+        || c.max_substeps < 1
+        || c.split_density_ratio <= 0.0
+        || c.merge_density_ratio <= 1.0
+        || c.viscosity < 0.0
+        || c.viscosity > 1.0
+        || c.drag < 0.0
+        || c.wall_friction < 0.0
+        || c.wall_friction > 1.0
+        || c.phase_count < 1
+        || c.phase_count > 4
+        || c.phase_rest_density.iter().any(|&v| v <= 0.0)
+        || c.phase_mass.iter().any(|&v| v <= 0.0)
+        || c.max_velocity < 0.0
+        || c.particle_radius < 0.0
+    {
+        return None;
+    }
+    Some(FluidConfig2 {
+        particle_mass: c.particle_mass,
+        rest_density: c.rest_density,
+        smoothing_length: c.smoothing_length,
+        stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
+        adaptive_resolution: c.adaptive_resolution,
+        split_density_ratio: c.split_density_ratio,
+        merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
+        viscosity: c.viscosity,
+        drag: c.drag,
+        wall_friction: c.wall_friction,
+        phase_count: c.phase_count,
+        phase_rest_density: c.phase_rest_density,
+        phase_mass: c.phase_mass,
+        max_velocity: c.max_velocity,
+        particle_radius: c.particle_radius,
+        enabled: c.enabled,
+    })
+}
+
+fn fluid3_from_ffi(c: &FluidConfig3Ffi) -> Option<phieng_dynamics::FluidConfig3> {
+    use phieng_dynamics::FluidConfig3;
+    for v in [
+        c.particle_mass,
+        c.rest_density,
+        c.smoothing_length,
+        c.stiffness,
+        c.gamma,
+        c.artificial_viscosity,
+        c.surface_tension,
+        c.cfl,
+        c.split_density_ratio,
+        c.merge_density_ratio,
+        c.viscosity,
+        c.drag,
+        c.wall_friction,
+        c.max_velocity,
+        c.particle_radius,
+        c.phase_rest_density[0],
+        c.phase_rest_density[1],
+        c.phase_rest_density[2],
+        c.phase_rest_density[3],
+        c.phase_mass[0],
+        c.phase_mass[1],
+        c.phase_mass[2],
+        c.phase_mass[3],
+    ] {
+        if !valid_fluid_config_f32(v) {
+            return None;
+        }
+    }
+    if c.particle_mass <= 0.0
+        || c.rest_density <= 0.0
+        || c.smoothing_length <= 0.0
+        || c.stiffness < 0.0
+        || c.gamma < 1.0
+        || c.artificial_viscosity < 0.0
+        || c.artificial_viscosity > 2.0
+        || c.surface_tension < 0.0
+        || c.cfl < 0.0
+        || c.cfl > 1.0
+        || c.max_substeps < 1
+        || c.split_density_ratio <= 0.0
+        || c.merge_density_ratio <= 1.0
+        || c.viscosity < 0.0
+        || c.viscosity > 1.0
+        || c.drag < 0.0
+        || c.wall_friction < 0.0
+        || c.wall_friction > 1.0
+        || c.phase_count < 1
+        || c.phase_count > 4
+        || c.phase_rest_density.iter().any(|&v| v <= 0.0)
+        || c.phase_mass.iter().any(|&v| v <= 0.0)
+        || c.max_velocity < 0.0
+        || c.particle_radius < 0.0
+    {
+        return None;
+    }
+    Some(FluidConfig3 {
+        particle_mass: c.particle_mass,
+        rest_density: c.rest_density,
+        smoothing_length: c.smoothing_length,
+        stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
+        adaptive_resolution: c.adaptive_resolution,
+        split_density_ratio: c.split_density_ratio,
+        merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
+        viscosity: c.viscosity,
+        drag: c.drag,
+        wall_friction: c.wall_friction,
+        phase_count: c.phase_count,
+        phase_rest_density: c.phase_rest_density,
+        phase_mass: c.phase_mass,
+        max_velocity: c.max_velocity,
+        particle_radius: c.particle_radius,
+        enabled: c.enabled,
+    })
+}
+
+fn fluid2_to_ffi(c: &phieng_dynamics::FluidConfig2) -> FluidConfig2Ffi {
+    FluidConfig2Ffi {
+        particle_mass: c.particle_mass,
+        rest_density: c.rest_density,
+        smoothing_length: c.smoothing_length,
+        stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
+        adaptive_resolution: c.adaptive_resolution,
+        split_density_ratio: c.split_density_ratio,
+        merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
+        viscosity: c.viscosity,
+        drag: c.drag,
+        wall_friction: c.wall_friction,
+        phase_count: c.phase_count,
+        phase_rest_density: c.phase_rest_density,
+        phase_mass: c.phase_mass,
+        max_velocity: c.max_velocity,
+        particle_radius: c.particle_radius,
+        enabled: c.enabled,
+    }
+}
+
+fn fluid3_to_ffi(c: &phieng_dynamics::FluidConfig3) -> FluidConfig3Ffi {
+    FluidConfig3Ffi {
+        particle_mass: c.particle_mass,
+        rest_density: c.rest_density,
+        smoothing_length: c.smoothing_length,
+        stiffness: c.stiffness,
+        gamma: c.gamma,
+        artificial_viscosity: c.artificial_viscosity,
+        surface_tension: c.surface_tension,
+        cfl: c.cfl,
+        max_substeps: c.max_substeps,
+        adaptive_resolution: c.adaptive_resolution,
+        split_density_ratio: c.split_density_ratio,
+        merge_density_ratio: c.merge_density_ratio,
+        boundary_particles: c.boundary_particles,
+        viscosity: c.viscosity,
+        drag: c.drag,
+        wall_friction: c.wall_friction,
+        phase_count: c.phase_count,
+        phase_rest_density: c.phase_rest_density,
+        phase_mass: c.phase_mass,
+        max_velocity: c.max_velocity,
+        particle_radius: c.particle_radius,
+        enabled: c.enabled,
+    }
+}
+
+/// Set the 2D SPH fluid config. Returns 1 on success, 0 for null or bad input.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_fluid_config(
+    world: *mut World2,
+    cfg: *const FluidConfig2Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = fluid2_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).fluid.config = parsed;
+    1
+}
+
+/// Get the 2D SPH fluid config. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `FluidConfig2Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_fluid_config(
+    world: *const World2,
+    out: *mut FluidConfig2Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = fluid2_to_ffi(&(*world).fluid.config);
+    1
+}
+
+/// Set the 3D SPH fluid config. Returns 1 on success, 0 for null or bad input.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_fluid_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const FluidConfig3Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = fluid3_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).fluid.config = parsed;
+    1
+}
+
+/// Get the 3D SPH fluid config. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `FluidConfig3Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_fluid_config(
+    world: *const phieng_dynamics::World3,
+    out: *mut FluidConfig3Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = fluid3_to_ffi(&(*world).fluid.config);
+    1
+}
+
 /// Set the simulation clock (2D). Returns 1 on success, 0 for null world
 /// or non-finite input.
 /// # Safety
@@ -1113,6 +1462,40 @@ pub unsafe extern "C" fn phieng_world_fluid_add(
     #[allow(clippy::chunks_exact_to_as_chunks)]
     let pts: Vec<Vec2> = src.chunks_exact(2).map(|c| Vec2::new(c[0], c[1])).collect();
     unsafe { &mut *world }.fluid.add_particles(&pts) as u32
+}
+
+/// Add 2D SPH fluid particles with per-particle phase indices. `positions`
+/// is interleaved `[x0, y0, x1, y1, ...]`, `phases[i]` is the phase of
+/// particle `i` (clamped to 0..=3 internally). Returns the number added,
+/// or 0 on null world/positions/phases or any non-finite position.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+/// `positions` must be null or valid for reads of `2 * count` `f32`s.
+/// `phases` must be null or valid for reads of `count` `u8`s.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_fluid_add_phase(
+    world: *mut World2,
+    positions: *const f32,
+    phases: *const u8,
+    count: u32,
+) -> u32 {
+    if world.is_null() || positions.is_null() || phases.is_null() {
+        return 0;
+    }
+    let n = (count as usize).min(1_000_000);
+    let src = unsafe { std::slice::from_raw_parts(positions, n.saturating_mul(2)) };
+    if src.iter().any(|v| !v.is_finite()) {
+        return 0;
+    }
+    let ph = unsafe { std::slice::from_raw_parts(phases, n) };
+    // MSRV 1.78: chunks_exact is used instead of the newer as_chunks
+    // (`src` is exactly `2 * n` long by construction above).
+    #[allow(clippy::chunks_exact_to_as_chunks)]
+    let pts: Vec<Vec2> = src.chunks_exact(2).map(|c| Vec2::new(c[0], c[1])).collect();
+    let phases: Vec<u8> = ph.to_vec();
+    unsafe { &mut *world }
+        .fluid
+        .add_particles_phase(&pts, &phases) as u32
 }
 
 /// Fluid particle count. Returns 0 on null world (which is also the
@@ -2112,6 +2495,41 @@ pub unsafe extern "C" fn phieng_world3_fluid_add(
     unsafe { &mut *world }.fluid.add_particles(&pts) as u32
 }
 
+/// Add 3D SPH fluid particles with per-particle phase indices. See
+/// [`phieng_world_fluid_add_phase`] (3D world/struct).
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+/// `positions` must be null or valid for reads of `3 * count` `f32`s.
+/// `phases` must be null or valid for reads of `count` `u8`s.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_fluid_add_phase(
+    world: *mut phieng_dynamics::World3,
+    positions: *const f32,
+    phases: *const u8,
+    count: u32,
+) -> u32 {
+    if world.is_null() || positions.is_null() || phases.is_null() {
+        return 0;
+    }
+    let n = (count as usize).min(1_000_000);
+    let src = unsafe { std::slice::from_raw_parts(positions, n.saturating_mul(3)) };
+    if src.iter().any(|v| !v.is_finite()) {
+        return 0;
+    }
+    let ph = unsafe { std::slice::from_raw_parts(phases, n) };
+    // MSRV 1.78: chunks_exact is used instead of the newer as_chunks
+    // (`src` is exactly `3 * n` long by construction above).
+    #[allow(clippy::chunks_exact_to_as_chunks)]
+    let pts: Vec<Vec3> = src
+        .chunks_exact(3)
+        .map(|c| Vec3::new(c[0], c[1], c[2]))
+        .collect();
+    let phases: Vec<u8> = ph.to_vec();
+    unsafe { &mut *world }
+        .fluid
+        .add_particles_phase(&pts, &phases) as u32
+}
+
 /// 3D fluid particle count. Returns 0 on null world (which is also the
 /// empty-fluid answer).
 /// # Safety
@@ -2944,6 +3362,193 @@ mod tests {
             assert_eq!(t, 3.5);
             assert_eq!(phieng_world_set_time(world, f32::NAN), 0);
             phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn fluid_config_roundtrip() {
+        unsafe {
+            let world = phieng_world_new();
+            let cfg = FluidConfig2Ffi {
+                particle_mass: 0.125,
+                rest_density: 2.0,
+                smoothing_length: 0.75,
+                stiffness: 200.0,
+                gamma: 7.0,
+                artificial_viscosity: 0.1,
+                surface_tension: 0.05,
+                cfl: 0.4,
+                max_substeps: 4,
+                adaptive_resolution: true,
+                split_density_ratio: 0.4,
+                merge_density_ratio: 1.8,
+                boundary_particles: true,
+                viscosity: 0.15,
+                drag: 2.0,
+                wall_friction: 0.3,
+                phase_count: 2,
+                phase_rest_density: [1.0, 2.0, 1.0, 1.0],
+                phase_mass: [0.125, 0.25, 0.125, 0.125],
+                max_velocity: 50.0,
+                particle_radius: 0.25,
+                enabled: true,
+            };
+            assert_eq!(phieng_world_set_fluid_config(world, &cfg), 1);
+            let mut out = std::mem::zeroed::<FluidConfig2Ffi>();
+            assert_eq!(phieng_world_get_fluid_config(world, &mut out), 1);
+            assert_eq!(out.particle_mass, 0.125);
+            assert_eq!(out.rest_density, 2.0);
+            assert_eq!(out.smoothing_length, 0.75);
+            assert_eq!(out.gamma, 7.0);
+            assert_eq!(out.cfl, 0.4);
+            assert_eq!(out.max_substeps, 4);
+            assert!(out.adaptive_resolution);
+            assert!(out.boundary_particles);
+            assert_eq!(out.phase_count, 2);
+            assert_eq!(out.phase_rest_density[1], 2.0);
+            assert_eq!(out.phase_mass[1], 0.25);
+            assert_eq!(out.max_velocity, 50.0);
+            // Null tolerance.
+            assert_eq!(phieng_world_set_fluid_config(std::ptr::null_mut(), &cfg), 0);
+            assert_eq!(
+                phieng_world_get_fluid_config(world, std::ptr::null_mut()),
+                0
+            );
+            // Bad inputs rejected without mutating the world.
+            for bad in [
+                FluidConfig2Ffi {
+                    particle_mass: -1.0,
+                    ..cfg
+                },
+                FluidConfig2Ffi {
+                    rest_density: 0.0,
+                    ..cfg
+                },
+                FluidConfig2Ffi { gamma: 0.5, ..cfg },
+                FluidConfig2Ffi {
+                    phase_count: 0,
+                    ..cfg
+                },
+                FluidConfig2Ffi {
+                    phase_count: 5,
+                    ..cfg
+                },
+                FluidConfig2Ffi {
+                    max_substeps: 0,
+                    ..cfg
+                },
+                FluidConfig2Ffi { cfl: 1.5, ..cfg },
+                FluidConfig2Ffi {
+                    artificial_viscosity: 3.0,
+                    ..cfg
+                },
+                FluidConfig2Ffi {
+                    wall_friction: 2.0,
+                    ..cfg
+                },
+                FluidConfig2Ffi {
+                    phase_rest_density: [0.0, 1.0, 1.0, 1.0],
+                    ..cfg
+                },
+            ] {
+                assert_eq!(phieng_world_set_fluid_config(world, &bad), 0);
+            }
+            let mut after = std::mem::zeroed::<FluidConfig2Ffi>();
+            assert_eq!(phieng_world_get_fluid_config(world, &mut after), 1);
+            assert_eq!(after.particle_mass, 0.125);
+            assert_eq!(after.phase_count, 2);
+            // add_phase.
+            let pts: [f32; 6] = [0.0, 0.0, 1.0, 0.0, 2.0, 0.0];
+            let phases: [u8; 3] = [0, 1, 0];
+            assert_eq!(
+                phieng_world_fluid_add_phase(world, pts.as_ptr(), phases.as_ptr(), 3),
+                3
+            );
+            assert_eq!(phieng_world_fluid_count(world), 3);
+            assert_eq!(
+                phieng_world_fluid_add_phase(
+                    std::ptr::null_mut(),
+                    pts.as_ptr(),
+                    phases.as_ptr(),
+                    3
+                ),
+                0
+            );
+            assert_eq!(
+                phieng_world_fluid_add_phase(world, std::ptr::null(), phases.as_ptr(), 3),
+                0
+            );
+            assert_eq!(
+                phieng_world_fluid_add_phase(world, pts.as_ptr(), std::ptr::null(), 3),
+                0
+            );
+            phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn fluid_config_roundtrip_3d() {
+        unsafe {
+            let world = phieng_world3_new();
+            let cfg = FluidConfig3Ffi {
+                particle_mass: 0.125,
+                rest_density: 2.0,
+                smoothing_length: 0.75,
+                stiffness: 200.0,
+                gamma: 7.0,
+                artificial_viscosity: 0.1,
+                surface_tension: 0.05,
+                cfl: 0.4,
+                max_substeps: 4,
+                adaptive_resolution: true,
+                split_density_ratio: 0.4,
+                merge_density_ratio: 1.8,
+                boundary_particles: true,
+                viscosity: 0.15,
+                drag: 2.0,
+                wall_friction: 0.3,
+                phase_count: 2,
+                phase_rest_density: [1.0, 2.0, 1.0, 1.0],
+                phase_mass: [0.125, 0.25, 0.125, 0.125],
+                max_velocity: 50.0,
+                particle_radius: 0.25,
+                enabled: true,
+            };
+            assert_eq!(phieng_world3_set_fluid_config(world, &cfg), 1);
+            let mut out = std::mem::zeroed::<FluidConfig3Ffi>();
+            assert_eq!(phieng_world3_get_fluid_config(world, &mut out), 1);
+            assert_eq!(out.phase_count, 2);
+            assert_eq!(out.gamma, 7.0);
+            assert_eq!(
+                phieng_world3_set_fluid_config(std::ptr::null_mut(), &cfg),
+                0
+            );
+            assert_eq!(
+                phieng_world3_get_fluid_config(world, std::ptr::null_mut()),
+                0
+            );
+            let bad = FluidConfig3Ffi {
+                particle_mass: 0.0,
+                ..cfg
+            };
+            assert_eq!(phieng_world3_set_fluid_config(world, &bad), 0);
+            let pts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+            let phases: [u8; 3] = [1, 0, 1];
+            assert_eq!(
+                phieng_world3_fluid_add_phase(world, pts.as_ptr(), phases.as_ptr(), 3),
+                3
+            );
+            assert_eq!(phieng_world3_fluid_count(world), 3);
+            assert_eq!(
+                phieng_world3_fluid_add_phase(
+                    std::ptr::null_mut(),
+                    pts.as_ptr(),
+                    phases.as_ptr(),
+                    3
+                ),
+                0
+            );
+            phieng_world3_free(world);
         }
     }
 

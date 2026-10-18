@@ -315,6 +315,11 @@ public class World2
             AmbientIntegration.Kick2(Bodies, Ambient, Time, h);
         }
 
+        // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
+        // before broadphase so the rigid pipeline observes post-fluid
+        // velocities; a no-op when the fluid holds no particles.
+        FluidIntegration.StepFluid2(Fluid, Bodies, Gravity, Ambient, Time, dt);
+
         // 2. Broad phase - find potential collision pairs (into scratch).
         UpdateBroadphase();
         _pairs.Clear();

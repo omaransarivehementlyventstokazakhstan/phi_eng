@@ -192,6 +192,64 @@ internal static partial class NativeMethods
         public uint TurbulenceDivergenceFree;
     }
 
+    /// <summary>SPH fluid config FFI struct (2D). Mirrors Rust <c>FluidConfig2Ffi</c> — never reorder.
+    /// Bool fields are <c>byte</c> (0/1) to match Rust's 1-byte <c>bool</c>;
+    /// phase arrays are inline fixed buffers to match Rust's <c>[f32; 4]</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct FluidConfig2Ffi
+    {
+        public float ParticleMass;
+        public float RestDensity;
+        public float SmoothingLength;
+        public float Stiffness;
+        public float Gamma;
+        public float ArtificialViscosity;
+        public float SurfaceTension;
+        public float Cfl;
+        public uint MaxSubsteps;
+        public byte AdaptiveResolution;
+        public float SplitDensityRatio;
+        public float MergeDensityRatio;
+        public byte BoundaryParticles;
+        public float Viscosity;
+        public float Drag;
+        public float WallFriction;
+        public byte PhaseCount;
+        public fixed float PhaseRestDensity[4];
+        public fixed float PhaseMass[4];
+        public float MaxVelocity;
+        public float ParticleRadius;
+        public byte Enabled;
+    }
+
+    /// <summary>SPH fluid config FFI struct (3D). Mirrors Rust <c>FluidConfig3Ffi</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct FluidConfig3Ffi
+    {
+        public float ParticleMass;
+        public float RestDensity;
+        public float SmoothingLength;
+        public float Stiffness;
+        public float Gamma;
+        public float ArtificialViscosity;
+        public float SurfaceTension;
+        public float Cfl;
+        public uint MaxSubsteps;
+        public byte AdaptiveResolution;
+        public float SplitDensityRatio;
+        public float MergeDensityRatio;
+        public byte BoundaryParticles;
+        public float Viscosity;
+        public float Drag;
+        public float WallFriction;
+        public byte PhaseCount;
+        public fixed float PhaseRestDensity[4];
+        public fixed float PhaseMass[4];
+        public float MaxVelocity;
+        public float ParticleRadius;
+        public byte Enabled;
+    }
+
     /// <summary>Sets the 2D ambient-force config.</summary>
     /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
     [LibraryImport(LibraryName)]
@@ -393,6 +451,26 @@ internal static partial class NativeMethods
         IntPtr world,
         float* @out,
         uint max);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_fluid_config(
+        IntPtr world,
+        FluidConfig2Ffi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_fluid_config(
+        IntPtr world,
+        FluidConfig2Ffi* @out);
+
+    /// <returns>Number of particles added, 0 on null world/positions/phases or bad input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_fluid_add_phase(
+        IntPtr world,
+        float* positions,
+        byte* phases,
+        uint count);
 
     /// <returns>1 on success, 0 for null world or unknown body.</returns>
     [LibraryImport(LibraryName)]
@@ -656,4 +734,24 @@ internal static partial class NativeMethods
         IntPtr world,
         float* @out,
         uint max);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_fluid_config(
+        IntPtr world,
+        FluidConfig3Ffi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_fluid_config(
+        IntPtr world,
+        FluidConfig3Ffi* @out);
+
+    /// <returns>Number of particles added, 0 on null world/positions/phases or bad input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_fluid_add_phase(
+        IntPtr world,
+        float* positions,
+        byte* phases,
+        uint count);
 }

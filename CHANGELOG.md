@@ -20,6 +20,8 @@ This project follows [Semantic Versioning](https://semver.org/) and
   gap instead of faking it (no-slip walls, √t front law, penalty-floor
   hydrostatic overshoot) — documented in `LIMITATIONS.md`, readings in
   `absolute_stress_tests.md`.
+- **Two-phase SPH test**: `sph_two_phase_heavy_sinks` — a heavy droplet
+  (phase 0) submerged in light fluid (phase 1) sinks under gravity.
 
 ### Changed
 - **Near-zero-allocation steady state**: the broadphase grid
@@ -32,6 +34,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
   .len()` still counts live pairs exactly, the public API is unchanged,
   and every determinism hash (pile 2D, islands, pile 3D) is
   bit-identical.
+- **Persisted boundary ghosts**: SPH ghost particles used to be
+  resampled from every static body on every substep; now a fingerprint
+  (kernel config + static transforms/shapes) skips both the resample
+  and the ghost-grid rebuild while the scene is static. Ghost
+  density/pressure still recompute per pass, so results are unchanged —
+  boundary scenes are bit-identical and the regen counter
+  (`boundary_regens` / `FluidState.BoundaryRegenCount`) proves the skip.
+  Managed C# solver mirrors the same scheme.
 
 ### Added
 - **Fluid wall no-slip** (`wall_friction` ∈ [0, 1], default `0` =
@@ -103,8 +113,34 @@ This project follows [Semantic Versioning](https://semver.org/) and
     sampled into fixed ghost particles (circle/box/polygon in 2D;
     sphere/box/capsule/hull in 3D) that exert SPH pressure on the
     fluid via a two-pass density/pressure scheme — a pressure-based wall
-    that reduces tunneling vs the penalty boundary alone. Regenerated
-    every substep (statics don't move); never persisted.
+    that reduces tunneling vs the penalty boundary alone. Ghosts persist
+    across substeps and regenerate only when the static set/transforms or
+    kernel config change (FNV fingerprinted); their density/pressure
+    still recompute every pass. Never persisted.
+  - **Two-phase fluids**: particles carry a per-particle `phase` index
+    (0..=3) and each phase gets its own `phase_rest_density` /
+    `phase_mass`, so a heavier phase sinks under gravity (Rayleigh–Taylor,
+    oil/water buoyancy). Added via
+    `FluidState2/3::add_particles_phase`; single-phase fluids keep phase 0
+    and are bit-identical. Multi-phase caveats (phase-clamp, EOS-only) are
+    documented in `LIMITATIONS.md`.
+  - **Fluid FFI surface**: `phieng_world[_3]_set/get_fluid_config`
+    (repr(C) `FluidConfig2Ffi`/`FluidConfig3Ffi`, validated on parse —
+    bad input rejected without mutating the world) and
+    `phieng_world[_3]_fluid_add_phase` for phase-tagged particle insert,
+    with managed `PhiNativeWorld(3).SetFluidConfig/GetFluidConfig/
+    AddFluidParticles(Phase)/FluidCount/FluidClear/GetFluidParticles`
+    and native interop round-trip tests.
+  - **Managed C# fluid stepping**: `FluidIntegration.StepFluid2` /
+    `FluidIntegration3.StepFluid3` mirror the Rust solver stage-by-stage
+    (kernels, neighbor grid, density/pressure incl. two-phase EOS,
+    adaptive resampling, boundary ghosts, Monaghan viscosity, cohesion,
+    CFL substepping, XSPH, two-way rigid coupling, ambient
+    wind/turbulence) and run as phase 1b of managed `World2/3.Step`.
+    Cross-language contract is behavior parity (tolerance), not
+    bit-equality; `FluidTests` (determinism, containment, two-phase,
+    mass conservation, turbulence determinism, 3D) plus
+    native-vs-managed equivalence tests pin it.
   - Preserved through snapshot schema v5 (fluid config block extended,
     version-gated); the schema switches to v5 when any fluid-expansion
     field is non-default.

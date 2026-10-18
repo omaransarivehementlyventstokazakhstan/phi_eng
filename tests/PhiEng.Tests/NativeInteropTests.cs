@@ -136,6 +136,79 @@ public class NativeInteropTests
     }
 
     [Fact]
+    public void Native_FluidConfig_Roundtrips()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        using var world = new PhiNativeWorld();
+        var cfg = new Dynamics.FluidConfig2
+        {
+            ParticleMass = 0.125f,
+            RestDensity = 2.0f,
+            SmoothingLength = 0.75f,
+            Stiffness = 200.0f,
+            Gamma = 7.0f,
+            ArtificialViscosity = 0.1f,
+            SurfaceTension = 0.05f,
+            Cfl = 0.4f,
+            MaxSubsteps = 4,
+            AdaptiveResolution = true,
+            SplitDensityRatio = 0.4f,
+            MergeDensityRatio = 1.8f,
+            BoundaryParticles = true,
+            Viscosity = 0.15f,
+            Drag = 2.0f,
+            WallFriction = 0.3f,
+            PhaseCount = 2,
+            PhaseRestDensity = new float[] { 1.0f, 2.0f, 1.0f, 1.0f },
+            PhaseMass = new float[] { 0.125f, 0.25f, 0.125f, 0.125f },
+            MaxVelocity = 50.0f,
+            ParticleRadius = 0.25f,
+            Enabled = true,
+        };
+        world.SetFluidConfig(cfg);
+        var back = world.GetFluidConfig();
+        Assert.Equal(0.125f, back.ParticleMass);
+        Assert.Equal(2.0f, back.RestDensity);
+        Assert.Equal(7.0f, back.Gamma);
+        Assert.Equal(4, back.MaxSubsteps);
+        Assert.True(back.AdaptiveResolution);
+        Assert.True(back.BoundaryParticles);
+        Assert.Equal((byte)2, back.PhaseCount);
+        Assert.Equal(2.0f, back.PhaseRestDensity[1]);
+        Assert.Equal(0.25f, back.PhaseMass[1]);
+
+        // Bad config rejected without mutating the world.
+        var bad = new Dynamics.FluidConfig2
+        {
+            ParticleMass = 0.125f,
+            RestDensity = 2.0f,
+            SmoothingLength = 0.75f,
+            Stiffness = 200.0f,
+            Gamma = 0.5f,
+            PhaseCount = 2,
+            PhaseRestDensity = new float[] { 1.0f, 2.0f, 1.0f, 1.0f },
+            PhaseMass = new float[] { 0.125f, 0.25f, 0.125f, 0.125f },
+            MaxSubsteps = 4,
+        };
+        Assert.Throws<ArgumentException>(() => world.SetFluidConfig(bad));
+        Assert.Equal(7.0f, world.GetFluidConfig().Gamma);
+
+        // Two-phase particle insert.
+        var added = world.AddFluidParticlesPhase(
+            new[] { new Vector2(0.0f, 0.0f), new Vector2(1.0f, 0.0f), new Vector2(2.0f, 0.0f) },
+            new byte[] { 0, 1, 0 });
+        Assert.Equal(3u, added);
+        Assert.Equal(3u, world.FluidCount);
+        world.FluidClear();
+        Assert.Equal(0u, world.FluidCount);
+    }
+
+    [Fact]
     public void Native_RemoveBody_Reindexes()
     {
         if (!NativeAvailable())
@@ -210,6 +283,52 @@ public class NativeInteropTests
         Assert.True(MathF.Abs(updated.Restitution - 0.8f) < 1e-6f);
         Assert.Throws<ArgumentOutOfRangeException>(() => world.SetBodyMaterial(999, new Dynamics.PhysicsMaterial()));
         Assert.Throws<ArgumentOutOfRangeException>(() => world.GetBodyMaterial(999));
+    }
+
+    [Fact]
+    public void Native3D_FluidConfig_Roundtrips()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        using var world = new PhiNativeWorld3();
+        var cfg = new Dynamics.FluidConfig3
+        {
+            ParticleMass = 0.125f,
+            RestDensity = 2.0f,
+            SmoothingLength = 0.75f,
+            Stiffness = 200.0f,
+            Gamma = 7.0f,
+            PhaseCount = 2,
+            PhaseRestDensity = new float[] { 1.0f, 2.0f, 1.0f, 1.0f },
+            PhaseMass = new float[] { 0.125f, 0.25f, 0.125f, 0.125f },
+        };
+        world.SetFluidConfig(cfg);
+        var back = world.GetFluidConfig();
+        Assert.Equal((byte)2, back.PhaseCount);
+        Assert.Equal(7.0f, back.Gamma);
+        var bad = new Dynamics.FluidConfig3
+        {
+            ParticleMass = 0.0f,
+            RestDensity = 2.0f,
+            SmoothingLength = 0.75f,
+            Stiffness = 200.0f,
+            Gamma = 7.0f,
+            PhaseCount = 2,
+            PhaseRestDensity = new float[] { 1.0f, 2.0f, 1.0f, 1.0f },
+            PhaseMass = new float[] { 0.125f, 0.25f, 0.125f, 0.125f },
+        };
+        Assert.Throws<ArgumentException>(() => world.SetFluidConfig(bad));
+        var added = world.AddFluidParticlesPhase(
+            new[] { new Vector3(0.0f, 0.0f, 0.0f), new Vector3(1.0f, 0.0f, 0.0f) },
+            new byte[] { 1, 0 });
+        Assert.Equal(2u, added);
+        Assert.Equal(2u, world.FluidCount);
+        world.FluidClear();
+        Assert.Equal(0u, world.FluidCount);
     }
 
     [Fact]

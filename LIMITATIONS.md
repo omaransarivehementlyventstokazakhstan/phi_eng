@@ -69,12 +69,19 @@ rests 5 mm into slop); 1e6:1 stays bounded over 1200 steps (settles
 within centimeters, no NaN, no escape). Beyond that, expect
 jitter/drift — unmeasured territory, not a supported regime.
 
-## Fluid stepping is Rust-only (no C# sim yet)
+## Fluid stepping (Rust core + managed C# mirror)
 
 SPH particles (`FluidState2`/`FluidState3`) step inside
 `World2::step`/`World3::step` and couple two-way with rigid bodies
 (SAT/analytic boundary impulses plus pressure-sampled buoyancy and
-drag). The pressure model is linear by default (`gamma == 1`); setting
+drag), in both languages. Cross-language equivalence is behavior
+parity (tolerance-based, like the rigid equivalence tests), not
+bit-equality: the managed solver mirrors the Rust pipeline
+stage-by-stage (density/pressure, adaptive resampling, boundary
+ghosts, pressure forces, XSPH, collision, buoyancy/drag) but uses the
+managed noise library, so turbulence-driven trajectories differ
+across languages while calm scenes agree tightly. The pressure model
+is linear by default (`gamma == 1`); setting
 `gamma > 1` selects the Tait/WCSPH EOS, and `artificial_viscosity` /
 `surface_tension` add Monaghan viscosity / simplified Akinci cohesion.
 CFL substepping (`cfl`, `max_substeps`) keeps stiff Tait configs stable
@@ -91,14 +98,16 @@ describes free surfaces — so it is stable for calm/settled scenes and
 should be avoided in violent dam-break-style transients where surface
 splitting can over-refine and destabilize; merging is a simple
 closest-pair combine, not a full resampling scheme. Boundary particles
-(`boundary_particles`) add pressure-based walls (two-pass WCSPH) that
-reduce tunneling, but they are regenerated each substep (not persisted)
-and the penalty boundary still runs underneath, so extreme-speed
+  (`boundary_particles`) add pressure-based walls (two-pass WCSPH) that
+  reduce tunneling. Ghosts persist across substeps and regenerate only
+  when the static set/transforms or kernel config change (fingerprinted);
+  their density/pressure still recompute every pass — but the ghosts
+  themselves are not persisted and the penalty boundary still runs
+  underneath, so extreme-speed
 tunneling is mitigated rather than eliminated. Fluid state
 persists through snapshots (config block extended at schema v5, both
-languages) and crosses the FFI bridge, and C# carries fluid state for
-round-trips — but C# does not step fluids yet, so managed worlds with
-fluid only round-trip data. 2D polygons and 3D hulls/meshes are
+languages) and crosses the FFI bridge (config set/get plus
+phase-aware particle insert). 2D polygons and 3D hulls/meshes are
 impulse-coupled only (no pressure sampling — no winding contract for
 outward normals, nearest-vertex response for hulls/meshes).
 
@@ -188,6 +197,21 @@ limitation rather than faking it:
 - **Penalty boundaries tunnel at high speed** (no CCD, as elsewhere): a
   violent dam break can eject a fast particle through a thin wall. The
   benchmark uses thick walls.
+
+## Two-phase fluid limitations
+
+- **Phase index is clamped to 0..=3.** `add_particles_phase` masks
+  out-of-range phase values to 3; at most 4 phases are supported.
+- **Per-phase equation of state only.** Each phase sets its own rest
+  density and particle mass (so a heavier phase packs more mass per
+  volume and sinks). There is no per-phase surface tension, viscosity, or
+  immiscibility model — phases interact through the same shared pressure
+  kernel, so they mix like miscible fluids with different densities rather
+  than separating like oil/water.
+- **No interfacial tension.** The cohesion kernel is single-phase; a
+  heavy/light interface is a density gradient, not a surface-energy
+  boundary. For true immiscible multiphase flow, surface tension between
+  phases is still missing.
 
 
 
