@@ -109,6 +109,13 @@ pub struct FluidConfig2 {
     /// body can outrun pressure buildup and punch through its own
     /// cavity; drag caps the entry speed so buoyancy can engage.
     pub drag: f32,
+    /// Wall no-slip factor `mu` in `[0, 1]` (default `0.0` = free-slip,
+    /// bit-identical). At a particle/body contact the tangential particle
+    /// velocity is driven toward the wall's tangential velocity by `mu`
+    /// (`1` = full no-slip) and the reaction impulse is applied to dynamic
+    /// bodies — the origin of the parabolic Poiseuille/Chapman profile.
+    /// Finite only; values outside `[0, 1]` are clamped.
+    pub wall_friction: f32,
     /// Hard speed cap (safety net against ejection chains).
     pub max_velocity: f32,
     /// Collision radius used against rigid-body shapes.
@@ -135,6 +142,7 @@ impl Default for FluidConfig2 {
             boundary_particles: false,
             viscosity: 0.3,
             drag: 4.0,
+            wall_friction: 0.0,
             max_velocity: 30.0,
             particle_radius: 0.125,
             enabled: true,
@@ -967,6 +975,18 @@ impl FluidState2 {
                     self.particles[i].velocity -= normal * vn;
                     // Reaction on the body (statics ignore it internally).
                     body.apply_impulse(normal * (vn * self.particles[i].mass), point);
+                    // No-slip wall coupling: drive the (relative) tangential
+                    // velocity toward the wall's tangential velocity by
+                    // `mu` (1 = full no-slip). Reaction to the body.
+                    if cfg.wall_friction > 0.0 {
+                        let mu = cfg.wall_friction.clamp(0.0, 1.0);
+                        let v_t = self.particles[i].velocity; // normal already removed
+                        let wall_v = body.velocity;
+                        let wall_vt = wall_v - normal * wall_v.dot(normal);
+                        let delta_v = (wall_vt - v_t) * mu;
+                        self.particles[i].velocity += delta_v;
+                        body.apply_impulse(-delta_v * self.particles[i].mass, point);
+                    }
                     if !body.is_static {
                         body.is_sleeping = false;
                     }
@@ -1683,14 +1703,15 @@ mod tests {
     }
 
     #[test]
-    fn sph_poiseuille_no_slip_gap() {
-        // Body-force-driven channel flow. SPH boundaries here are penalty
-        // (normal push-out) with NO tangential wall drag, so the velocity
-        // profile stays essentially FLAT instead of parabolic — the no-slip
-        // Poisson/Chapman profile is a documented gap (see LIMITATIONS.md).
+    fn sph_poiseuille_profile() {
+        // Body-force-driven channel flow WITH wall friction: no-slip at the
+        // plates slows the fluid there, so the mean velocity rises toward
+        // the channel center (a curved, Poiseuille-like profile).
         let mut world = crate::World2::new();
         world.gravity = Vec2::new(4.0, 0.0); // horizontal drive on particles
         world.fluid.config.max_velocity = 100.0;
+        world.fluid.config.wall_friction = 1.0;
+        world.fluid.config.artificial_viscosity = 0.5;
         world
             .add_static_body(
                 Vec2::new(0.0, 0.0),
@@ -1707,7 +1728,8 @@ mod tests {
                 },
             )
             .expect("valid shape");
-        lattice(&mut world, -3.0, 1.0, 24, 8, 0.25);
+        // Fill the channel so the edge rows touch the plates (y = 0.5, 2.5).
+        lattice(&mut world, -3.0, 0.5, 24, 9, 0.25);
         for _ in 0..600 {
             world.step(1.0 / 60.0);
         }
@@ -1726,13 +1748,58 @@ mod tests {
                 0.0
             }
         };
-        let bottom = band_mean(1.0, 1.75);
-        let middle = band_mean(1.75, 2.25);
-        let top = band_mean(2.25, 3.0);
-        // Pinned limitation: the profile is flat (all bands within 25%).
+        let bottom = band_mean(0.5, 1.1);
+        let middle = band_mean(1.1, 1.9);
+        let top = band_mean(1.9, 2.5);
+        // Curved profile: the channel center is fastest; the near-wall
+        // bands are slower (no-slip). Flat profile => wall friction failed.
         assert!(
-            middle > 0.0 && (middle - bottom).abs() < 0.25 * middle && (middle - top).abs() < 0.25 * middle,
-            "expected a flat profile (no-slip not modeled): bottom={bottom} middle={middle} top={top}"
+            middle > bottom && middle > top,
+            "channel center should be fastest (no-slip): bottom={bottom} middle={middle} top={top}"
+        );
+    }
+
+    #[test]
+    fn sph_wall_friction_slows_flow() {
+        // No-slip walls remove tangential momentum: the driven channel
+        // runs slower with wall friction than with free-slip walls.
+        let run = |mu: f32| -> f32 {
+            let mut world = crate::World2::new();
+            world.gravity = Vec2::new(4.0, 0.0);
+            world.fluid.config.max_velocity = 100.0;
+            world.fluid.config.wall_friction = mu;
+            world
+                .add_static_body(
+                    Vec2::new(0.0, 0.0),
+                    Shape2::Box {
+                        half_extents: Vec2::new(4.0, 0.5),
+                    },
+                )
+                .expect("valid shape");
+            world
+                .add_static_body(
+                    Vec2::new(0.0, 3.0),
+                    Shape2::Box {
+                        half_extents: Vec2::new(4.0, 0.5),
+                    },
+                )
+                .expect("valid shape");
+            lattice(&mut world, -3.0, 0.5, 24, 9, 0.25);
+            for _ in 0..600 {
+                world.step(1.0 / 60.0);
+            }
+            let (mut s, mut n) = (0.0f32, 0);
+            for p in world.fluid.particles.iter() {
+                s += p.velocity.x;
+                n += 1;
+            }
+            s / n as f32
+        };
+        let free = run(0.0);
+        let no_slip = run(1.0);
+        assert!(
+            no_slip < free,
+            "no-slip should slow the flow: free={free} no_slip={no_slip}"
         );
     }
 

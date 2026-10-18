@@ -53,6 +53,8 @@ public class FluidConfig2
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
     public float Drag { get; set; } = 4.0f;
+    /// <summary>Wall no-slip factor in [0, 1] (0 = free-slip).</summary>
+    public float WallFriction { get; set; } = 0.0f;
     /// <summary>Hard speed cap (safety net against ejection chains).</summary>
     public float MaxVelocity { get; set; } = 30.0f;
     /// <summary>Collision radius used against rigid-body shapes.</summary>
@@ -139,6 +141,8 @@ public class FluidConfig3
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
     public float Drag { get; set; } = 4.0f;
+    /// <summary>Wall no-slip factor in [0, 1] (0 = free-slip).</summary>
+    public float WallFriction { get; set; } = 0.0f;
     /// <summary>Hard speed cap (safety net against ejection chains).</summary>
     public float MaxVelocity { get; set; } = 30.0f;
     /// <summary>Collision radius used against rigid-body shapes.</summary>

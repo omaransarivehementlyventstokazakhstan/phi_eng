@@ -544,6 +544,7 @@ public static class Snapshot
         [JsonPropertyName("boundary_particles")] public bool BoundaryParticles { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
+        [JsonPropertyName("wall_friction")] public float WallFriction { get; set; }
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
         [JsonPropertyName("particle_radius")] public float ParticleRadius { get; set; } = 0.125f;
         [JsonPropertyName("enabled")] public bool Enabled { get; set; } = true;
@@ -579,6 +580,7 @@ public static class Snapshot
         [JsonPropertyName("boundary_particles")] public bool BoundaryParticles { get; set; }
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
+        [JsonPropertyName("wall_friction")] public float WallFriction { get; set; }
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
         [JsonPropertyName("particle_radius")] public float ParticleRadius { get; set; } = 0.125f;
         [JsonPropertyName("enabled")] public bool Enabled { get; set; } = true;
@@ -626,6 +628,7 @@ public static class Snapshot
                 || w.Fluid.Config.SurfaceTension != 0.0f
                 || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
                 || w.Fluid.Config.AdaptiveResolution
+                || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
@@ -817,6 +820,7 @@ public static class Snapshot
                     BoundaryParticles = w.Fluid.Config.BoundaryParticles,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
+                    WallFriction = w.Fluid.Config.WallFriction,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
                     ParticleRadius = w.Fluid.Config.ParticleRadius,
                     Enabled = w.Fluid.Config.Enabled,
@@ -890,6 +894,7 @@ public static class Snapshot
                 || w.Fluid.Config.SurfaceTension != 0.0f
                 || w.Fluid.Config.Cfl != 0.0f || w.Fluid.Config.MaxSubsteps != 1
                 || w.Fluid.Config.AdaptiveResolution
+                || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
             uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
@@ -1136,6 +1141,7 @@ public static class Snapshot
                     BoundaryParticles = w.Fluid.Config.BoundaryParticles,
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
+                    WallFriction = w.Fluid.Config.WallFriction,
                     MaxVelocity = w.Fluid.Config.MaxVelocity,
                     ParticleRadius = w.Fluid.Config.ParticleRadius,
                     Enabled = w.Fluid.Config.Enabled,
@@ -1504,6 +1510,7 @@ public static class Snapshot
             BoundaryParticles = cfg.BoundaryParticles,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
+            WallFriction = Fin(cfg.WallFriction, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
             ParticleRadius = Fin(cfg.ParticleRadius, "fluid"),
             Enabled = cfg.Enabled,
@@ -1736,6 +1743,7 @@ public static class Snapshot
             BoundaryParticles = cfg.BoundaryParticles,
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
+            WallFriction = Fin(cfg.WallFriction, "fluid"),
             MaxVelocity = Fin(cfg.MaxVelocity, "fluid"),
             ParticleRadius = Fin(cfg.ParticleRadius, "fluid"),
             Enabled = cfg.Enabled,
@@ -2055,6 +2063,7 @@ public static class Snapshot
             w.Write(c.SplitDensityRatio);
             w.Write(c.MergeDensityRatio);
             w.Write(c.BoundaryParticles);
+            w.Write(c.WallFriction);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2083,6 +2092,7 @@ public static class Snapshot
             c.SplitDensityRatio = r.ReadSingle();
             c.MergeDensityRatio = r.ReadSingle();
             c.BoundaryParticles = r.ReadBoolean();
+            c.WallFriction = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2139,6 +2149,7 @@ public static class Snapshot
             w.Write(c.SplitDensityRatio);
             w.Write(c.MergeDensityRatio);
             w.Write(c.BoundaryParticles);
+            w.Write(c.WallFriction);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2167,6 +2178,7 @@ public static class Snapshot
             c.SplitDensityRatio = r.ReadSingle();
             c.MergeDensityRatio = r.ReadSingle();
             c.BoundaryParticles = r.ReadBoolean();
+            c.WallFriction = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();

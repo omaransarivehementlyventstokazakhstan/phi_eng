@@ -85,6 +85,9 @@ pub struct FluidConfig3 {
     pub viscosity: f32,
     /// Quadratic drag coefficient applied per submerged sample area.
     pub drag: f32,
+    /// Wall friction coefficient `mu >= 0` (default `0.0` = none). Coulomb
+    /// tangential damping at particle/body contacts (no-slip walls).
+    pub wall_friction: f32,
     /// Hard speed cap (safety net against ejection chains).
     pub max_velocity: f32,
     /// Collision radius used against rigid-body shapes.
@@ -111,6 +114,7 @@ impl Default for FluidConfig3 {
             boundary_particles: false,
             viscosity: 0.3,
             drag: 4.0,
+            wall_friction: 0.0,
             max_velocity: 30.0,
             particle_radius: 0.125,
             enabled: true,
@@ -1053,6 +1057,17 @@ impl FluidState3 {
                 if vn < 0.0 {
                     self.particles[i].velocity -= normal * vn;
                     body.apply_impulse(normal * (vn * self.particles[i].mass), point);
+                    // No-slip wall coupling: drive the tangential velocity
+                    // toward the wall's (reaction to the body).
+                    if cfg.wall_friction > 0.0 {
+                        let mu = cfg.wall_friction.clamp(0.0, 1.0);
+                        let v_t = self.particles[i].velocity;
+                        let wall_v = body.velocity;
+                        let wall_vt = wall_v - normal * wall_v.dot(normal);
+                        let delta_v = (wall_vt - v_t) * mu;
+                        self.particles[i].velocity += delta_v;
+                        body.apply_impulse(-delta_v * self.particles[i].mass, point);
+                    }
                     if !body.is_static {
                         body.is_sleeping = false;
                     }

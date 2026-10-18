@@ -146,9 +146,9 @@ memory-only.
 
 Canonical, well-known problems, checked against closed-form solutions
 where the method can hit them and against qualitative trends where it
-cannot (gaps pinned in `LIMITATIONS.md`). 18 tests; all green
+cannot (gaps pinned in `LIMITATIONS.md`). 19 tests; all green
 (**debug** wall clock, Windows x64, single-threaded: **~0.1 s SHM +
-~29.4 s SPH ≈ 29.5 s total** — dominated by the 3D hydrostatic column).
+~31.9 s SPH ≈ 32.0 s total** — dominated by the 3D hydrostatic column).
 
 ### Simple harmonic motion (damped linear oscillator)
 The spring field is `m x'' + c x' + k x = 0`, so the analytic solution
@@ -177,12 +177,13 @@ is exact:
 | `sph_droplet_cohesion`         | surface tension holds a droplet | bounded radius                                      | 0.41 s       | pass   |
 | `sph_free_blob_energy_bounded` | no gravity/visc/surface         | energy conserved (bounded)                          | 0.28 s       | pass   |
 | `sph_sloshing_settles`         | kicked tank                     | slosh damps monotonically (peak speed decays)       | 0.44 s       | pass   |
-| `sph_poiseuille_no_slip_gap`   | force-driven channel            | **flat** profile (no-slip not modeled — pinned gap) | 0.89 s       | pass   |
+| `sph_poiseuille_profile`       | channel + wall friction         | center fastest (curved, no-slip)                    | 1.04 s       | pass   |
+| `sph_wall_friction_slows_flow` | channel, free vs no-slip        | no-slip removes tangential momentum                 | 2.37 s       | pass   |
 | `sph3_hydrostatic_pressure`    | 3D column                       | order-of-magnitude `ρgh`                            | 21.37 s      | pass   |
 
 Findings worth knowing:
 - **The 3D hydrostatic column dominates the suite runtime** (~21 of
-  ~29 s debug: 512 particles × 900 steps × 3D neighbor search in an
+  ~32 s debug: 512 particles × 900 steps × 3D neighbor search in an
   unoptimized build); every other test is sub-second. Release is ~10×
   faster.
 - **SHM is analytically exact** (to the integrator's O(dt) accuracy);
@@ -190,9 +191,11 @@ Findings worth knowing:
 - **Hydrostatic support works** but the penalty floor compresses the
   bottom decile, so `p_bottom` overshoots `ρgh` (~2.3× in 2D) — a
   boundary-model artifact, not a solver bug.
-- **No-slip walls are not modeled**: the channel velocity profile stays
-  flat (tangential wall drag is absent); Poiseuille/Chapman profiles are
-  a gap. Boundary particles (`E6`) add normal pressure only.
+- **No-slip walls are opt-in** (`wall_friction ∈ [0,1]`, default 0 =
+  free-slip): with it off the channel is flat, with it on the profile
+  curves toward the center and tangential momentum is removed. It is a
+  penalty velocity match, not a full ghost-viscosity no-slip, so the
+  profile is qualitatively Chapman.
 - **Martin & Moyce √t front law is not reproduced** by penalty-boundary
   weakly-compressible SPH; the front advances but the quantitative law
   is a gap.

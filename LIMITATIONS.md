@@ -169,12 +169,14 @@ Canonical fluid problems are tested (see `absolute_stress_tests.md`).
 Where the method cannot hit the textbook result, the test pins the
 limitation rather than faking it:
 
-- **No-slip walls are not modeled.** The boundary is a penalty push-out
-  (normal only), so there is no tangential wall drag and a force-driven
-  channel has a **flat** velocity profile instead of the parabolic
-  Poiseuille/Chapman profile. `sph_poiseuille_no_slip_gap` asserts the
-  flat profile. Boundary particles (`boundary_particles`) add pressure
-  (normal) coupling only — still no tangential friction.
+- **No-slip walls are opt-in.** `wall_friction` ∈ [0, 1] (default `0` =
+  free-slip, bit-identical) drives the tangential particle velocity
+  toward the wall's at each contact. With it off a force-driven channel
+  is **flat**; with it on the profile curves toward the center
+  (`sph_poiseuille_profile`), and it removes tangential momentum
+  (`sph_wall_friction_slows_flow`). It is a penalty velocity match, not
+  a full ghost-viscosity / Akinci no-slip, so the profile is
+  qualitatively — not quantitatively — Chapman.
 - **The Martin & Moyce √t surge-front law is not reproduced.**
   `sph_dam_break_surge_front` asserts the front advances and stays
   contained, not the quantitative √t position law.

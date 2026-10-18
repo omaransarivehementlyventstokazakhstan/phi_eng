@@ -34,6 +34,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
   bit-identical.
 
 ### Added
+- **Fluid wall no-slip** (`wall_friction` ∈ [0, 1], default `0` =
+  free-slip, bit-identical): at a particle/body contact the tangential
+  velocity is driven toward the wall's tangential velocity (reaction to
+  dynamic bodies), removing tangential momentum and curving a driven
+  channel toward the parabolic Poiseuille/Chapman profile. Opt-in;
+  extends snapshot schema v5 and the managed `FluidConfig`/`Snapshot`
+  mirror. (Also fixes the v5 schema trigger to include
+  `boundary_particles`.)
 - **Ambient force fields (Rust + managed C#)**: a new
   `phieng_dynamics::ambient` module with three independently-toggled
   fields applied as a pre-solve velocity kick (same pipeline slot and

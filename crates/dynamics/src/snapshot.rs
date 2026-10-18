@@ -379,6 +379,9 @@ struct FluidConfig2Dto {
     boundary_particles: bool,
     viscosity: f32,
     drag: f32,
+    /// Wall friction coefficient (schema v5; default 0.0, elided).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    wall_friction: f32,
     max_velocity: f32,
     particle_radius: f32,
     enabled: bool,
@@ -428,6 +431,9 @@ struct FluidConfig3Dto {
     boundary_particles: bool,
     viscosity: f32,
     drag: f32,
+    /// Wall friction coefficient (schema v5; default 0.0, elided).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    wall_friction: f32,
     max_velocity: f32,
     particle_radius: f32,
     enabled: bool,
@@ -458,6 +464,7 @@ impl Default for FluidConfig2Dto {
             boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
+            wall_friction: c.wall_friction,
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
@@ -484,6 +491,7 @@ impl Default for FluidConfig3Dto {
             boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
+            wall_friction: c.wall_friction,
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
@@ -1045,6 +1053,7 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
             boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
+            wall_friction: c.wall_friction,
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
@@ -1080,6 +1089,7 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
             boundary_particles: c.boundary_particles,
             viscosity: c.viscosity,
             drag: c.drag,
+            wall_friction: c.wall_friction,
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
@@ -1631,7 +1641,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.fluid.config.surface_tension != 0.0
         || w.fluid.config.cfl != 0.0
         || w.fluid.config.max_substeps != 1
-        || w.fluid.config.adaptive_resolution;
+        || w.fluid.config.adaptive_resolution
+        || w.fluid.config.wall_friction != 0.0
+        || w.fluid.config.boundary_particles;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1812,7 +1824,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.fluid.config.surface_tension != 0.0
         || w.fluid.config.cfl != 0.0
         || w.fluid.config.max_substeps != 1
-        || w.fluid.config.adaptive_resolution;
+        || w.fluid.config.adaptive_resolution
+        || w.fluid.config.wall_friction != 0.0
+        || w.fluid.config.boundary_particles;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let schema = if has_ambient {
@@ -1989,6 +2003,7 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
         boundary_particles: c.boundary_particles,
         viscosity: c.viscosity,
         drag: c.drag,
+        wall_friction: c.wall_friction,
         max_velocity: c.max_velocity,
         particle_radius: c.particle_radius,
         enabled: c.enabled,
@@ -2050,6 +2065,7 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
         boundary_particles: c.boundary_particles,
         viscosity: c.viscosity,
         drag: c.drag,
+        wall_friction: c.wall_friction,
         max_velocity: c.max_velocity,
         particle_radius: c.particle_radius,
         enabled: c.enabled,
@@ -3429,6 +3445,7 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
         write_f32(out, c.split_density_ratio);
         write_f32(out, c.merge_density_ratio);
         write_u8(out, c.boundary_particles as u8);
+        write_f32(out, c.wall_friction);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3452,6 +3469,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         split_density_ratio,
         merge_density_ratio,
         boundary_particles,
+        wall_friction,
     ) = if version >= SNAPSHOT_SCHEMA_VERSION {
         (
             r.read_f32()?,
@@ -3463,6 +3481,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             r.read_f32()?,
             r.read_f32()?,
             r.read_u8()? != 0,
+            r.read_f32()?,
         )
     } else {
         (
@@ -3475,6 +3494,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             default_split_ratio(),
             default_merge_ratio(),
             false,
+            0.0,
         )
     };
     Ok(FluidConfig2Dto {
@@ -3491,6 +3511,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         split_density_ratio,
         merge_density_ratio,
         boundary_particles,
+        wall_friction,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3561,6 +3582,7 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
         write_f32(out, c.split_density_ratio);
         write_f32(out, c.merge_density_ratio);
         write_u8(out, c.boundary_particles as u8);
+        write_f32(out, c.wall_friction);
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3584,6 +3606,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         split_density_ratio,
         merge_density_ratio,
         boundary_particles,
+        wall_friction,
     ) = if version >= SNAPSHOT_SCHEMA_VERSION {
         (
             r.read_f32()?,
@@ -3595,6 +3618,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             r.read_f32()?,
             r.read_f32()?,
             r.read_u8()? != 0,
+            r.read_f32()?,
         )
     } else {
         (
@@ -3607,6 +3631,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             default_split_ratio(),
             default_merge_ratio(),
             false,
+            0.0,
         )
     };
     Ok(FluidConfig3Dto {
@@ -3623,6 +3648,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         split_density_ratio,
         merge_density_ratio,
         boundary_particles,
+        wall_friction,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -4712,6 +4738,7 @@ mod tests {
         w.fluid.config.stiffness = 15.0;
         w.fluid.config.artificial_viscosity = 1.2;
         w.fluid.config.surface_tension = 0.7;
+        w.fluid.config.wall_friction = 0.4;
         for _ in 0..10 {
             w.step(1.0 / 60.0);
         }
@@ -4724,6 +4751,7 @@ mod tests {
         assert_eq!(r.fluid.config.gamma, 7.0);
         assert_eq!(r.fluid.config.artificial_viscosity, 1.2);
         assert_eq!(r.fluid.config.surface_tension, 0.7);
+        assert_eq!(r.fluid.config.wall_friction, 0.4);
         let b = world2_from_binary(
             &world2_to_binary(&w, LoadMode::Exact).expect("bin"),
             LoadMode::Exact,
@@ -4732,6 +4760,7 @@ mod tests {
         assert_eq!(b.fluid.config.gamma, 7.0);
         assert_eq!(b.fluid.config.artificial_viscosity, 1.2);
         assert_eq!(b.fluid.config.surface_tension, 0.7);
+        assert_eq!(b.fluid.config.wall_friction, 0.4);
     }
 
     #[test]

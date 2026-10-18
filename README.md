@@ -236,7 +236,9 @@ contact for that frame rather than a guessed depth.
   over-dense, mass-conserving) refines resolved regions, and optional
   **boundary particles** sample static bodies into fixed ghost particles
   that exert SPH pressure on the fluid (a pressure-based wall that
-  reduces tunneling). All default
+  reduces tunneling), and optional **wall no-slip** (`wall_friction`,
+  free-slip by default) drives the tangential velocity toward the wall's
+  for a curved Poiseuille-like channel profile. All default
   off, so existing fluids are bit-identical. New
   `ConvexMesh` shape carries exact Mirtich-style mass properties. Fluid
   state persists in snapshots (config block extended at schema v5) and
