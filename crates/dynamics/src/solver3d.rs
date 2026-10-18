@@ -76,6 +76,12 @@ pub struct Solver3D {
     /// Early-exit tolerance: an iteration applying less than this
     /// (max absolute impulse delta) ends the solve. See [`crate::Solver`].
     pub early_exit_tolerance: f32,
+    /// Solve the tangential (Coulomb friction) pass. Default true;
+    /// disabling halves solve cost (set via [`super::solver::SolverQuality::Low`]).
+    pub enable_friction: bool,
+    /// Apply restitution bounces. Default true; disabling keeps the
+    /// Baumgarte positional correction (set via [`super::solver::SolverQuality::Low`]).
+    pub enable_restitution: bool,
 }
 
 impl Solver3D {
@@ -90,7 +96,18 @@ impl Solver3D {
             slop: DEFAULT_SLOP,
             baumgarte: DEFAULT_BAUMGARTE,
             early_exit_tolerance: EARLY_EXIT_TOL,
+            enable_friction: true,
+            enable_restitution: true,
         }
+    }
+
+    /// Apply a quality tier preset (iteration budget plus friction and
+    /// restitution switches). `Ultra` restores the default configuration.
+    /// See [`super::solver::SolverQuality`].
+    pub fn apply_quality(&mut self, quality: super::solver::SolverQuality) {
+        self.iterations = quality.iterations();
+        self.enable_friction = quality.friction();
+        self.enable_restitution = quality.restitution();
     }
 
     /// Solve all constraints. Returns the iterations actually run
@@ -102,9 +119,24 @@ impl Solver3D {
         dt: f32,
     ) -> usize {
         for constraint in constraints.iter_mut() {
+            if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                constraint.normal_impulse = 0.0;
+                constraint.tangent1_impulse = 0.0;
+                constraint.tangent2_impulse = 0.0;
+                constraint.rest_bias = 0.0;
+                continue;
+            }
             self.compute_mass_terms(bodies, constraint);
+            if !self.enable_friction {
+                constraint.tangent1_impulse = 0.0;
+                constraint.tangent2_impulse = 0.0;
+            }
             self.apply_warm_starting(bodies, constraint);
-            constraint.rest_bias = self.restitution_bias(bodies, constraint);
+            constraint.rest_bias = if self.enable_restitution {
+                self.restitution_bias(bodies, constraint)
+            } else {
+                0.0
+            };
         }
 
         let mut ran = 0;
@@ -112,10 +144,18 @@ impl Solver3D {
             ran += 1;
             let mut max_applied: f32 = 0.0;
             for constraint in constraints.iter_mut() {
+                if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                    continue;
+                }
                 max_applied = max_applied.max(self.solve_normal(bodies, constraint, dt));
             }
-            for constraint in constraints.iter_mut() {
-                max_applied = max_applied.max(self.solve_friction(bodies, constraint));
+            if self.enable_friction {
+                for constraint in constraints.iter_mut() {
+                    if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                        continue;
+                    }
+                    max_applied = max_applied.max(self.solve_friction(bodies, constraint));
+                }
             }
             if max_applied < self.early_exit_tolerance {
                 break;
@@ -133,12 +173,27 @@ impl Solver3D {
 
         // Snapshot world tensors once; the per-iteration impulse
         // applications below reuse them instead of rebuilding.
-        constraint.inv_inertia_world_a = body_a.world_inv_inertia();
-        constraint.inv_inertia_world_b = body_b.world_inv_inertia();
+        // Sleeping bodies count as infinite mass (exactly like statics),
+        // so a frozen body anchors its awake partners instead of
+        // splitting the correction with a share that integrate discards.
+        let frozen_a = body_a.is_static || body_a.is_sleeping;
+        let frozen_b = body_b.is_static || body_b.is_sleeping;
+        constraint.inv_inertia_world_a = if frozen_a {
+            Mat3::ZERO
+        } else {
+            body_a.world_inv_inertia()
+        };
+        constraint.inv_inertia_world_b = if frozen_b {
+            Mat3::ZERO
+        } else {
+            body_b.world_inv_inertia()
+        };
+        let ima = if frozen_a { 0.0 } else { body_a.inv_mass };
+        let imb = if frozen_b { 0.0 } else { body_b.inv_mass };
 
         constraint.mass_normal = Self::effective_mass(
-            body_a.inv_mass,
-            body_b.inv_mass,
+            ima,
+            imb,
             constraint.inv_inertia_world_a,
             constraint.inv_inertia_world_b,
             r_a,
@@ -146,8 +201,8 @@ impl Solver3D {
             constraint.normal,
         );
         constraint.mass_tangent1 = Self::effective_mass(
-            body_a.inv_mass,
-            body_b.inv_mass,
+            ima,
+            imb,
             constraint.inv_inertia_world_a,
             constraint.inv_inertia_world_b,
             r_a,
@@ -155,8 +210,8 @@ impl Solver3D {
             constraint.tangent1,
         );
         constraint.mass_tangent2 = Self::effective_mass(
-            body_a.inv_mass,
-            body_b.inv_mass,
+            ima,
+            imb,
             constraint.inv_inertia_world_a,
             constraint.inv_inertia_world_b,
             r_a,
@@ -363,14 +418,18 @@ impl Solver3D {
             (&mut tail[0], &mut head[body_b])
         };
 
-        a.velocity -= p * a.inv_mass;
-        b.velocity += p * b.inv_mass;
-
-        let torque_a = r_a.cross(p);
-        let torque_b = r_b.cross(p);
-
-        a.angular_velocity -= inv_inertia_a * torque_a;
-        b.angular_velocity += inv_inertia_b * torque_b;
+        // Frozen bodies (static or sleeping) take no impulse, mirroring
+        // the infinite-mass mass terms above.
+        if !a.is_static && !a.is_sleeping {
+            a.velocity -= p * a.inv_mass;
+            let torque_a = r_a.cross(p);
+            a.angular_velocity -= inv_inertia_a * torque_a;
+        }
+        if !b.is_static && !b.is_sleeping {
+            b.velocity += p * b.inv_mass;
+            let torque_b = r_b.cross(p);
+            b.angular_velocity += inv_inertia_b * torque_b;
+        }
     }
 
     fn apply_impulse(
@@ -401,6 +460,14 @@ impl Default for Solver3D {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// True when both constraint ends are frozen (static or sleeping):
+/// zero velocity by construction, so the pair needs no solve work.
+/// Mirrors `super::solver::both_frozen` (kept in sync; one per dimension
+/// because body types differ).
+fn both_frozen(bodies: &[RigidBody3], a: usize, b: usize) -> bool {
+    (bodies[a].is_static || bodies[a].is_sleeping) && (bodies[b].is_static || bodies[b].is_sleeping)
 }
 
 #[cfg(test)]

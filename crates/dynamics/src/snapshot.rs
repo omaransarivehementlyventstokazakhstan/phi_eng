@@ -49,13 +49,17 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
 /// unknown versions instead of guessing.
+/// v7 adds the solver friction/restitution switches.
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 6;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 7;
 /// Schema that introduced the ambient block (v5). Gates below must use
-/// this (not `VERSION`), so v5 payloads keep decoding after v6 lands.
+/// this (not `VERSION`), so v5 payloads keep decoding after v6/v7 land.
 const SNAPSHOT_SCHEMA_AMBIENT: u32 = 5;
+/// Schema that introduced the CCD block (v6). Gates below must use this
+/// (not `VERSION`), so v6 payloads keep decoding after v7 lands.
+const SNAPSHOT_SCHEMA_CCD: u32 = 6;
 /// Schema that introduced the gravity block (v4). Worlds without ambient
 /// features but with gravity features serialize at this version.
 const SNAPSHOT_SCHEMA_GRAVITY: u32 = 4;
@@ -316,12 +320,23 @@ struct ContactEntry3Dto {
     tangent2_impulse: f32,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SolverDto {
     iterations: u32,
     slop: f32,
     baumgarte: f32,
     early_exit_tolerance: f32,
+    /// Friction switch (schema v7; default true, elided when true so
+    /// pre-v7 output stays byte-identical).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    friction: bool,
+    /// Restitution switch (schema v7; default true, elided when true).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    restitution: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +575,11 @@ fn is_one_u32(v: &u32) -> bool {
 /// `skip_serializing_if` companion for flags defaulting to false.
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+/// `skip_serializing_if` companion for flags defaulting to true.
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 /// Default adaptive-resolution split ratio.
@@ -1255,6 +1275,8 @@ fn solver_dto_2(w: &World2) -> SolverDto {
         slop: w.solver.slop,
         baumgarte: w.solver.baumgarte,
         early_exit_tolerance: w.solver.early_exit_tolerance,
+        friction: w.solver.enable_friction,
+        restitution: w.solver.enable_restitution,
     }
 }
 
@@ -1264,6 +1286,8 @@ fn solver_dto_3(w: &World3) -> SolverDto {
         slop: w.solver.slop,
         baumgarte: w.solver.baumgarte,
         early_exit_tolerance: w.solver.early_exit_tolerance,
+        friction: w.solver.enable_friction,
+        restitution: w.solver.enable_restitution,
     }
 }
 
@@ -1753,10 +1777,13 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
     let has_ccd = !w.ccd.is_default();
+    let has_solver_flags = !w.solver.enable_friction || !w.solver.enable_restitution;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_ccd {
+    let schema = if has_solver_flags {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_ccd {
+        SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
         SNAPSHOT_SCHEMA_AMBIENT
     } else if has_gravity {
@@ -1941,10 +1968,13 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
     let has_ccd = !w.ccd.is_default();
+    let has_solver_flags = !w.solver.enable_friction || !w.solver.enable_restitution;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_ccd {
+    let schema = if has_solver_flags {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_ccd {
+        SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
         SNAPSHOT_SCHEMA_AMBIENT
     } else if has_gravity {
@@ -2245,6 +2275,8 @@ fn apply_solver_2(w: &mut World2, s: &SolverDto) -> Result<(), SnapshotError> {
     w.solver.slop = s.slop;
     w.solver.baumgarte = s.baumgarte;
     w.solver.early_exit_tolerance = s.early_exit_tolerance;
+    w.solver.enable_friction = s.friction;
+    w.solver.enable_restitution = s.restitution;
     Ok(())
 }
 
@@ -2259,6 +2291,8 @@ fn apply_solver_3(w: &mut World3, s: &SolverDto) -> Result<(), SnapshotError> {
     w.solver.slop = s.slop;
     w.solver.baumgarte = s.baumgarte;
     w.solver.early_exit_tolerance = s.early_exit_tolerance;
+    w.solver.enable_friction = s.friction;
+    w.solver.enable_restitution = s.restitution;
     Ok(())
 }
 
@@ -3057,11 +3091,16 @@ fn decode_envelope(bytes: &[u8], want_kind: u8) -> Result<(u32, Vec<u8>), Snapsh
     Ok((version, payload.to_vec()))
 }
 
-fn encode_solver(out: &mut Vec<u8>, s: &SolverDto) {
+fn encode_solver(out: &mut Vec<u8>, s: &SolverDto, version: u32) {
     write_u32(out, s.iterations);
     write_f32(out, s.slop);
     write_f32(out, s.baumgarte);
     write_f32(out, s.early_exit_tolerance);
+    // Schema v7: friction/restitution switches.
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        write_u8(out, s.friction as u8);
+        write_u8(out, s.restitution as u8);
+    }
 }
 
 /// Schema v4 gravity config block (2D): mode/integrator tags,
@@ -3242,12 +3281,22 @@ fn decode_ambient_config_3(r: &mut Reader) -> Result<AmbientConfig3Dto, Snapshot
     })
 }
 
-fn decode_solver(r: &mut Reader) -> Result<SolverDto, SnapshotError> {
+fn decode_solver(r: &mut Reader, version: u32) -> Result<SolverDto, SnapshotError> {
     Ok(SolverDto {
         iterations: r.read_u32()?,
         slop: r.read_f32()?,
         baumgarte: r.read_f32()?,
         early_exit_tolerance: r.read_f32()?,
+        friction: if version >= SNAPSHOT_SCHEMA_VERSION {
+            r.read_u8()? != 0
+        } else {
+            true
+        },
+        restitution: if version >= SNAPSHOT_SCHEMA_VERSION {
+            r.read_u8()? != 0
+        } else {
+            true
+        },
     })
 }
 
@@ -3451,7 +3500,7 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
     write_f32(&mut p, dto.dt);
     write_f32(&mut p, dto.linear_sleep_threshold);
     write_f32(&mut p, dto.angular_sleep_threshold);
-    encode_solver(&mut p, &dto.solver);
+    encode_solver(&mut p, &dto.solver, dto.schema);
     encode_validation(&mut p, &dto.validation);
     // Schema v4: gravity config block. v3 payloads omit it (strict:
     // a v4-tagged payload without it fails truncation, never misparses).
@@ -3466,7 +3515,7 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, dto.time);
     }
     // Schema v6: CCD config block.
-    if dto.schema >= SNAPSHOT_SCHEMA_VERSION {
+    if dto.schema >= SNAPSHOT_SCHEMA_CCD {
         write_u8(&mut p, dto.ccd.enabled as u8);
         write_f32(&mut p, dto.ccd.max_movement);
         write_u32(&mut p, dto.ccd.max_substeps);
@@ -3595,7 +3644,7 @@ fn decode_opt_time(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
 /// Version-gated CCD config: v6 payloads carry the block; older
 /// payloads resolve to a default config.
 fn decode_opt_ccd(r: &mut Reader, version: u32) -> Result<CcdConfigDto, SnapshotError> {
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_CCD {
         Ok(CcdConfigDto {
             enabled: r.read_u8()? != 0,
             max_movement: r.read_f32()?,
@@ -4491,7 +4540,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         dt: r.read_f32()?,
         linear_sleep_threshold: r.read_f32()?,
         angular_sleep_threshold: r.read_f32()?,
-        solver: decode_solver(&mut r)?,
+        solver: decode_solver(&mut r, version)?,
         validation: decode_validation(&mut r)?,
         gravity_config: decode_opt_gravity_2(&mut r, version)?,
         ambient: decode_opt_ambient_2(&mut r, version)?,
@@ -4612,7 +4661,7 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
     write_f32(&mut p, dto.dt);
     write_f32(&mut p, dto.linear_sleep_threshold);
     write_f32(&mut p, dto.angular_sleep_threshold);
-    encode_solver(&mut p, &dto.solver);
+    encode_solver(&mut p, &dto.solver, dto.schema);
     encode_validation(&mut p, &dto.validation);
     // Schema v4: gravity config block (see `world2_to_binary`).
     let gravity_v4 = dto.schema >= SNAPSHOT_SCHEMA_GRAVITY;
@@ -4626,7 +4675,7 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, dto.time);
     }
     // Schema v6: CCD config block.
-    if dto.schema >= SNAPSHOT_SCHEMA_VERSION {
+    if dto.schema >= SNAPSHOT_SCHEMA_CCD {
         write_u8(&mut p, dto.ccd.enabled as u8);
         write_f32(&mut p, dto.ccd.max_movement);
         write_u32(&mut p, dto.ccd.max_substeps);
@@ -4707,7 +4756,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         dt: r.read_f32()?,
         linear_sleep_threshold: r.read_f32()?,
         angular_sleep_threshold: r.read_f32()?,
-        solver: decode_solver(&mut r)?,
+        solver: decode_solver(&mut r, version)?,
         validation: decode_validation(&mut r)?,
         gravity_config: decode_opt_gravity_3(&mut r, version)?,
         ambient: decode_opt_ambient_3(&mut r, version)?,

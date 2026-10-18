@@ -35,17 +35,21 @@ public static class Snapshot
     /// v4 adds the gravity config block and per-body gravity scales; v5
     /// adds the ambient-force config block (spring/drag/turbulence), the
     /// simulation clock, and per-body ambient scales; v6 adds the CCD
-    /// config block. Writers emit v3 for default worlds, v4 for
-    /// gravity-only worlds, v5 for ambient/fluid worlds (byte-compatible
-    /// with older files); anything with a non-default CCD config uses v6.
+    /// config block; v7 adds the solver friction/restitution switches.
+    /// Writers emit v3 for default worlds, v4 for gravity-only worlds, v5
+    /// for ambient/fluid worlds, v6 for CCD worlds (byte-compatible with
+    /// older files); anything with non-default solver switches uses v7.
     /// </summary>
-    public const uint SchemaVersion = 6;
+    public const uint SchemaVersion = 7;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
 
     /// <summary>Schema that introduced the ambient block (v5).</summary>
     public const uint AmbientSchemaVersion = 5;
+
+    /// <summary>Schema that introduced the CCD block (v6).</summary>
+    public const uint CcdSchemaVersion = 6;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -361,6 +365,8 @@ public static class Snapshot
         [JsonPropertyName("slop")] public float Slop { get; set; }
         [JsonPropertyName("baumgarte")] public float Baumgarte { get; set; }
         [JsonPropertyName("early_exit_tolerance")] public float EarlyExitTolerance { get; set; }
+        [JsonPropertyName("friction")] public bool Friction { get; set; } = true;
+        [JsonPropertyName("restitution")] public bool Restitution { get; set; } = true;
     }
 
     private sealed class ValidationDto
@@ -655,8 +661,9 @@ public static class Snapshot
                 || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
             bool hasCcd = !w.Ccd.IsDefault();
+            bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasCcd ? SchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            uint schema = hasSolverFlags ? SchemaVersion : hasCcd ? CcdSchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
             {
                 Schema = schema,
@@ -717,6 +724,8 @@ public static class Snapshot
                     Slop = w.Solver.Slop,
                     Baumgarte = w.Solver.Baumgarte,
                     EarlyExitTolerance = w.Solver.EarlyExitTolerance,
+                    Friction = w.Solver.EnableFriction,
+                    Restitution = w.Solver.EnableRestitution,
                 },
                 Validation = new ValidationDto
                 {
@@ -934,8 +943,9 @@ public static class Snapshot
                 || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
             bool hasCcd = !w.Ccd.IsDefault();
+            bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasCcd ? SchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            uint schema = hasSolverFlags ? SchemaVersion : hasCcd ? CcdSchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
             {
                 Schema = schema,
@@ -996,6 +1006,8 @@ public static class Snapshot
                     Slop = w.Solver.Slop,
                     Baumgarte = w.Solver.Baumgarte,
                     EarlyExitTolerance = w.Solver.EarlyExitTolerance,
+                    Friction = w.Solver.EnableFriction,
+                    Restitution = w.Solver.EnableRestitution,
                 },
                 Validation = new ValidationDto
                 {
@@ -1433,6 +1445,8 @@ public static class Snapshot
         w.Solver.Slop = Fin(dto.Solver.Slop, "solver");
         w.Solver.Baumgarte = Fin(dto.Solver.Baumgarte, "solver");
         w.Solver.EarlyExitTolerance = Fin(dto.Solver.EarlyExitTolerance, "solver");
+        w.Solver.EnableFriction = dto.Solver.Friction;
+        w.Solver.EnableRestitution = dto.Solver.Restitution;
 
         foreach (var b in dto.Bodies)
         {
@@ -1627,6 +1641,8 @@ public static class Snapshot
         w.Solver.Slop = Fin(dto.Solver.Slop, "solver");
         w.Solver.Baumgarte = Fin(dto.Solver.Baumgarte, "solver");
         w.Solver.EarlyExitTolerance = Fin(dto.Solver.EarlyExitTolerance, "solver");
+        w.Solver.EnableFriction = dto.Solver.Friction;
+        w.Solver.EnableRestitution = dto.Solver.Restitution;
 
         foreach (var b in dto.Bodies)
         {
@@ -1834,12 +1850,18 @@ public static class Snapshot
 
     // ============ binary payloads (byte-identical layout to Rust) ============
 
-    private static void WriteSolver(BinaryWriter w, SolverDto s)
+    private static void WriteSolver(BinaryWriter w, SolverDto s, uint version)
     {
         w.Write(s.Iterations);
         w.Write(s.Slop);
         w.Write(s.Baumgarte);
         w.Write(s.EarlyExitTolerance);
+        // Schema v7: friction/restitution switches.
+        if (version >= SchemaVersion)
+        {
+            w.Write(s.Friction);
+            w.Write(s.Restitution);
+        }
     }
 
     private static void WriteValidation(BinaryWriter w, ValidationDto v)
@@ -2065,7 +2087,7 @@ public static class Snapshot
         w.Write(dto.Dt);
         w.Write(dto.LinearSleepThreshold);
         w.Write(dto.AngularSleepThreshold);
-        WriteSolver(w, dto.Solver);
+        WriteSolver(w, dto.Solver, dto.Schema);
         WriteValidation(w, dto.Validation);
         // Schema v4: gravity config block. v3 payloads omit it (strict:
         // a v4-tagged payload without it fails truncation, never misparses).
@@ -2079,7 +2101,7 @@ public static class Snapshot
             w.Write(dto.Time);
         }
         // Schema v6: CCD config block.
-        if (dto.Schema >= SchemaVersion)
+        if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
             w.Write(dto.Ccd.MaxMovement);
@@ -2320,7 +2342,7 @@ public static class Snapshot
             Dt = r.ReadSingle(),
             LinearSleepThreshold = r.ReadSingle(),
             AngularSleepThreshold = r.ReadSingle(),
-            Solver = ReadSolver(r),
+            Solver = ReadSolver(r, version),
             Validation = ReadValidation(r),
             // v4+ payloads carry the gravity block; older ones resolve
             // to defaults (same values a v3 file implies).
@@ -2329,7 +2351,7 @@ public static class Snapshot
             Ambient = version >= AmbientSchemaVersion ? ReadAmbientConfig2(r) : new AmbientConfig2Dto(),
             Time = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
             // v6 payloads carry the CCD block.
-            Ccd = version >= SchemaVersion ? new CcdConfigDto
+            Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
                 MaxMovement = r.ReadSingle(),
@@ -2399,12 +2421,14 @@ public static class Snapshot
         return dto;
     }
 
-    private static SolverDto ReadSolver(BinaryReader r) => new()
+    private static SolverDto ReadSolver(BinaryReader r, uint version) => new()
     {
         Iterations = r.ReadInt32(),
         Slop = r.ReadSingle(),
         Baumgarte = r.ReadSingle(),
         EarlyExitTolerance = r.ReadSingle(),
+        Friction = version >= SchemaVersion ? r.ReadBoolean() : true,
+        Restitution = version >= SchemaVersion ? r.ReadBoolean() : true,
     };
 
     private static void WriteGravityConfig2(BinaryWriter w, GravityConfig2Dto c)
@@ -2576,7 +2600,7 @@ public static class Snapshot
         w.Write(dto.Dt);
         w.Write(dto.LinearSleepThreshold);
         w.Write(dto.AngularSleepThreshold);
-        WriteSolver(w, dto.Solver);
+        WriteSolver(w, dto.Solver, dto.Schema);
         WriteValidation(w, dto.Validation);
         // Schema v4: gravity config block (see WriteWorld2Payload).
         bool gravityV4 = dto.Schema >= GravitySchemaVersion;
@@ -2588,7 +2612,7 @@ public static class Snapshot
             w.Write(dto.Time);
         }
         // Schema v6: CCD config block.
-        if (dto.Schema >= SchemaVersion)
+        if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
             w.Write(dto.Ccd.MaxMovement);
@@ -2645,12 +2669,12 @@ public static class Snapshot
             Dt = r.ReadSingle(),
             LinearSleepThreshold = r.ReadSingle(),
             AngularSleepThreshold = r.ReadSingle(),
-            Solver = ReadSolver(r),
+            Solver = ReadSolver(r, version),
             Validation = ReadValidation(r),
             GravityConfig = version >= GravitySchemaVersion ? ReadGravityConfig3(r) : new GravityConfig3Dto(),
             Ambient = version >= AmbientSchemaVersion ? ReadAmbientConfig3(r) : new AmbientConfig3Dto(),
             Time = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
-            Ccd = version >= SchemaVersion ? new CcdConfigDto
+            Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
                 MaxMovement = r.ReadSingle(),

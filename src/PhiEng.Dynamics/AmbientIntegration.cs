@@ -88,7 +88,7 @@ public static class AmbientIntegration
 
         foreach (var b in bodies)
         {
-            if (b.IsStatic || b.AmbientScale == 0.0f) continue;
+            if (b.IsStatic || b.IsSleeping || b.AmbientScale == 0.0f) continue;
             float scale = b.AmbientScale;
             Vector2 dv = Vector2.Zero;
 
@@ -146,7 +146,7 @@ public static class AmbientIntegration
 
         foreach (var b in bodies)
         {
-            if (b.IsStatic || b.AmbientScale == 0.0f) continue;
+            if (b.IsStatic || b.IsSleeping || b.AmbientScale == 0.0f) continue;
             float scale = b.AmbientScale;
             Vector3 dv = Vector3.Zero;
 

@@ -406,7 +406,7 @@ pub fn ambient_kick_2(bodies: &mut [RigidBody2], cfg: &AmbientConfig2, time: f32
         return;
     }
     for b in bodies.iter_mut() {
-        if b.is_static || b.ambient_scale == 0.0 {
+        if b.is_static || b.is_sleeping || b.ambient_scale == 0.0 {
             continue;
         }
         let scale = b.ambient_scale;
@@ -472,7 +472,7 @@ pub fn ambient_kick_3(bodies: &mut [RigidBody3], cfg: &AmbientConfig3, time: f32
         return;
     }
     for b in bodies.iter_mut() {
-        if b.is_static || b.ambient_scale == 0.0 {
+        if b.is_static || b.is_sleeping || b.ambient_scale == 0.0 {
             continue;
         }
         let scale = b.ambient_scale;

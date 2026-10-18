@@ -8,24 +8,35 @@ C# is enforced by `tools/check_test_parity.py`
 (ID blocks: S01–S05 sleep, W06–W10 warm start, N11–N15 never-guess,
 S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
-snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD).
+snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
+Q01–Q05 solver quality).
 
-## Sleep is partial (S01, S02)
+## Sleep is full but support-gated (S01, S02)
 
-Bodies flagged asleep are **not** skipped anywhere in the pipeline, and
-there is **no auto-wake on contact and no wake cascade**. Concretely:
+Sleeping bodies are frozen: skipped in gravity, ambient, fluid force
+application, integration, and the contact solver (treated as infinite
+mass, exactly like statics). What wakes them:
 
-- A sleeping body hit by a moving body does not wake; it keeps
-  accumulating gravity and solver impulses each step with velocities
-  zeroed at step end (effectively static-like until manually woken).
-- Waking the bottom of a sleeping stack does not wake the bodies above.
+- **New contact** auto-wakes (an uncached pair involving a sleeper),
+  with a transitive cascade over contact and joint partners.
+- **Lost contact** auto-wakes (a vanished pair re-evaluates support),
+  also cascaded — a pulled-out-from-under stack falls instead of
+  floating.
+- **Direct impulse/force** (`apply_impulse`/`apply_force`, including
+  fluid coupling) wakes its target; explicit `wake_body` still works
+  and cascades the same way.
 
-User impact: sleep currently only damps residual velocity; it saves no
-CPU. Call `wake_body` explicitly after teleporting, spawning onto, or
-otherwise disturbing a sleeping body. Full sleeping (pipeline skip +
-auto-wake on new contact + cascade) is a planned separate phase with its
-own fuzz/test cycle — deliberately *not* done inside an edge-case
-validation phase, so validation results stay interpretable.
+A body falls asleep only when slow **and** supported by a current
+contact — ballistic apexes and drifting bodies never sleep, so no
+wake/sleep history exists and save/load stays exact (schema unchanged).
+
+Two consequences to know:
+
+- An unsupported slow body (apex, drifter) keeps full pipeline cost
+  instead of sleeping; this is rare and intentional.
+- Joints with an awake partner keep their bodies awake (a jointed
+  sleeper wakes the moment its partner moves); fully frozen joints
+  are skipped.
 
 ## Convex-hull mass properties are a stub (D27)
 

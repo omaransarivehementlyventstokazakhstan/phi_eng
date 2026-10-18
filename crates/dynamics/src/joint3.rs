@@ -171,6 +171,23 @@ pub enum Joint3 {
     Fixed(FixedJoint3),
 }
 
+/// Sleep gate shared by joint warm-start and solve (see `joint.rs`):
+/// skip fully frozen joints, wake a sleeping end with an awake partner.
+fn joint_sleep_gate(bodies: &mut [RigidBody3], a: usize, b: usize) -> bool {
+    let a_frozen = bodies[a].is_static || bodies[a].is_sleeping;
+    let b_frozen = bodies[b].is_static || bodies[b].is_sleeping;
+    if a_frozen && b_frozen {
+        return true;
+    }
+    if bodies[a].is_sleeping {
+        bodies[a].is_sleeping = false;
+    }
+    if bodies[b].is_sleeping {
+        bodies[b].is_sleeping = false;
+    }
+    false
+}
+
 impl Joint3 {
     /// Joint id.
     pub fn id(&self) -> usize {
@@ -245,8 +262,14 @@ impl Joint3 {
     /// Apply the stored impulses along CURRENT directions before iterating
     /// (warm start). Directions are recomputed from live state, so a stale
     /// scalar can never push the wrong way; world-frame vectors (point /
-    /// orientation-lock) are directly reusable.
+    /// orientation-lock) are directly reusable. A joint with both ends
+    /// frozen (static or sleeping) is skipped; a sleeping end with an
+    /// awake partner wakes first.
     pub fn warm_start(&self, bodies: &mut [RigidBody3]) {
+        let (a, b) = self.bodies();
+        if joint_sleep_gate(bodies, a, b) {
+            return;
+        }
         match self {
             Joint3::Distance(j) => j.warm_start(bodies),
             Joint3::Hinge(j) => j.warm_start(bodies),
@@ -255,8 +278,13 @@ impl Joint3 {
         }
     }
 
-    /// One sequential-impulse iteration.
+    /// One sequential-impulse iteration. Same sleep gate as
+    /// [`Joint3::warm_start`].
     pub fn solve(&mut self, bodies: &mut [RigidBody3], dt: f32) {
+        let (a, b) = self.bodies();
+        if joint_sleep_gate(bodies, a, b) {
+            return;
+        }
         match self {
             Joint3::Distance(j) => j.solve(bodies, dt),
             Joint3::Hinge(j) => j.solve(bodies, dt),

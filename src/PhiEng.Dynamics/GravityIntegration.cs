@@ -71,7 +71,7 @@ public static class GravityIntegration
     {
         foreach (var b in bodies)
         {
-            if (b.IsStatic) continue;
+            if (b.IsStatic || b.IsSleeping) continue;
             Vector2 dv = uniform * (b.GravityScale * h);
             if (drag) dv -= b.Velocity * (b.LinearDamping * h);
             b.Velocity += dv;
@@ -83,7 +83,7 @@ public static class GravityIntegration
             case GravityMode.Central:
                 foreach (var b in bodies)
                 {
-                    if (b.IsStatic) continue;
+                    if (b.IsStatic || b.IsSleeping) continue;
                     Vector2 a = CentralAccel2(b.Transform.Position, cfg.Attractor, cfg.AttractorMu, cfg.Softening);
                     Vector2 dv = a * (b.GravityScale * h);
                     if (drag) dv -= b.Velocity * (b.LinearDamping * h);
@@ -103,13 +103,13 @@ public static class GravityIntegration
                                 bi.Transform.Position, bi.Mass,
                                 bj.Transform.Position, bj.Mass,
                                 cfg.BigG, cfg.Softening);
-                            if (!bi.IsStatic)
+                            if (!bi.IsStatic && !bi.IsSleeping)
                             {
                                 Vector2 dv = ai * (bi.GravityScale * h);
                                 if (drag) dv -= bi.Velocity * (bi.LinearDamping * h);
                                 bi.Velocity += dv;
                             }
-                            if (!bj.IsStatic)
+                            if (!bj.IsStatic && !bj.IsSleeping)
                             {
                                 Vector2 dv = aj * (bj.GravityScale * h);
                                 if (drag) dv -= bj.Velocity * (bj.LinearDamping * h);
@@ -131,7 +131,7 @@ public static class GravityIntegration
     {
         foreach (var b in bodies)
         {
-            if (b.IsStatic) continue;
+            if (b.IsStatic || b.IsSleeping) continue;
             Vector3 dv = uniform * (b.GravityScale * h);
             if (drag) dv -= b.Velocity * (b.LinearDamping * h);
             b.Velocity += dv;
@@ -143,7 +143,7 @@ public static class GravityIntegration
             case GravityMode.Central:
                 foreach (var b in bodies)
                 {
-                    if (b.IsStatic) continue;
+                    if (b.IsStatic || b.IsSleeping) continue;
                     Vector3 a = CentralAccel3(b.Transform.Position, cfg.Attractor, cfg.AttractorMu, cfg.Softening);
                     Vector3 dv = a * (b.GravityScale * h);
                     if (drag) dv -= b.Velocity * (b.LinearDamping * h);
@@ -163,13 +163,13 @@ public static class GravityIntegration
                                 bi.Transform.Position, bi.Mass,
                                 bj.Transform.Position, bj.Mass,
                                 cfg.BigG, cfg.Softening);
-                            if (!bi.IsStatic)
+                            if (!bi.IsStatic && !bi.IsSleeping)
                             {
                                 Vector3 dv = ai * (bi.GravityScale * h);
                                 if (drag) dv -= bi.Velocity * (bi.LinearDamping * h);
                                 bi.Velocity += dv;
                             }
-                            if (!bj.IsStatic)
+                            if (!bj.IsStatic && !bj.IsSleeping)
                             {
                                 Vector3 dv = aj * (bj.GravityScale * h);
                                 if (drag) dv -= bj.Velocity * (bj.LinearDamping * h);

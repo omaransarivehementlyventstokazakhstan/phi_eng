@@ -395,6 +395,9 @@ impl RigidBody2 {
         if self.is_static {
             return;
         }
+        // An externally applied force is a wake event (see S01): frozen
+        // bodies ignore the force itself only when static.
+        self.is_sleeping = false;
 
         // Linear force
         self.velocity += force * self.inv_mass * dt;
@@ -410,6 +413,8 @@ impl RigidBody2 {
         if self.is_static {
             return;
         }
+        // An externally applied impulse is a wake event (see S01).
+        self.is_sleeping = false;
 
         self.velocity += impulse * self.inv_mass;
 
@@ -856,6 +861,8 @@ impl RigidBody3 {
         if self.is_static {
             return;
         }
+        // An externally applied force is a wake event (see S01).
+        self.is_sleeping = false;
 
         self.velocity += force * self.inv_mass * dt;
 
@@ -869,6 +876,8 @@ impl RigidBody3 {
         if self.is_static {
             return;
         }
+        // An externally applied impulse is a wake event (see S01).
+        self.is_sleeping = false;
 
         self.velocity += impulse * self.inv_mass;
 

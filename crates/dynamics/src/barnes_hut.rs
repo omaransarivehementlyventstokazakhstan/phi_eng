@@ -301,7 +301,7 @@ pub fn apply_bh_forces_2(
     let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
     let tree = build_quad(&positions, &masses);
     for i in 0..n {
-        if bodies[i].is_static {
+        if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
         }
         let mut acc = Vec2::ZERO;
@@ -573,7 +573,7 @@ pub fn apply_bh_forces_3(
     let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
     let tree = build_oct(&positions, &masses);
     for i in 0..n {
-        if bodies[i].is_static {
+        if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
         }
         let mut acc = Vec3::ZERO;

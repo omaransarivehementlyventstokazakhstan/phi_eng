@@ -63,6 +63,26 @@ public struct ContactConstraint
 }
 
 /// <summary>
+/// Solver quality tier: a preset for iteration budget plus friction and
+/// restitution switches. Mirrors Rust
+/// <c>phieng_dynamics::solver::SolverQuality</c>. Tiers only ever reduce
+/// work vs <see cref="SolverQuality.Ultra"/>; Ultra restores defaults.
+/// </summary>
+public enum SolverQuality
+{
+    /// <summary>8 iterations, friction, restitution (the default).</summary>
+    Ultra,
+    /// <summary>6 iterations, friction, restitution.</summary>
+    High,
+    /// <summary>4 iterations, friction, restitution.</summary>
+    Medium,
+    /// <summary>2 iterations, no friction, no restitution.</summary>
+    Low,
+    /// <summary>1 iteration, no friction, no restitution.</summary>
+    Minimal,
+}
+
+/// <summary>
 /// Constraint solver for physics engine.
 /// Mirrors the Rust <c>Solver</c> in crates/dynamics/src/solver.rs.
 /// </summary>
@@ -90,6 +110,16 @@ public class Solver
     /// absolute impulse delta) ends the solve. Mirrors Rust.
     /// </summary>
     public float EarlyExitTolerance { get; set; }
+    /// <summary>
+    /// Solve the tangential (Coulomb friction) pass. Default true;
+    /// disabling halves solve cost (set via <see cref="SolverQuality.Low"/>).
+    /// </summary>
+    public bool EnableFriction { get; set; }
+    /// <summary>
+    /// Apply restitution bounces. Default true; disabling keeps the
+    /// Baumgarte positional correction (set via <see cref="SolverQuality.Low"/>).
+    /// </summary>
+    public bool EnableRestitution { get; set; }
 
     /// <summary>Default solver: 8 iterations, slop 0.005, Baumgarte 0.2.</summary>
     public Solver()
@@ -98,7 +128,28 @@ public class Solver
         Slop = 0.005f;
         Baumgarte = 0.2f;
         EarlyExitTolerance = 1e-6f;
+        EnableFriction = true;
+        EnableRestitution = true;
         Parallel = false;
+    }
+
+    /// <summary>
+    /// Apply a quality tier preset (iteration budget plus friction and
+    /// restitution switches). <see cref="SolverQuality.Ultra"/> restores
+    /// the default configuration.
+    /// </summary>
+    public void ApplyQuality(SolverQuality quality)
+    {
+        Iterations = quality switch
+        {
+            SolverQuality.Ultra => 8,
+            SolverQuality.High => 6,
+            SolverQuality.Medium => 4,
+            SolverQuality.Low => 2,
+            _ => 1,
+        };
+        EnableFriction = quality <= SolverQuality.Medium;
+        EnableRestitution = quality <= SolverQuality.Medium;
     }
 
     /// <summary>
@@ -110,12 +161,28 @@ public class Solver
     public int Solve(List<RigidBody2> bodies, List<ContactConstraint> constraints, float dt)
     {
         // Mass terms + warm start + restitution targets from pre-solve state.
+        // With friction off, cached tangent impulses are dropped so no
+        // stale sideways push survives. Fully frozen pairs (both ends
+        // static or sleeping) carry zero velocity: skip them so sleeping
+        // islands cost nothing in the solver.
         for (int i = 0; i < constraints.Count; i++)
         {
             var c = constraints[i];
+            if (BothFrozen(bodies, c.BodyA, c.BodyB))
+            {
+                c.NormalImpulse = 0.0f;
+                c.TangentImpulse = 0.0f;
+                c.RestBias = 0.0f;
+                constraints[i] = c;
+                continue;
+            }
             ComputeMassTerms(bodies, ref c);
+            if (!EnableFriction)
+            {
+                c.TangentImpulse = 0.0f;
+            }
             ApplyWarmStarting(bodies, c);
-            c.RestBias = RestitutionBias(bodies, c);
+            c.RestBias = EnableRestitution ? RestitutionBias(bodies, c) : 0.0f;
             constraints[i] = c;
         }
 
@@ -127,14 +194,19 @@ public class Solver
             for (int j = 0; j < constraints.Count; j++)
             {
                 var c = constraints[j];
+                if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
                 maxApplied = MathF.Max(maxApplied, SolveNormal(bodies, ref c, dt));
                 constraints[j] = c;
             }
-            for (int j = 0; j < constraints.Count; j++)
+            if (EnableFriction)
             {
-                var c = constraints[j];
-                maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
-                constraints[j] = c;
+                for (int j = 0; j < constraints.Count; j++)
+                {
+                    var c = constraints[j];
+                    if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
+                    maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
+                    constraints[j] = c;
+                }
             }
             if (maxApplied < EarlyExitTolerance)
                 break;
@@ -149,16 +221,31 @@ public class Solver
     {
         var bodyA = bodies[constraint.BodyA];
         var bodyB = bodies[constraint.BodyB];
+        float ima = (bodyA.IsStatic || bodyA.IsSleeping) ? 0.0f : bodyA.InvMass;
+        float imb = (bodyB.IsStatic || bodyB.IsSleeping) ? 0.0f : bodyB.InvMass;
+        float iia = (bodyA.IsStatic || bodyA.IsSleeping) ? 0.0f : bodyA.InvInertia;
+        float iib = (bodyB.IsStatic || bodyB.IsSleeping) ? 0.0f : bodyB.InvInertia;
         Vector2 rA = constraint.Point - bodyA.Transform.Position;
         Vector2 rB = constraint.Point - bodyB.Transform.Position;
         constraint.MassNormal = EffectiveMass(
-            bodyA.InvMass, bodyB.InvMass,
-            bodyA.InvInertia, bodyB.InvInertia,
+            ima, imb,
+            iia, iib,
             rA, rB, constraint.Normal);
         constraint.MassTangent = EffectiveMass(
-            bodyA.InvMass, bodyB.InvMass,
-            bodyA.InvInertia, bodyB.InvInertia,
+            ima, imb,
+            iia, iib,
             rA, rB, constraint.Tangent);
+    }
+
+    /// <summary>
+    /// True when both constraint ends are frozen (static or sleeping):
+    /// zero velocity by construction, so the pair needs no solve work.
+    /// </summary>
+    private static bool BothFrozen(List<RigidBody2> bodies, int a, int b)
+    {
+        var ba = bodies[a];
+        var bb = bodies[b];
+        return (ba.IsStatic || ba.IsSleeping) && (bb.IsStatic || bb.IsSleeping);
     }
 
     /// <summary>
@@ -180,8 +267,12 @@ public class Solver
         {
             var c = constraints[i];
             ComputeMassTerms(bodies, ref c);
+            if (!EnableFriction)
+            {
+                c.TangentImpulse = 0.0f;
+            }
             ApplyWarmStarting(bodies, c);
-            c.RestBias = RestitutionBias(bodies, c);
+            c.RestBias = EnableRestitution ? RestitutionBias(bodies, c) : 0.0f;
             constraints[i] = c;
         }
         if (islandConstraints.Count <= 1)
@@ -207,14 +298,19 @@ public class Solver
                 foreach (int ci in list)
                 {
                     var c = constraints[ci];
+                    if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
                     localMax = MathF.Max(localMax, SolveNormal(bodies, ref c, dt));
                     constraints[ci] = c;
                 }
-                foreach (int ci in list)
+                if (EnableFriction)
                 {
-                    var c = constraints[ci];
-                    localMax = MathF.Max(localMax, SolveFriction(bodies, ref c));
-                    constraints[ci] = c;
+                    foreach (int ci in list)
+                    {
+                        var c = constraints[ci];
+                        if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
+                        localMax = MathF.Max(localMax, SolveFriction(bodies, ref c));
+                        constraints[ci] = c;
+                    }
                 }
                 maxSlots[ii] = localMax;
                 barrier.SignalAndWait();
@@ -251,14 +347,19 @@ public class Solver
             foreach (int j in indices)
             {
                 var c = constraints[j];
+                if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
                 maxApplied = MathF.Max(maxApplied, SolveNormal(bodies, ref c, dt));
                 constraints[j] = c;
             }
-            foreach (int j in indices)
+            if (EnableFriction)
             {
-                var c = constraints[j];
-                maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
-                constraints[j] = c;
+                foreach (int j in indices)
+                {
+                    var c = constraints[j];
+                    if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
+                    maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
+                    constraints[j] = c;
+                }
             }
             if (maxApplied < EarlyExitTolerance)
                 break;
@@ -411,16 +512,20 @@ public class Solver
         List<RigidBody2> bodies, int bodyA, int bodyB,
         Vector2 rA, Vector2 rB, Vector2 p)
     {
-        float invMassA = bodies[bodyA].InvMass;
-        float invInertiaA = bodies[bodyA].InvInertia;
-        float invMassB = bodies[bodyB].InvMass;
-        float invInertiaB = bodies[bodyB].InvInertia;
-
-        bodies[bodyA].Velocity -= p * invMassA;
-        bodies[bodyB].Velocity += p * invMassB;
-
-        bodies[bodyA].AngularVelocity -= (rA.X * p.Y - rA.Y * p.X) * invInertiaA;
-        bodies[bodyB].AngularVelocity += (rB.X * p.Y - rB.Y * p.X) * invInertiaB;
+        // Frozen bodies (static or sleeping) take no impulse, mirroring
+        // the infinite-mass mass terms above.
+        var a = bodies[bodyA];
+        var b = bodies[bodyB];
+        if (!a.IsStatic && !a.IsSleeping)
+        {
+            a.Velocity -= p * a.InvMass;
+            a.AngularVelocity -= (rA.X * p.Y - rA.Y * p.X) * a.InvInertia;
+        }
+        if (!b.IsStatic && !b.IsSleeping)
+        {
+            b.Velocity += p * b.InvMass;
+            b.AngularVelocity += (rB.X * p.Y - rB.Y * p.X) * b.InvInertia;
+        }
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]

@@ -8,6 +8,16 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Tests
+- **Solver quality parity block Q01–Q05** (mirrored Rust↔C#): tier
+  presets map to iteration budgets and friction/restitution switches
+  (Q01), friction-off sliding preserved in 2D/3D (Q02, Q04),
+  restitution-off no-bounce (Q03), solver-flag snapshot round-trip at
+  schema v7 with default worlds staying on older schemas (Q05).
+- **Sleep contract rework (S01, S02)**: the old known-limitation tests
+  (no auto-wake, no cascade) are replaced by the new behavior —
+  auto-wake on new contact with impact response (S01), transitive wake
+  cascade through a resting stack plus settle-back-without-tunneling
+  (S02).
 - **CCD parity block C01–C04** (mirrored Rust↔C#): fast-ball-vs-thin-wall
   tunneling prevented (2D C01, 3D C02), default-off bit-identical
   trajectories plus schema-v3 JSON without a `ccd` key (C03), and CCD
@@ -49,6 +59,24 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **Solver quality tiers (Rust + managed C#)**: `SolverQuality`
+  (`Ultra` 8 iters down to `Minimal` 1 iter) plus `enable_friction` /
+  `enable_restitution` switches on `Solver`/`Solver3D`
+  (`ApplyQuality()` in C#). Low/Minimal skip the friction pass
+  (~half the solve cost). Persisted through **snapshot schema v7**
+  (conditional: only worlds with disabled switches bump; everything
+  else stays byte-identical).
+- **Full sleeping (Rust + managed C#)**: sleeping bodies are frozen —
+  skipped in gravity, ambient, fluid force application, integration,
+  and the contact solver (treated as infinite mass, exactly like
+  statics), so resting piles cost ~nothing. Wakes: new-contact
+  auto-wake, lost-contact auto-wake (support pulled away), direct
+  impulse/force application, joint partners, and transitive
+  `wake_body` cascades. A body falls asleep only when slow *and*
+  supported by a current contact (ballistic apexes and drifters never
+  sleep), so no wake history exists and save/load stays exact with no
+  schema change. Replaces the old partial-sleep behavior (which moved
+  "sleeping" bodies); S01/S02 now pin the new contract.
 - **CCD via adaptive substepping (Rust + managed C#)**: a new
   `phieng_dynamics::ccd::CcdConfig` (`enabled`, `max_movement` default
   `0.1`, `max_substeps` default `8`) shared by 2D and 3D worlds. When

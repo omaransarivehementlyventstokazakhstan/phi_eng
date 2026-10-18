@@ -217,6 +217,8 @@ public class RigidBody2
     public void ApplyForce(Vector2 force, Vector2 point, float dt)
     {
         if (IsStatic) return;
+        // An externally applied force is a wake event.
+        IsSleeping = false;
 
         Velocity += force * InvMass * dt;
 
@@ -229,6 +231,8 @@ public class RigidBody2
     public void ApplyImpulse(Vector2 impulse, Vector2 point)
     {
         if (IsStatic) return;
+        // An externally applied impulse is a wake event.
+        IsSleeping = false;
 
         Velocity += impulse * InvMass;
 

@@ -260,7 +260,7 @@ pub fn gravity_kick_2(
     // this is exactly the legacy `velocity += gravity * dt` loop:
     // `scale * h` with scale == 1.0 is bit-identical to `* h`).
     for b in bodies.iter_mut() {
-        if b.is_static {
+        if b.is_static || b.is_sleeping {
             continue;
         }
         let mut dv = uniform * (b.gravity_scale * h);
@@ -273,7 +273,7 @@ pub fn gravity_kick_2(
         GravityMode::Uniform => {}
         GravityMode::Central => {
             for b in bodies.iter_mut() {
-                if b.is_static {
+                if b.is_static || b.is_sleeping {
                     continue;
                 }
                 let a = central_accel_2(
@@ -306,14 +306,14 @@ pub fn gravity_kick_2(
                             cfg.big_g,
                             cfg.softening,
                         );
-                        if !bi.is_static {
+                        if !bi.is_static && !bi.is_sleeping {
                             let mut dv = ai * (bi.gravity_scale * h);
                             if drag {
                                 dv -= bi.velocity * (bi.linear_damping * h);
                             }
                             bi.velocity += dv;
                         }
-                        if !bj.is_static {
+                        if !bj.is_static && !bj.is_sleeping {
                             let mut dv = aj * (bj.gravity_scale * h);
                             if drag {
                                 dv -= bj.velocity * (bj.linear_damping * h);
@@ -353,7 +353,7 @@ pub fn gravity_kick_3(
     drag: bool,
 ) {
     for b in bodies.iter_mut() {
-        if b.is_static {
+        if b.is_static || b.is_sleeping {
             continue;
         }
         let mut dv = uniform * (b.gravity_scale * h);
@@ -366,7 +366,7 @@ pub fn gravity_kick_3(
         GravityMode::Uniform => {}
         GravityMode::Central => {
             for b in bodies.iter_mut() {
-                if b.is_static {
+                if b.is_static || b.is_sleeping {
                     continue;
                 }
                 let a = central_accel_3(
@@ -397,14 +397,14 @@ pub fn gravity_kick_3(
                             cfg.big_g,
                             cfg.softening,
                         );
-                        if !bi.is_static {
+                        if !bi.is_static && !bi.is_sleeping {
                             let mut dv = ai * (bi.gravity_scale * h);
                             if drag {
                                 dv -= bi.velocity * (bi.linear_damping * h);
                             }
                             bi.velocity += dv;
                         }
-                        if !bj.is_static {
+                        if !bj.is_static && !bj.is_sleeping {
                             let mut dv = aj * (bj.gravity_scale * h);
                             if drag {
                                 dv -= bj.velocity * (bj.linear_damping * h);

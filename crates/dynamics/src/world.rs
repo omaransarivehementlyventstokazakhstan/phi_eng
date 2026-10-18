@@ -47,6 +47,7 @@ struct ScratchBuffers2D {
     verts_b: Vec<Vec2>,
     points: Vec<Vec2>,
     clip_tmp: Vec<Vec2>,
+    stale: Vec<(usize, usize)>,
 }
 
 impl ScratchBuffers2D {
@@ -60,6 +61,7 @@ impl ScratchBuffers2D {
             verts_b: Vec::with_capacity(1024),
             points: Vec::with_capacity(512),
             clip_tmp: Vec::with_capacity(256),
+            stale: Vec::new(),
         }
     }
 
@@ -72,6 +74,7 @@ impl ScratchBuffers2D {
         self.verts_b.clear();
         self.points.clear();
         self.clip_tmp.clear();
+        self.stale.clear();
     }
 }
 
@@ -111,6 +114,11 @@ pub struct World2 {
     /// Fx-hashed: keys are internal body ids (never attacker-controlled),
     /// so SipHash's DOS resistance is pure overhead here.
     pub contact_cache: FxHashMap<(usize, usize), Vec<CachedContact>>,
+    /// Bodies touched by a contact this step (parallel to `bodies`).
+    /// A slow body may only fall asleep while touched — support-gated
+    /// sleep keeps ballistic apexes (no contacts) awake without any
+    /// wake/sleep history. Transient scratch; never snapshotted.
+    contact_touch: Vec<bool>,
     /// Recycled per-key `CachedContact` buffers. Vacated contact-cache
     /// entries return their `Vec` here instead of freeing it; new keys
     /// draw from it, so the contact cache reaches zero steady-state
@@ -154,6 +162,7 @@ impl World2 {
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
             contact_cache_pool: Vec::new(),
+            contact_touch: Vec::new(),
             dt: 1.0 / 60.0,
             linear_sleep_threshold: LINEAR_SLEEP_THRESHOLD,
             angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
@@ -519,11 +528,34 @@ impl World2 {
 
         // 3b. Warm-start: seed each constraint with cached impulses from the
         // previous frame (matched by contact-point proximity + normal agreement).
-        for constraint in self.scratch.constraints.iter_mut() {
-            if let Some(entries) = self
-                .contact_cache
-                .get(&(constraint.body_a, constraint.body_b))
+        // A pair with no cache entry is a NEW contact: any sleeping party
+        // wakes (with cascade) so it can respond to the newcomer. Settled
+        // pairs stay cached and keep sleeping. Every constrained body is
+        // marked touched (sleep-support tracking for step 6+7).
+        if self.contact_touch.len() != self.bodies.len() {
+            self.contact_touch.resize(self.bodies.len(), false);
+        }
+        for t in self.contact_touch.iter_mut() {
+            *t = false;
+        }
+        // Index loop (not iter_mut): `wake_body` needs `&mut self`
+        // while constraints borrow `self.scratch`.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..self.scratch.constraints.len() {
+            let (a, b) = {
+                let c = &self.scratch.constraints[i];
+                (c.body_a, c.body_b)
+            };
+            self.contact_touch[a] = true;
+            self.contact_touch[b] = true;
+            if !self.contact_cache.contains_key(&(a, b))
+                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
             {
+                self.wake_body(a);
+                self.wake_body(b);
+            }
+            let constraint = &mut self.scratch.constraints[i];
+            if let Some(entries) = self.contact_cache.get(&(a, b)) {
                 let mut best: Option<&CachedContact> = None;
                 let mut best_dist = CONTACT_MATCH_DIST_SQ;
                 for entry in entries {
@@ -597,22 +629,42 @@ impl World2 {
         // buffers into the pool instead of freeing them. New keys draw
         // from the pool, so the cache reaches zero steady-state allocation
         // even as pairs flicker. Memory-only; trajectories bit-identical.
+        // A vanished pair is lost contact: wake any sleeping party (loss
+        // of support must re-evaluate sleep). Idempotent flags, so the
+        // drain order cannot affect determinism.
         let cache = &mut self.contact_cache;
         let pool = &mut self.contact_cache_pool;
-        cache.retain(|_, list| {
+        let stale = &mut self.scratch.stale;
+        stale.clear();
+        cache.retain(|key, list| {
             if list.is_empty() {
+                stale.push(*key);
                 pool.push(std::mem::take(list));
                 false
             } else {
                 true
             }
         });
+        // Pop from the end (LIFO): the woken set is order-independent.
+        while let Some((a, b)) = self.scratch.stale.pop() {
+            if a < self.bodies.len()
+                && b < self.bodies.len()
+                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+            {
+                self.wake_body(a);
+                self.wake_body(b);
+            }
+        }
 
         if verlet {
             // 5v. Verlet drift (positions only — no linear damping) plus
             // the second half-kick with forces recomputed at the new
             // positions. The contact solver above ran unchanged.
+            // Sleeping bodies are skipped: frozen until woken.
             for body in self.bodies.iter_mut() {
+                if body.is_sleeping {
+                    continue;
+                }
                 body.integrate_drift(dt);
             }
             super::gravity::gravity_kick_2(
@@ -631,19 +683,38 @@ impl World2 {
                 );
             }
         } else {
-            // 5. Integrate motion
+            // 5. Integrate motion (sleeping bodies are frozen until woken).
             for body in self.bodies.iter_mut() {
+                if body.is_sleeping {
+                    continue;
+                }
                 body.integrate(dt);
             }
         }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep.
+        // Sleep needs slowness AND support (a current contact, tracked
+        // in `contact_touch` during narrowphase): ballistic apexes and
+        // drifting bodies never sleep, so no wake/sleep history is
+        // needed and save/load stays exact. Sleeping bodies have zeroed
+        // velocities every step: the solver may write reaction impulses
+        // to a frozen body during the step, and stale velocity would
+        // poison the next step's relative velocity (support going soft)
+        // since integrate skips sleepers.
         let lin = self.linear_sleep_threshold;
         let ang = self.angular_sleep_threshold;
-        for body in self.bodies.iter_mut() {
+        for (i, body) in self.bodies.iter_mut().enumerate() {
             let report = validate_body_2d(body, &self.validation);
             self.validation_report.merge(report);
-            if !body.is_static && body.should_sleep(lin, ang) {
+            if body.is_static {
+                continue;
+            }
+            if body.is_sleeping {
+                body.velocity = Vec2::ZERO;
+                body.angular_velocity = 0.0;
+                continue;
+            }
+            if body.should_sleep(lin, ang) && self.contact_touch[i] {
                 body.is_sleeping = true;
                 body.velocity = Vec2::ZERO;
                 body.angular_velocity = 0.0;
@@ -651,9 +722,42 @@ impl World2 {
         }
     }
 
+    /// Wake a body and cascade through its contact partners and joint
+    /// partners, transitively. The woken set is a fixpoint over
+    /// idempotent flags, so map iteration order cannot affect the
+    /// result (deterministic). Out-of-range ids are ignored.
     pub fn wake_body(&mut self, body_id: usize) {
-        if body_id < self.bodies.len() {
-            self.bodies[body_id].is_sleeping = false;
+        if body_id >= self.bodies.len() {
+            return;
+        }
+        self.bodies[body_id].is_sleeping = false;
+        let mut dirty = true;
+        while dirty {
+            dirty = false;
+            for (a, b) in self.contact_cache.keys() {
+                let (a, b) = (*a, *b);
+                if a < self.bodies.len() && b < self.bodies.len() {
+                    if !self.bodies[a].is_sleeping && self.bodies[b].is_sleeping {
+                        self.bodies[b].is_sleeping = false;
+                        dirty = true;
+                    } else if !self.bodies[b].is_sleeping && self.bodies[a].is_sleeping {
+                        self.bodies[a].is_sleeping = false;
+                        dirty = true;
+                    }
+                }
+            }
+            for joint in &self.joints {
+                let (a, b) = joint.bodies();
+                if a < self.bodies.len() && b < self.bodies.len() {
+                    if !self.bodies[a].is_sleeping && self.bodies[b].is_sleeping {
+                        self.bodies[b].is_sleeping = false;
+                        dirty = true;
+                    } else if !self.bodies[b].is_sleeping && self.bodies[a].is_sleeping {
+                        self.bodies[a].is_sleeping = false;
+                        dirty = true;
+                    }
+                }
+            }
         }
     }
 
@@ -1126,6 +1230,9 @@ pub struct World3 {
     pub contact_cache: FxHashMap<(usize, usize), Vec<CachedContact3D>>,
     /// See [`World2::contact_cache_pool`].
     contact_cache_pool: Vec<Vec<CachedContact3D>>,
+    /// Bodies touched by a contact this step (parallel to `bodies`).
+    /// See [`World2::contact_touch`]; never snapshotted.
+    contact_touch: Vec<bool>,
     /// SPH fluid state (see [`crate::fluid3`]). Empty by default, in
     /// which case the fluid phase is a no-op.
     pub fluid: super::fluid3::FluidState3,
@@ -1140,6 +1247,9 @@ pub struct World3 {
     scratch_points: Vec<Vec3>,
     scratch_clip_tmp: Vec<Vec3>,
     epa_buffers: phieng_collision::epa::EpaBuffers,
+    /// Vanished contact pairs per step (for loss-of-contact wake).
+    /// Reused buffer; never snapshotted.
+    scratch_stale: Vec<(usize, usize)>,
 }
 
 /// Cached contact impulses for 3D warm starting
@@ -1169,6 +1279,7 @@ impl World3 {
             angular_sleep_threshold: ANGULAR_SLEEP_THRESHOLD,
             contact_cache: FxHashMap::default(),
             contact_cache_pool: Vec::new(),
+            contact_touch: Vec::new(),
             joints: Vec::new(),
             next_joint_id: 0,
             fluid: super::fluid3::FluidState3::new(),
@@ -1179,6 +1290,7 @@ impl World3 {
             scratch_points: Vec::new(),
             scratch_clip_tmp: Vec::new(),
             epa_buffers: phieng_collision::epa::EpaBuffers::new(),
+            scratch_stale: Vec::new(),
         }
     }
 
@@ -1396,12 +1508,27 @@ impl World3 {
             );
         }
 
-        // 3b. Warm-start from cached impulses
+        // 3b. Warm-start from cached impulses. A pair with no cache
+        // entry is a NEW contact: any sleeping party wakes (with
+        // cascade) so it can respond to the newcomer. Every constrained
+        // body is marked touched (sleep-support tracking for step 6+7).
+        if self.contact_touch.len() != self.bodies.len() {
+            self.contact_touch.resize(self.bodies.len(), false);
+        }
+        for t in self.contact_touch.iter_mut() {
+            *t = false;
+        }
         for constraint in constraints.iter_mut() {
-            if let Some(entries) = self
-                .contact_cache
-                .get(&(constraint.body_a, constraint.body_b))
+            let (a, b) = (constraint.body_a, constraint.body_b);
+            self.contact_touch[a] = true;
+            self.contact_touch[b] = true;
+            if !self.contact_cache.contains_key(&(a, b))
+                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
             {
+                self.wake_body(a);
+                self.wake_body(b);
+            }
+            if let Some(entries) = self.contact_cache.get(&(a, b)) {
                 let mut best: Option<&CachedContact3D> = None;
                 let mut best_dist = 0.04f32;
                 for entry in entries {
@@ -1469,20 +1596,39 @@ impl World3 {
                     tangent2_impulse: constraint.tangent2_impulse,
                 });
         }
-        cache.retain(|_, list| {
+        // A vanished pair is lost contact: wake any sleeping party
+        // (loss of support must re-evaluate sleep; see World2).
+        // Idempotent flags: drain order cannot affect determinism.
+        self.scratch_stale.clear();
+        let stale = &mut self.scratch_stale;
+        cache.retain(|key, list| {
             if list.is_empty() {
+                stale.push(*key);
                 pool.push(std::mem::take(list));
                 false
             } else {
                 true
             }
         });
+        // Pop from the end (LIFO): the woken set is order-independent.
+        while let Some((a, b)) = self.scratch_stale.pop() {
+            if a < self.bodies.len()
+                && b < self.bodies.len()
+                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+            {
+                self.wake_body(a);
+                self.wake_body(b);
+            }
+        }
 
         if verlet {
             // 5v. Verlet drift (positions only — no linear damping) plus
             // the second half-kick with forces recomputed at the new
             // positions. The contact solver above ran unchanged.
             for body in self.bodies.iter_mut() {
+                if body.is_sleeping {
+                    continue;
+                }
                 body.integrate_drift(dt);
             }
             super::gravity::gravity_kick_3(
@@ -1501,20 +1647,35 @@ impl World3 {
                 );
             }
         } else {
-            // 5. Integrate motion
+            // 5. Integrate motion (sleeping bodies are frozen until woken).
             for body in self.bodies.iter_mut() {
+                if body.is_sleeping {
+                    continue;
+                }
                 body.integrate(dt);
             }
         }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; see World2).
+        // Sleep needs slowness AND support (a current contact): ballistic
+        // apexes and drifting bodies never sleep, so no wake/sleep
+        // history is needed and save/load stays exact. Sleeping
+        // velocities are re-zeroed every step (see World2).
         let lin = self.linear_sleep_threshold;
         let ang = self.angular_sleep_threshold;
-        for body in self.bodies.iter_mut() {
+        for (i, body) in self.bodies.iter_mut().enumerate() {
             let report = validate_body_3d(body, &self.validation);
             self.validation_report.merge(report);
-            if !body.is_static && body.should_sleep(lin, ang) {
+            if body.is_static {
+                continue;
+            }
+            if body.is_sleeping {
+                body.velocity = Vec3::ZERO;
+                body.angular_velocity = Vec3::ZERO;
+                continue;
+            }
+            if body.should_sleep(lin, ang) && self.contact_touch[i] {
                 body.is_sleeping = true;
                 body.velocity = Vec3::ZERO;
                 body.angular_velocity = Vec3::ZERO;
@@ -1925,11 +2086,42 @@ impl World3 {
         }
     }
 
-    /// Update sleep state for all bodies
-    /// Wake up a body
+    /// Wake a body and cascade through its contact partners and joint
+    /// partners, transitively. The woken set is a fixpoint over
+    /// idempotent flags, so map iteration order cannot affect the
+    /// result (deterministic). Out-of-range ids are ignored.
     pub fn wake_body(&mut self, body_id: usize) {
-        if body_id < self.bodies.len() {
-            self.bodies[body_id].is_sleeping = false;
+        if body_id >= self.bodies.len() {
+            return;
+        }
+        self.bodies[body_id].is_sleeping = false;
+        let mut dirty = true;
+        while dirty {
+            dirty = false;
+            for (a, b) in self.contact_cache.keys() {
+                let (a, b) = (*a, *b);
+                if a < self.bodies.len() && b < self.bodies.len() {
+                    if !self.bodies[a].is_sleeping && self.bodies[b].is_sleeping {
+                        self.bodies[b].is_sleeping = false;
+                        dirty = true;
+                    } else if !self.bodies[b].is_sleeping && self.bodies[a].is_sleeping {
+                        self.bodies[a].is_sleeping = false;
+                        dirty = true;
+                    }
+                }
+            }
+            for joint in &self.joints {
+                let (a, b) = joint.bodies();
+                if a < self.bodies.len() && b < self.bodies.len() {
+                    if !self.bodies[a].is_sleeping && self.bodies[b].is_sleeping {
+                        self.bodies[b].is_sleeping = false;
+                        dirty = true;
+                    } else if !self.bodies[b].is_sleeping && self.bodies[a].is_sleeping {
+                        self.bodies[a].is_sleeping = false;
+                        dirty = true;
+                    }
+                }
+            }
         }
     }
 }

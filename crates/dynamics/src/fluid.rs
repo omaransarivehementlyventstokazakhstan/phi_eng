@@ -1070,6 +1070,11 @@ impl FluidState2 {
                 let vn = self.particles[i].velocity.dot(normal);
                 if vn < 0.0 {
                     self.particles[i].velocity -= normal * vn;
+                    // Wake first so the reaction below lands (frozen
+                    // bodies ignore impulses); newcomers auto-wake.
+                    if !body.is_static {
+                        body.is_sleeping = false;
+                    }
                     // Reaction on the body (statics ignore it internally).
                     body.apply_impulse(normal * (vn * self.particles[i].mass), point);
                     // No-slip wall coupling: drive the (relative) tangential
@@ -1083,9 +1088,6 @@ impl FluidState2 {
                         let delta_v = (wall_vt - v_t) * mu;
                         self.particles[i].velocity += delta_v;
                         body.apply_impulse(-delta_v * self.particles[i].mass, point);
-                    }
-                    if !body.is_static {
-                        body.is_sleeping = false;
                     }
                 }
             }

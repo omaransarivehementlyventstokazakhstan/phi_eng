@@ -216,7 +216,7 @@ public static class BarnesHut
         for (int i = 0; i < n; i++)
         {
             var b = bodies[i];
-            if (b.IsStatic) continue;
+            if (b.IsStatic || b.IsSleeping) continue;
             Vector2 acc = Vector2.Zero;
             WalkQuad(nodes, 0, positions[i], i, positions, masses, bigG, softening, theta, ref acc);
             Vector2 dv = acc * (b.GravityScale * h);
@@ -432,7 +432,7 @@ public static class BarnesHut
         for (int i = 0; i < n; i++)
         {
             var b = bodies[i];
-            if (b.IsStatic) continue;
+            if (b.IsStatic || b.IsSleeping) continue;
             Vector3 acc = Vector3.Zero;
             WalkOct(nodes, 0, positions[i], i, positions, masses, bigG, softening, theta, ref acc);
             Vector3 dv = acc * (b.GravityScale * h);

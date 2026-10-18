@@ -49,6 +49,55 @@ impl ContactConstraint {
 }
 
 /// Constraint solver for physics engine
+/// Solver quality tier: a preset for iteration budget plus friction and
+/// restitution switches. Tiers only ever *reduce* work vs the default
+/// [`SolverQuality::Ultra`] configuration, so applying any tier to a
+/// default solver is safe; `Ultra` restores full quality. Tiers do not
+/// touch CCD (see [`crate::ccd`]) — pair them explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolverQuality {
+    /// 8 iterations, friction, restitution (the default).
+    Ultra,
+    /// 6 iterations, friction, restitution.
+    High,
+    /// 4 iterations, friction, restitution.
+    Medium,
+    /// 2 iterations, no friction, no restitution.
+    Low,
+    /// 1 iteration, no friction, no restitution (Baumgarte positional
+    /// correction still runs).
+    Minimal,
+}
+
+impl SolverQuality {
+    /// Iteration budget for this tier.
+    pub fn iterations(&self) -> usize {
+        match self {
+            SolverQuality::Ultra => 8,
+            SolverQuality::High => 6,
+            SolverQuality::Medium => 4,
+            SolverQuality::Low => 2,
+            SolverQuality::Minimal => 1,
+        }
+    }
+
+    /// Whether this tier solves friction.
+    pub fn friction(&self) -> bool {
+        matches!(
+            self,
+            SolverQuality::Ultra | SolverQuality::High | SolverQuality::Medium
+        )
+    }
+
+    /// Whether this tier applies restitution bounces.
+    pub fn restitution(&self) -> bool {
+        matches!(
+            self,
+            SolverQuality::Ultra | SolverQuality::High | SolverQuality::Medium
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct Solver {
     /// Maximum solver iterations per step.
@@ -62,6 +111,12 @@ pub struct Solver {
     /// Settled scenes converge in 1-3 iterations instead of running all
     /// [`Solver::iterations`]. Deterministic: pure function of state.
     pub early_exit_tolerance: f32,
+    /// Solve the tangential (Coulomb friction) pass. Default true;
+    /// disabling halves solve cost (set via [`SolverQuality::Low`]).
+    pub enable_friction: bool,
+    /// Apply restitution bounces. Default true; disabling keeps the
+    /// Baumgarte positional correction (set via [`SolverQuality::Low`]).
+    pub enable_restitution: bool,
     /// Solve disjoint constraint islands in parallel with scoped threads
     /// (see [`crate::island`]). Default off: the serial path is the
     /// reference behavior. When on and the step holds 0-1 islands, the
@@ -84,8 +139,18 @@ impl Solver {
             slop: DEFAULT_SLOP,
             baumgarte: DEFAULT_BAUMGARTE,
             early_exit_tolerance: EARLY_EXIT_TOL,
+            enable_friction: true,
+            enable_restitution: true,
             parallel: false,
         }
+    }
+
+    /// Apply a quality tier preset (iteration budget plus friction and
+    /// restitution switches). `Ultra` restores the default configuration.
+    pub fn apply_quality(&mut self, quality: SolverQuality) {
+        self.iterations = quality.iterations();
+        self.enable_friction = quality.friction();
+        self.enable_restitution = quality.restitution();
     }
 
     /// Solve all constraints. `dt` is the timestep (used for Baumgarte scaling).
@@ -102,10 +167,28 @@ impl Solver {
         dt: f32,
     ) -> usize {
         // Mass terms + warm start + restitution targets from pre-solve state.
+        // With friction off, cached tangent impulses are dropped so no
+        // stale sideways push survives (re-enabling friction later resumes
+        // warm starting from the freshly accumulated impulses). Fully
+        // frozen pairs (both ends static or sleeping) carry zero velocity
+        // by construction: skip them so sleeping islands cost nothing.
         for constraint in constraints.iter_mut() {
+            if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                constraint.normal_impulse = 0.0;
+                constraint.tangent_impulse = 0.0;
+                constraint.rest_bias = 0.0;
+                continue;
+            }
             Self::compute_mass_terms(bodies, constraint);
+            if !self.enable_friction {
+                constraint.tangent_impulse = 0.0;
+            }
             Self::apply_warm_starting(bodies, constraint);
-            constraint.rest_bias = restitution_bias(bodies, constraint);
+            constraint.rest_bias = if self.enable_restitution {
+                restitution_bias(bodies, constraint)
+            } else {
+                0.0
+            };
         }
 
         let mut ran = 0;
@@ -113,10 +196,18 @@ impl Solver {
             ran += 1;
             let mut max_applied: f32 = 0.0;
             for constraint in constraints.iter_mut() {
+                if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                    continue;
+                }
                 max_applied = max_applied.max(self.solve_normal(bodies, constraint, dt));
             }
-            for constraint in constraints.iter_mut() {
-                max_applied = max_applied.max(Self::solve_friction(bodies, constraint));
+            if self.enable_friction {
+                for constraint in constraints.iter_mut() {
+                    if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                        continue;
+                    }
+                    max_applied = max_applied.max(Self::solve_friction(bodies, constraint));
+                }
             }
             if max_applied < self.early_exit_tolerance {
                 break;
@@ -145,11 +236,19 @@ impl Solver {
                 // the island partitioner; bounds-checked here so a corrupt
                 // index list fails loud, never silently.
                 let constraint = &mut constraints[ci];
+                if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                    continue;
+                }
                 max_applied = max_applied.max(self.solve_normal(bodies, constraint, dt));
             }
-            for &ci in indices {
-                let constraint = &mut constraints[ci];
-                max_applied = max_applied.max(Self::solve_friction(bodies, constraint));
+            if self.enable_friction {
+                for &ci in indices {
+                    let constraint = &mut constraints[ci];
+                    if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                        continue;
+                    }
+                    max_applied = max_applied.max(Self::solve_friction(bodies, constraint));
+                }
             }
             if max_applied < self.early_exit_tolerance {
                 break;
@@ -229,9 +328,22 @@ impl Solver {
         // otherwise recompute identical values. The threaded section
         // below covers iterations only.
         for constraint in constraints.iter_mut() {
+            if both_frozen(bodies, constraint.body_a, constraint.body_b) {
+                constraint.normal_impulse = 0.0;
+                constraint.tangent_impulse = 0.0;
+                constraint.rest_bias = 0.0;
+                continue;
+            }
             Self::compute_mass_terms(bodies, constraint);
+            if !self.enable_friction {
+                constraint.tangent_impulse = 0.0;
+            }
             Self::apply_warm_starting(bodies, constraint);
-            constraint.rest_bias = restitution_bias(bodies, constraint);
+            constraint.rest_bias = if self.enable_restitution {
+                restitution_bias(bodies, constraint)
+            } else {
+                0.0
+            };
         }
         if island_constraints.len() <= 1 {
             // Degenerate case: behave exactly like the serial path.
@@ -252,6 +364,7 @@ impl Solver {
         let max_addr = max_slots.as_mut_ptr() as usize;
         let iters = self.iterations;
         let tol = self.early_exit_tolerance;
+        let friction = self.enable_friction;
         let this = self;
         let barrier = std::sync::Barrier::new(island_constraints.len());
 
@@ -286,11 +399,19 @@ impl Solver {
                         let mut local_max: f32 = 0.0;
                         for &ci in list.iter() {
                             let c = &mut constraints[ci];
+                            if both_frozen(bodies, c.body_a, c.body_b) {
+                                continue;
+                            }
                             local_max = local_max.max(this.solve_normal(bodies, c, dt));
                         }
-                        for &ci in list.iter() {
-                            let c = &mut constraints[ci];
-                            local_max = local_max.max(Self::solve_friction(bodies, c));
+                        if friction {
+                            for &ci in list.iter() {
+                                let c = &mut constraints[ci];
+                                if both_frozen(bodies, c.body_a, c.body_b) {
+                                    continue;
+                                }
+                                local_max = local_max.max(Self::solve_friction(bodies, c));
+                            }
                         }
                         unsafe {
                             *(max_addr as *mut f32).add(ii) = local_max;
@@ -318,29 +439,29 @@ impl Solver {
 
     /// Snapshot per-step effective masses from step-start state.
     /// Called once per constraint per step (see `mass_normal` docs).
+    /// Sleeping bodies count as infinite mass (exactly like statics),
+    /// so a frozen body anchors its awake partners instead of splitting
+    /// the correction with a share that integrate then discards.
     fn compute_mass_terms(bodies: &[RigidBody2], constraint: &mut ContactConstraint) {
         let body_a = &bodies[constraint.body_a];
         let body_b = &bodies[constraint.body_b];
+        let (ima, iia) = Self::effective_inverses(body_a);
+        let (imb, iib) = Self::effective_inverses(body_b);
         let r_a = constraint.point - body_a.transform.position;
         let r_b = constraint.point - body_b.transform.position;
-        constraint.mass_normal = effective_mass(
-            body_a.inv_mass,
-            body_b.inv_mass,
-            body_a.inv_inertia,
-            body_b.inv_inertia,
-            r_a,
-            r_b,
-            constraint.normal,
-        );
-        constraint.mass_tangent = effective_mass(
-            body_a.inv_mass,
-            body_b.inv_mass,
-            body_a.inv_inertia,
-            body_b.inv_inertia,
-            r_a,
-            r_b,
-            constraint.tangent(),
-        );
+        constraint.mass_normal = effective_mass(ima, imb, iia, iib, r_a, r_b, constraint.normal);
+        constraint.mass_tangent =
+            effective_mass(ima, imb, iia, iib, r_a, r_b, constraint.tangent());
+    }
+
+    /// Inverse mass/inertia as seen by the solver: sleeping bodies are
+    /// infinite-mass (zero), exactly like statics.
+    fn effective_inverses(body: &RigidBody2) -> (f32, f32) {
+        if body.is_static || body.is_sleeping {
+            (0.0, 0.0)
+        } else {
+            (body.inv_mass, body.inv_inertia)
+        }
     }
 
     /// Apply cached impulses from the previous frame directly (no re-scaling:
@@ -471,6 +592,12 @@ impl Default for Solver {
 /// Restitution target from pre-solve relative normal velocity.
 /// Bounce only for significant impacts (Box2D uses 1 m/s threshold).
 #[inline]
+/// True when both constraint ends are frozen (static or sleeping):
+/// zero velocity by construction, so the pair needs no solve work.
+fn both_frozen(bodies: &[RigidBody2], a: usize, b: usize) -> bool {
+    (bodies[a].is_static || bodies[a].is_sleeping) && (bodies[b].is_static || bodies[b].is_sleeping)
+}
+
 fn restitution_bias(bodies: &[RigidBody2], constraint: &ContactConstraint) -> f32 {
     let body_a = &bodies[constraint.body_a];
     let body_b = &bodies[constraint.body_b];
@@ -537,11 +664,16 @@ fn apply_impulse(
         (&mut tail[0], &mut head[body_b])
     };
 
-    a.velocity -= p * a.inv_mass;
-    b.velocity += p * b.inv_mass;
-
-    a.angular_velocity -= (r_a.x * p.y - r_a.y * p.x) * a.inv_inertia;
-    b.angular_velocity += (r_b.x * p.y - r_b.y * p.x) * b.inv_inertia;
+    // Frozen bodies (static or sleeping) take no impulse, mirroring the
+    // infinite-mass mass terms above.
+    if !a.is_static && !a.is_sleeping {
+        a.velocity -= p * a.inv_mass;
+        a.angular_velocity -= (r_a.x * p.y - r_a.y * p.x) * a.inv_inertia;
+    }
+    if !b.is_static && !b.is_sleeping {
+        b.velocity += p * b.inv_mass;
+        b.angular_velocity += (r_b.x * p.y - r_b.y * p.x) * b.inv_inertia;
+    }
 }
 
 /// Convert angular velocity to linear velocity contribution at a point

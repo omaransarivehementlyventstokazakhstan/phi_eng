@@ -652,61 +652,52 @@ public class RobustnessTests
     }
 
     [Fact]
-    public void S01_KnownLimitation_NoAutowakeOnContact()
+    public void S01_AutowakeOnNewContact()
     {
-        // KNOWN LIMITATION: see LIMITATIONS.md — no auto-wake on contact.
+        // A sleeping body auto-wakes when a moving body makes NEW contact
+        // with it, then responds to the impact.
         var world = new World2();
         AddFloor(world);
         int sleeper = world.AddDynamicBody(new Vector2(0.0f, 0.0f), new BoxShape2(new Vector2(0.5f, 0.5f)), 1.0f);
-        var bd = world.Bodies[sleeper];
-        bd.Velocity = Vector2.Zero;
-        bd.AngularVelocity = 0.0f;
-        world.Bodies[sleeper] = bd;
-        world.Step(Dt);
-        Assert.True(world.Bodies[sleeper].IsSleeping, "s01: box must be asleep before the drop");
-        world.AddDynamicBody(new Vector2(0.0f, 3.0f), new CircleShape(0.3f), 1.0f);
-        for (int i = 0; i < 180; i++) world.Step(Dt);
-        AssertFinite(world, "s01 dropped ball");
-        Assert.True(world.Bodies[sleeper].IsSleeping, "s01 KNOWN LIMITATION: sleeper still asleep");
-        Assert.True((world.Bodies[sleeper].Transform.Position - new Vector2(0.0f, 0.0f)).Length() < 0.05f,
-            $"s01: frozen sleeper must not drift: {world.Bodies[sleeper].Transform.Position}");
+        for (int i = 0; i < 120; i++) world.Step(Dt);
+        Assert.True(world.Bodies[sleeper].IsSleeping, "s01: box must be asleep before the shove");
+        int ball = world.AddDynamicBody(new Vector2(-3.0f, 0.0f), new CircleShape(0.3f), 1.0f);
+        world.Bodies[ball].Velocity = new Vector2(10.0f, 0.0f);
+        bool woke = false;
+        float maxPush = 0.0f;
+        for (int i = 0; i < 180; i++)
+        {
+            world.Step(Dt);
+            if (!world.Bodies[sleeper].IsSleeping) woke = true;
+            maxPush = MathF.Max(maxPush, world.Bodies[sleeper].Transform.Position.X);
+        }
+        AssertFinite(world, "s01 shoved box");
+        Assert.True(woke, "s01: sleeper must auto-wake on new contact");
+        Assert.True(maxPush > 0.05f, $"s01: woken sleeper must be shoved sideways, xmax={maxPush}");
     }
 
     [Fact]
-    public void S02_KnownLimitation_NoWakeCascade()
+    public void S02_WakeCascadesToStack()
     {
-        // KNOWN LIMITATION: see LIMITATIONS.md — waking the bottom of a
-        // sleeping stack does not cascade; the top keeps its flag while
-        // the pipeline (which never skips sleepers) lets it sink.
+        // Waking the bottom of a sleeping stack cascades synchronously:
+        // contact partners of an awake body cannot stay asleep. Both
+        // settle back without floating or tunneling.
         var world = new World2();
         AddFloor(world);
         int bottom = world.AddDynamicBody(new Vector2(0.0f, 0.0f), new BoxShape2(new Vector2(0.5f, 0.5f)), 1.0f);
-        int top = world.AddDynamicBody(new Vector2(0.0f, 1.0f), new BoxShape2(new Vector2(0.5f, 0.5f)), 1.0f);
-        for (int i = 0; i < 120; i++) world.Step(Dt);
-        foreach (int id in new[] { bottom, top })
-        {
-            var bd = world.Bodies[id];
-            bd.Velocity = Vector2.Zero;
-            bd.AngularVelocity = 0.0f;
-            world.Bodies[id] = bd;
-        }
-        world.Step(Dt);
+        int top = world.AddDynamicBody(new Vector2(0.0f, 1.05f), new BoxShape2(new Vector2(0.5f, 0.5f)), 1.0f);
+        for (int i = 0; i < 180; i++) world.Step(Dt);
         Assert.True(world.Bodies[bottom].IsSleeping && world.Bodies[top].IsSleeping,
             "s02: stack must start asleep");
         world.WakeBody(bottom);
-        var moved = world.Bodies[bottom];
-        var t = moved.Transform;
-        t.Position = new Vector2(0.0f, 0.2f);
-        moved.Transform = t;
-        moved.Velocity = Vector2.Zero;
-        world.Bodies[bottom] = moved;
+        Assert.True(!world.Bodies[bottom].IsSleeping && !world.Bodies[top].IsSleeping,
+            "s02: wake must cascade to the contact partner at once");
         for (int i = 0; i < 120; i++) world.Step(Dt);
         AssertFinite(world, "s02 woken stack");
-        Assert.True(world.Bodies[bottom].Transform.Position.Y < 0.05f,
-            $"s02: woken bottom must have fallen back: y={world.Bodies[bottom].Transform.Position.Y}");
-        Assert.True(world.Bodies[top].IsSleeping, "s02 KNOWN LIMITATION: top still asleep");
-        Assert.True(world.Bodies[top].Transform.Position.Y < 1.0f,
-            $"s02: unfrozen top must have sunk while flagged asleep: y={world.Bodies[top].Transform.Position.Y}");
+        float by = world.Bodies[bottom].Transform.Position.Y;
+        float ty = world.Bodies[top].Transform.Position.Y;
+        Assert.True(by > -0.1f && by < 0.3f, $"s02: bottom must rest on the floor, y={by}");
+        Assert.True(ty > 0.5f && ty < 1.5f, $"s02: top must rest on the bottom, y={ty}");
     }
 
     [Fact]

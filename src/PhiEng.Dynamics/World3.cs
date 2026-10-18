@@ -92,6 +92,7 @@ public class World3
     private readonly GjkEpa3D.EpaScratch _epaScratch = new();
     private readonly HashSet<(int, int)> _liveKeys = new();
     private readonly List<(int, int)> _staleKeys = new();
+    private readonly List<bool> _contactTouch = new();
 
     /// <summary>Adds a rigid body (validates shape and density). Returns the body id.</summary>
     public int AddBody(RigidBody3 body)
@@ -308,9 +309,23 @@ public class World3
         foreach (var (a, b) in _pairs)
             TestCollisionsInto(a, b, constraints, _points, _clipTmp, _epaScratch);
 
+        if (_contactTouch.Count != Bodies.Count)
+        {
+            _contactTouch.Clear();
+            for (int ti = 0; ti < Bodies.Count; ti++) _contactTouch.Add(false);
+        }
+        for (int ti = 0; ti < _contactTouch.Count; ti++) _contactTouch[ti] = false;
         for (int ci = 0; ci < constraints.Count; ci++)
         {
             var c = constraints[ci];
+            _contactTouch[c.BodyA] = true;
+            _contactTouch[c.BodyB] = true;
+            if (!ContactCache.ContainsKey((c.BodyA, c.BodyB))
+                && (Bodies[c.BodyA].IsSleeping || Bodies[c.BodyB].IsSleeping))
+            {
+                WakeBody(c.BodyA);
+                WakeBody(c.BodyB);
+            }
             if (!ContactCache.TryGetValue((c.BodyA, c.BodyB), out var entries)) continue;
             CachedContact3D? best = null;
             float bestDist = ContactMatchDistSq;
@@ -341,11 +356,15 @@ public class World3
         // 4b. Solve joints (after contacts, same iteration budget).
         // Joints own their impulses, so warm starting is direct.
         // Skipped entirely when the world holds no joints (zero cost).
+        // Frozen joints are skipped; a sleeping end with an awake
+        // partner wakes first (see JointSleepGate).
         if (Joints.Count > 0)
         {
-            foreach (var joint in Joints) joint.WarmStart(Bodies);
+            foreach (var joint in Joints)
+                if (!JointSleepGate(joint)) joint.WarmStart(Bodies);
             for (int it = 0; it < Solver.Iterations; it++)
-                foreach (var joint in Joints) joint.Solve(Bodies, dt);
+                foreach (var joint in Joints)
+                    if (!JointSleepGate(joint)) joint.Solve(Bodies, dt);
         }
 
         foreach (var list in ContactCache.Values) list.Clear();
@@ -372,14 +391,26 @@ public class World3
             _staleKeys.Clear();
             foreach (var key in ContactCache.Keys)
                 if (!_liveKeys.Contains(key)) _staleKeys.Add(key);
-            foreach (var key in _staleKeys) ContactCache.Remove(key);
+            foreach (var key in _staleKeys)
+            {
+                // A vanished pair is lost contact: wake any sleeping party.
+                if ((key.Item1 < Bodies.Count && Bodies[key.Item1].IsSleeping)
+                    || (key.Item2 < Bodies.Count && Bodies[key.Item2].IsSleeping))
+                {
+                    WakeBody(key.Item1);
+                    WakeBody(key.Item2);
+                }
+                ContactCache.Remove(key);
+            }
         }
 
         if (verlet)
         {
             // 5v. Verlet drift + second half-kick (forces recomputed at
             // the new positions). The contact solver above ran unchanged.
-            foreach (var body in Bodies) body.IntegrateDrift(dt);
+            // Sleeping bodies are skipped: frozen until woken.
+            foreach (var body in Bodies)
+                if (!body.IsSleeping) body.IntegrateDrift(dt);
             GravityIntegration.Kick3(Bodies, GravityConfig, Gravity, dt * 0.5f, true);
             if (Ambient.IsActive())
             {
@@ -388,11 +419,16 @@ public class World3
         }
         else
         {
-            foreach (var body in Bodies) body.Integrate(dt);
+            // Sleeping bodies are frozen until woken.
+            foreach (var body in Bodies)
+                if (!body.IsSleeping) body.Integrate(dt);
         }
 
         // Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; mirrors Rust).
+        // Sleep needs slowness AND support (a current contact): ballistic
+        // apexes and drifting bodies never sleep. Sleeping bodies have
+        // zeroed velocities every step.
         float linSleep = LinearSleepThreshold;
         float angSleep = AngularSleepThreshold;
         for (int i = 0; i < Bodies.Count; i++)
@@ -400,7 +436,14 @@ public class World3
             var bodyReport = Validation3D.ValidateBody(Bodies[i], Validation);
             ValidationReport.Merge(bodyReport);
             var body = Bodies[i];
-            if (!body.IsStatic && body.ShouldSleep(linSleep, angSleep))
+            if (body.IsStatic) continue;
+            if (body.IsSleeping)
+            {
+                body.Velocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+                continue;
+            }
+            if (body.ShouldSleep(linSleep, angSleep) && _contactTouch[i])
             {
                 body.IsSleeping = true;
                 body.Velocity = Vector3.Zero;
@@ -640,9 +683,59 @@ public class World3
     }
 
     /// <summary>Clears a body's sleep flag (unknown ids are ignored).</summary>
+    /// <summary>
+    /// Joint sleep gate: true = skip (both ends frozen: static or
+    /// sleeping). A sleeping end with an awake partner wakes first so
+    /// joints track moving bodies. Joints3 exposes endpoint ids via
+    /// <c>Bodies()</c>, matching Rust joint3.
+    /// </summary>
+    private bool JointSleepGate(Joint3 joint)
+    {
+        var (a, b) = joint.Bodies();
+        var ba = Bodies[a];
+        var bb = Bodies[b];
+        bool aFrozen = ba.IsStatic || ba.IsSleeping;
+        bool bFrozen = bb.IsStatic || bb.IsSleeping;
+        if (aFrozen && bFrozen) return true;
+        if (ba.IsSleeping) ba.IsSleeping = false;
+        if (bb.IsSleeping) bb.IsSleeping = false;
+        return false;
+    }
+
+    /// <summary>
+    /// Clears a body's sleep flag and cascades through its contact
+    /// partners and joint partners, transitively. Unknown ids ignored.
+    /// </summary>
     public void WakeBody(int bodyId)
     {
-        if (_idToIndex.TryGetValue(bodyId, out int index))
-            Bodies[index].IsSleeping = false;
+        if (!_idToIndex.TryGetValue(bodyId, out int start)) return;
+        Bodies[start].IsSleeping = false;
+        bool dirty = true;
+        while (dirty)
+        {
+            dirty = false;
+            foreach (var key in ContactCache.Keys)
+            {
+                int a = key.Item1, b = key.Item2;
+                if (a < Bodies.Count && b < Bodies.Count)
+                {
+                    if (!Bodies[a].IsSleeping && Bodies[b].IsSleeping)
+                    { Bodies[b].IsSleeping = false; dirty = true; }
+                    else if (!Bodies[b].IsSleeping && Bodies[a].IsSleeping)
+                    { Bodies[a].IsSleeping = false; dirty = true; }
+                }
+            }
+            foreach (var joint in Joints)
+            {
+                var (a, b) = joint.Bodies();
+                if (a < Bodies.Count && b < Bodies.Count)
+                {
+                    if (!Bodies[a].IsSleeping && Bodies[b].IsSleeping)
+                    { Bodies[b].IsSleeping = false; dirty = true; }
+                    else if (!Bodies[b].IsSleeping && Bodies[a].IsSleeping)
+                    { Bodies[a].IsSleeping = false; dirty = true; }
+                }
+            }
+        }
     }
 }

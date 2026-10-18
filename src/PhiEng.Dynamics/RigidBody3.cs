@@ -223,6 +223,8 @@ public class RigidBody3
     public void ApplyImpulse(Vector3 impulse, Vector3 point)
     {
         if (IsStatic) return;
+        // An externally applied impulse is a wake event.
+        IsSleeping = false;
         Velocity += impulse * InvMass;
         var r = point - Transform.Position;
         AngularVelocity += WorldInvInertia().TransformVector(Vector3.Cross(r, impulse));
@@ -235,6 +237,8 @@ public class RigidBody3
     public void ApplyForce(Vector3 force, Vector3 point, float dt)
     {
         if (IsStatic) return;
+        // An externally applied force is a wake event.
+        IsSleeping = false;
         Velocity += force * InvMass * dt;
         var r = point - Transform.Position;
         AngularVelocity += WorldInvInertia().TransformVector(Vector3.Cross(r, force)) * dt;

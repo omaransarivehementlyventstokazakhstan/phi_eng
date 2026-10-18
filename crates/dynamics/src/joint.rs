@@ -97,6 +97,24 @@ pub enum Joint2 {
     Fixed(FixedJoint),
 }
 
+/// Sleep gate shared by joint warm-start and solve. Returns true when
+/// the joint must be skipped (both ends frozen: static or sleeping).
+/// A sleeping end with an awake partner wakes so joints track moving bodies.
+fn joint_sleep_gate(bodies: &mut [RigidBody2], a: usize, b: usize) -> bool {
+    let a_frozen = bodies[a].is_static || bodies[a].is_sleeping;
+    let b_frozen = bodies[b].is_static || bodies[b].is_sleeping;
+    if a_frozen && b_frozen {
+        return true;
+    }
+    if bodies[a].is_sleeping {
+        bodies[a].is_sleeping = false;
+    }
+    if bodies[b].is_sleeping {
+        bodies[b].is_sleeping = false;
+    }
+    false
+}
+
 impl Joint2 {
     /// Joint id.
     pub fn id(&self) -> usize {
@@ -173,7 +191,13 @@ impl Joint2 {
     /// state, so a stale impulse can never push the wrong way — the
     /// scalar is reused, never the vector. (Hinge point axes are
     /// world-fixed X/Y, so its stored vector is directly reusable.)
+    /// A joint with both ends frozen (static or sleeping) is skipped;
+    /// a sleeping end with an awake partner wakes first.
     pub fn warm_start(&self, bodies: &mut [RigidBody2]) {
+        let (a, b) = self.bodies();
+        if joint_sleep_gate(bodies, a, b) {
+            return;
+        }
         match self {
             Joint2::Distance(j) => j.warm_start(bodies),
             Joint2::Hinge(j) => j.warm_start(bodies),
@@ -182,8 +206,13 @@ impl Joint2 {
         }
     }
 
-    /// One sequential-impulse iteration.
+    /// One sequential-impulse iteration. Same sleep gate as
+    /// [`Joint2::warm_start`].
     pub fn solve(&mut self, bodies: &mut [RigidBody2], dt: f32) {
+        let (a, b) = self.bodies();
+        if joint_sleep_gate(bodies, a, b) {
+            return;
+        }
         match self {
             Joint2::Distance(j) => j.solve(bodies, dt),
             Joint2::Hinge(j) => j.solve(bodies, dt),

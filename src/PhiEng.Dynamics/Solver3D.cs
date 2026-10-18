@@ -83,6 +83,35 @@ public class Solver3D
     public float Baumgarte { get; set; } = 0.2f;
     /// <summary>Early-exit tolerance. Mirrors Rust <c>Solver3D</c>.</summary>
     public float EarlyExitTolerance { get; set; } = 1e-6f;
+    /// <summary>
+    /// Solve the tangential (Coulomb friction) pass. Default true;
+    /// disabling halves solve cost (set via <see cref="SolverQuality.Low"/>).
+    /// </summary>
+    public bool EnableFriction { get; set; } = true;
+    /// <summary>
+    /// Apply restitution bounces. Default true; disabling keeps the
+    /// Baumgarte positional correction (set via <see cref="SolverQuality.Low"/>).
+    /// </summary>
+    public bool EnableRestitution { get; set; } = true;
+
+    /// <summary>
+    /// Apply a quality tier preset (iteration budget plus friction and
+    /// restitution switches). <see cref="SolverQuality.Ultra"/> restores
+    /// the default configuration.
+    /// </summary>
+    public void ApplyQuality(SolverQuality quality)
+    {
+        Iterations = quality switch
+        {
+            SolverQuality.Ultra => 8,
+            SolverQuality.High => 6,
+            SolverQuality.Medium => 4,
+            SolverQuality.Low => 2,
+            _ => 1,
+        };
+        EnableFriction = quality <= SolverQuality.Medium;
+        EnableRestitution = quality <= SolverQuality.Medium;
+    }
 
     /// <summary>Returns the iterations actually run.</summary>
     public int Solve(List<RigidBody3> bodies, List<ContactConstraint3D> constraints, float dt)
@@ -90,9 +119,23 @@ public class Solver3D
         for (int i = 0; i < constraints.Count; i++)
         {
             var c = constraints[i];
+            if (BothFrozen(bodies, c.BodyA, c.BodyB))
+            {
+                c.NormalImpulse = 0.0f;
+                c.Tangent1Impulse = 0.0f;
+                c.Tangent2Impulse = 0.0f;
+                c.RestBias = 0.0f;
+                constraints[i] = c;
+                continue;
+            }
             ComputeMassTerms(bodies, ref c);
+            if (!EnableFriction)
+            {
+                c.Tangent1Impulse = 0.0f;
+                c.Tangent2Impulse = 0.0f;
+            }
             ApplyWarmStarting(bodies, c);
-            c.RestBias = RestitutionBias(bodies, c);
+            c.RestBias = EnableRestitution ? RestitutionBias(bodies, c) : 0.0f;
             constraints[i] = c;
         }
         int ran = 0;
@@ -103,19 +146,31 @@ public class Solver3D
             for (int j = 0; j < constraints.Count; j++)
             {
                 var c = constraints[j];
+                if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
                 maxApplied = MathF.Max(maxApplied, SolveNormal(bodies, ref c, dt));
                 constraints[j] = c;
             }
-            for (int j = 0; j < constraints.Count; j++)
+            if (EnableFriction)
             {
-                var c = constraints[j];
-                maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
-                constraints[j] = c;
+                for (int j = 0; j < constraints.Count; j++)
+                {
+                    var c = constraints[j];
+                    if (BothFrozen(bodies, c.BodyA, c.BodyB)) continue;
+                    maxApplied = MathF.Max(maxApplied, SolveFriction(bodies, ref c));
+                    constraints[j] = c;
+                }
             }
             if (maxApplied < EarlyExitTolerance)
                 break;
         }
         return ran;
+    }
+
+    private static bool BothFrozen(List<RigidBody3> bodies, int a, int b)
+    {
+        var ba = bodies[a];
+        var bb = bodies[b];
+        return (ba.IsStatic || ba.IsSleeping) && (bb.IsStatic || bb.IsSleeping);
     }
 
     private static float EffectiveMass(
@@ -125,7 +180,10 @@ public class Solver3D
         var raCross = Vector3.Cross(ra, dir);
         var rbCross = Vector3.Cross(rb, dir);
         // World-frame tensors: lever arms and directions are world-space.
-        float k = a.InvMass + b.InvMass
+        // Frozen bodies (static or sleeping) count as infinite mass.
+        float ima = (a.IsStatic || a.IsSleeping) ? 0.0f : a.InvMass;
+        float imb = (b.IsStatic || b.IsSleeping) ? 0.0f : b.InvMass;
+        float k = ima + imb
             + Vector3.Dot(invInertiaWA.TransformVector(raCross), raCross)
             + Vector3.Dot(invInertiaWB.TransformVector(rbCross), rbCross);
         return k > 0 ? 1.0f / k : 0.0f;
@@ -137,8 +195,8 @@ public class Solver3D
         var b = bodies[c.BodyB];
         var ra = c.Point - a.Transform.Position;
         var rb = c.Point - b.Transform.Position;
-        c.InvInertiaWorldA = a.WorldInvInertia();
-        c.InvInertiaWorldB = b.WorldInvInertia();
+        c.InvInertiaWorldA = (a.IsStatic || a.IsSleeping) ? Matrix3x3.Zero : a.WorldInvInertia();
+        c.InvInertiaWorldB = (b.IsStatic || b.IsSleeping) ? Matrix3x3.Zero : b.WorldInvInertia();
         c.MassNormal = EffectiveMass(a, b, ra, rb, c.Normal, c.InvInertiaWorldA, c.InvInertiaWorldB);
         c.MassTangent1 = EffectiveMass(a, b, ra, rb, c.Tangent1, c.InvInertiaWorldA, c.InvInertiaWorldB);
         c.MassTangent2 = EffectiveMass(a, b, ra, rb, c.Tangent2, c.InvInertiaWorldA, c.InvInertiaWorldB);
@@ -216,12 +274,20 @@ public class Solver3D
         Vector3 ra, Vector3 rb, Vector3 p,
         Matrix3x3 invInertiaWA, Matrix3x3 invInertiaWB)
     {
+        // Frozen bodies (static or sleeping) take no impulse, mirroring
+        // the infinite-mass mass terms above.
         var a = bodies[ai];
         var b = bodies[bi];
-        a.Velocity -= p * a.InvMass;
-        b.Velocity += p * b.InvMass;
-        a.AngularVelocity -= invInertiaWA.TransformVector(Vector3.Cross(ra, p));
-        b.AngularVelocity += invInertiaWB.TransformVector(Vector3.Cross(rb, p));
+        if (!a.IsStatic && !a.IsSleeping)
+        {
+            a.Velocity -= p * a.InvMass;
+            a.AngularVelocity -= invInertiaWA.TransformVector(Vector3.Cross(ra, p));
+        }
+        if (!b.IsStatic && !b.IsSleeping)
+        {
+            b.Velocity += p * b.InvMass;
+            b.AngularVelocity += invInertiaWB.TransformVector(Vector3.Cross(rb, p));
+        }
     }
 
     private static void ApplyImpulse(

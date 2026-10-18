@@ -1019,11 +1019,11 @@ fn d27_hull_mass_stub_pinned() {
     }
 }
 
-/// S01 documents a known limitation: a sleeping body hit by a moving
-/// body does NOT auto-wake (no wake path exists in the pipeline).
-/// KNOWN LIMITATION: see LIMITATIONS.md §sleep.
+/// S01: a sleeping body auto-wakes when a moving body makes NEW contact
+/// with it (uncached pair), then responds to the impact. Settled pairs
+/// stay cached and keep sleeping.
 #[test]
-fn s01_known_limitation_no_autowake_on_contact() {
+fn s01_autowake_on_new_contact() {
     let mut world = World2::new();
     floor(&mut world);
     let sleeper = world
@@ -1035,45 +1035,49 @@ fn s01_known_limitation_no_autowake_on_contact() {
             1.0,
         )
         .expect("valid shape");
-    world.bodies[sleeper].velocity = Vec2::ZERO;
-    world.bodies[sleeper].angular_velocity = 0.0;
-    world.step(DT);
-    assert!(
-        world.bodies[sleeper].is_sleeping,
-        "s01: box must be asleep before the drop"
-    );
-    world
-        .add_dynamic_body(Vec2::new(0.0, 3.0), Shape2::Circle { radius: 0.3 }, 1.0)
-        .expect("valid shape");
-    for _ in 0..180 {
+    // Settle, then wait out the deferred-sleep counter.
+    for _ in 0..120 {
         world.step(DT);
     }
-    assert_finite(&world, "s01 dropped ball");
     assert!(
         world.bodies[sleeper].is_sleeping,
-        "s01 KNOWN LIMITATION: sleeper must still be flagged asleep (no auto-wake)"
+        "s01: box must be asleep before the shove"
     );
-    // Drift should be within slop (0.005). Measured: Rust ~0.06mm, C# ~2.7mm.
-    // The 2.5mm cross-language gap is larger than libm alone — likely
-    // float rounding in the solver (Baumgarte bias vs. velocity damping)
-    // plus different float library behavior, not contact geometry.
-    // Both are well within slop (0.005), so the limit is correct.
-    let drift = (world.bodies[sleeper].transform.position - Vec2::new(0.0, 0.0)).length();
+    // Fast ball aimed at the box's left face: the impact must shove the
+    // box sideways (a downward drop would just sandwich it against the
+    // floor, proving nothing).
+    let ball = world
+        .add_dynamic_body(Vec2::new(-3.0, 0.0), Shape2::Circle { radius: 0.3 }, 1.0)
+        .expect("valid shape");
+    world.bodies[ball].velocity = Vec2::new(10.0, 0.0);
+    let mut woke = false;
+    let mut max_push = 0.0f32;
+    for _ in 0..180 {
+        world.step(DT);
+        if !world.bodies[sleeper].is_sleeping {
+            woke = true;
+        }
+        max_push = max_push.max(world.bodies[sleeper].transform.position.x);
+    }
+    assert_finite(&world, "s01 shoved box");
+    assert!(woke, "s01: sleeper must auto-wake on new contact");
     assert!(
-        drift < 0.005,
-        "s01: frozen sleeper must not drift beyond slop (0.005): drift={drift:.6}, pos={}",
-        world.bodies[sleeper].transform.position
+        max_push > 0.05,
+        "s01: woken sleeper must be shoved sideways, xmax={max_push}"
     );
 }
 
-/// S02 documents a known limitation: waking the bottom of a sleeping
-/// stack does NOT cascade — the top stays frozen mid-air.
-/// KNOWN LIMITATION: see LIMITATIONS.md §sleep.
+/// S02: waking the bottom of a sleeping stack cascades synchronously —
+/// contact partners of an awake body cannot stay asleep. Both settle
+/// back without floating or tunneling.
 #[test]
-fn s02_known_limitation_no_wake_cascade() {
+fn s02_wake_cascades_to_stack() {
     let mut world = World2::new();
     floor(&mut world);
-    // Exact resting stack: settles under gravity, then both sleep.
+    // Resting stack with a hairline gap: the top falls into place and
+    // settles, then both sleep (deferred sleep needs 30 slow frames).
+    // NOTE: a exactly-touching placement is avoided — zero-penetration
+    // starts hit a manifold tie-break that rocks instead of settling.
     let bottom = world
         .add_dynamic_body(
             Vec2::new(0.0, 0.0),
@@ -1085,55 +1089,39 @@ fn s02_known_limitation_no_wake_cascade() {
         .expect("valid shape");
     let top = world
         .add_dynamic_body(
-            Vec2::new(0.0, 1.0),
+            Vec2::new(0.0, 1.05),
             Shape2::Box {
                 half_extents: Vec2::new(0.5, 0.5),
             },
             1.0,
         )
         .expect("valid shape");
-    for _ in 0..120 {
+    for _ in 0..180 {
         world.step(DT);
     }
-    // Freeze into sleep deterministically: the stack is in resting
-    // contact, so zeroing residuals + one step flags both (contacts
-    // cancel gravity each step; end velocities stay sub-threshold).
-    for id in [bottom, top] {
-        world.bodies[id].velocity = Vec2::ZERO;
-        world.bodies[id].angular_velocity = 0.0;
-    }
-    world.step(DT);
     assert!(
         world.bodies[bottom].is_sleeping && world.bodies[top].is_sleeping,
         "s02: stack must start asleep"
     );
-    // Wake the bottom and lift it out from under the stack: the woken
-    // body must fall back (proving the wake took effect) while the top
-    // is left floating with no cascade to save it.
+    // The cascade is synchronous: the top is awake immediately.
     world.wake_body(bottom);
-    world.bodies[bottom].transform.position.y = 0.2;
-    world.bodies[bottom].velocity = Vec2::ZERO;
+    assert!(
+        !world.bodies[bottom].is_sleeping && !world.bodies[top].is_sleeping,
+        "s02: wake must cascade to the contact partner at once"
+    );
     for _ in 0..120 {
         world.step(DT);
     }
     assert_finite(&world, "s02 woken stack");
+    let by = world.bodies[bottom].transform.position.y;
+    let ty = world.bodies[top].transform.position.y;
     assert!(
-        world.bodies[bottom].transform.position.y < 0.05,
-        "s02: woken bottom must have fallen to the floor: y={}",
-        world.bodies[bottom].transform.position.y
+        by > -0.1 && by < 0.3,
+        "s02: bottom must rest on the floor, y={by}"
     );
     assert!(
-        world.bodies[top].is_sleeping,
-        "s02 KNOWN LIMITATION: top must still be flagged asleep (no cascade)"
-    );
-    // The flag says asleep, but the pipeline never skips sleepers: gravity
-    // accumulates each step and integrate moves the body before velocities
-    // are zeroed (~g*dt^2 per step), so the "sleeping" top visibly sinks.
-    // Both halves of the absurdity are pinned: flagged AND sinking.
-    assert!(
-        world.bodies[top].transform.position.y < 1.0,
-        "s02: unfrozen top must have sunk while flagged asleep: y={}",
-        world.bodies[top].transform.position.y
+        ty > 0.5 && ty < 1.5,
+        "s02: top must rest on the bottom, y={ty}"
     );
 }
 /// N11 pin: grazing capsule pair approaching slowly. Sub-margin overlap
