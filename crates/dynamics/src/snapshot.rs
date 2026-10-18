@@ -48,10 +48,14 @@ use super::validation::ValidationConfig;
 use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
-/// unknown versions rather than guessing.
+/// unknown versions instead of guessing.
+/// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 5;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 6;
+/// Schema that introduced the ambient block (v5). Gates below must use
+/// this (not `VERSION`), so v5 payloads keep decoding after v6 lands.
+const SNAPSHOT_SCHEMA_AMBIENT: u32 = 5;
 /// Schema that introduced the gravity block (v4). Worlds without ambient
 /// features but with gravity features serialize at this version.
 const SNAPSHOT_SCHEMA_GRAVITY: u32 = 4;
@@ -666,6 +670,51 @@ impl GravityConfig3Dto {
     }
 }
 
+// ---- CCD config DTO (schema v6) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CcdConfigDto {
+    enabled: bool,
+    max_movement: f32,
+    max_substeps: u32,
+}
+
+impl Default for CcdConfigDto {
+    fn default() -> Self {
+        let c = super::ccd::CcdConfig::default();
+        Self {
+            enabled: c.enabled,
+            max_movement: c.max_movement,
+            max_substeps: c.max_substeps,
+        }
+    }
+}
+
+impl CcdConfigDto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.max_movement == d.max_movement
+            && self.max_substeps == d.max_substeps
+    }
+}
+
+fn ccd_config_dto(c: &super::ccd::CcdConfig) -> CcdConfigDto {
+    CcdConfigDto {
+        enabled: c.enabled,
+        max_movement: c.max_movement,
+        max_substeps: c.max_substeps,
+    }
+}
+
+fn ccd_config_from_dto(c: &CcdConfigDto) -> super::ccd::CcdConfig {
+    super::ccd::CcdConfig {
+        enabled: c.enabled,
+        max_movement: c.max_movement,
+        max_substeps: c.max_substeps,
+    }
+}
+
 // ---- Ambient force DTOs (schema v5) ----
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -931,6 +980,10 @@ struct World2Dto {
     /// output stays byte-identical.
     #[serde(default, skip_serializing_if = "is_zero")]
     time: f32,
+    /// Schema v6; CCD config. Omitted (and defaulted) for pre-CCD files
+    /// so v3/v4/v5 output stays byte-identical.
+    #[serde(default, skip_serializing_if = "CcdConfigDto::is_default")]
+    ccd: CcdConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1013,6 +1066,9 @@ struct World3Dto {
     /// Schema v5; simulation clock (omitted when zero).
     #[serde(default, skip_serializing_if = "is_zero")]
     time: f32,
+    /// Schema v6; CCD config. Omitted (and defaulted) for pre-CCD files.
+    #[serde(default, skip_serializing_if = "CcdConfigDto::is_default")]
+    ccd: CcdConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1681,9 +1737,10 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
 
     // Conditional schema: default worlds stay v3 (byte-identical to
     // pre-gravity files); gravity-feature worlds use v4; anything using
-    // ambient features (or a non-unit ambient scale) uses v5. The clock
-    // is only persisted at v5 (it is irrelevant without ambient fields),
-    // keeping v3/v4 output byte-identical.
+    // ambient features (or a non-unit ambient scale) uses v5; anything
+    // with a non-default CCD config uses v6. The clock is only persisted
+    // at v5+ (it is irrelevant without ambient fields), keeping v3/v4
+    // output byte-identical.
     let has_ambient = w.ambient.is_active()
         || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
         || w.fluid.config.gamma != 1.0
@@ -1695,10 +1752,13 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.fluid.config.wall_friction != 0.0
         || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
+    let has_ccd = !w.ccd.is_default();
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_ambient {
+    let schema = if has_ccd {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_ambient {
+        SNAPSHOT_SCHEMA_AMBIENT
     } else if has_gravity {
         SNAPSHOT_SCHEMA_GRAVITY
     } else {
@@ -1711,6 +1771,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         gravity_config: gravity_config_dto_2(&w.gravity_config),
         ambient: ambient_config_dto_2(&w.ambient),
         time: if has_ambient { w.time } else { 0.0 },
+        ccd: ccd_config_dto(&w.ccd),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -1879,10 +1940,13 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.fluid.config.wall_friction != 0.0
         || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
+    let has_ccd = !w.ccd.is_default();
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_ambient {
+    let schema = if has_ccd {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_ambient {
+        SNAPSHOT_SCHEMA_AMBIENT
     } else if has_gravity {
         SNAPSHOT_SCHEMA_GRAVITY
     } else {
@@ -1895,6 +1959,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         gravity_config: gravity_config_dto_3(&w.gravity_config),
         ambient: ambient_config_dto_3(&w.ambient),
         time: if has_ambient { w.time } else { 0.0 },
+        ccd: ccd_config_dto(&w.ccd),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -2810,6 +2875,14 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     finite(dto.time, "time")?;
     w.ambient = ambient_config_from_2(&dto.ambient)?;
     w.time = dto.time;
+    finite(dto.ccd.max_movement, "ccd.max_movement")?;
+    if dto.ccd.max_movement <= 0.0 {
+        return corrupt("ccd.max_movement must be positive");
+    }
+    if dto.ccd.max_substeps < 1 {
+        return corrupt("ccd.max_substeps must be >= 1");
+    }
+    w.ccd = ccd_config_from_dto(&dto.ccd);
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -2854,6 +2927,14 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     finite(dto.time, "time")?;
     w.ambient = ambient_config_from_3(&dto.ambient)?;
     w.time = dto.time;
+    finite(dto.ccd.max_movement, "ccd.max_movement")?;
+    if dto.ccd.max_movement <= 0.0 {
+        return corrupt("ccd.max_movement must be positive");
+    }
+    if dto.ccd.max_substeps < 1 {
+        return corrupt("ccd.max_substeps must be >= 1");
+    }
+    w.ccd = ccd_config_from_dto(&dto.ccd);
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -3379,10 +3460,16 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         encode_gravity_config_2(&mut p, &dto.gravity_config);
     }
     // Schema v5: ambient config block + clock.
-    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_VERSION;
+    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_AMBIENT;
     if ambient_v5 {
         encode_ambient_config_2(&mut p, &dto.ambient);
         write_f32(&mut p, dto.time);
+    }
+    // Schema v6: CCD config block.
+    if dto.schema >= SNAPSHOT_SCHEMA_VERSION {
+        write_u8(&mut p, dto.ccd.enabled as u8);
+        write_f32(&mut p, dto.ccd.max_movement);
+        write_u32(&mut p, dto.ccd.max_substeps);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -3469,7 +3556,7 @@ fn decode_opt_scale(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> 
 /// Version-gated per-body ambient scale: v5+ records carry a trailing
 /// scale float per body; older records imply full coupling (1.0).
 fn decode_opt_ambient_scale(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         r.read_f32()
     } else {
         Ok(1.0)
@@ -3479,7 +3566,7 @@ fn decode_opt_ambient_scale(r: &mut Reader, version: u32) -> Result<f32, Snapsho
 /// Version-gated ambient config: v5 payloads carry the block; older
 /// payloads resolve to a default config.
 fn decode_opt_ambient_2(r: &mut Reader, version: u32) -> Result<AmbientConfig2Dto, SnapshotError> {
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         decode_ambient_config_2(r)
     } else {
         Ok(AmbientConfig2Dto::default())
@@ -3488,7 +3575,7 @@ fn decode_opt_ambient_2(r: &mut Reader, version: u32) -> Result<AmbientConfig2Dt
 
 /// 3D counterpart of [`decode_opt_ambient_2`].
 fn decode_opt_ambient_3(r: &mut Reader, version: u32) -> Result<AmbientConfig3Dto, SnapshotError> {
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         decode_ambient_config_3(r)
     } else {
         Ok(AmbientConfig3Dto::default())
@@ -3498,10 +3585,24 @@ fn decode_opt_ambient_3(r: &mut Reader, version: u32) -> Result<AmbientConfig3Dt
 /// Version-gated simulation clock: v5 payloads carry it; older payloads
 /// imply time 0.0.
 fn decode_opt_time(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         r.read_f32()
     } else {
         Ok(0.0)
+    }
+}
+
+/// Version-gated CCD config: v6 payloads carry the block; older
+/// payloads resolve to a default config.
+fn decode_opt_ccd(r: &mut Reader, version: u32) -> Result<CcdConfigDto, SnapshotError> {
+    if version >= SNAPSHOT_SCHEMA_VERSION {
+        Ok(CcdConfigDto {
+            enabled: r.read_u8()? != 0,
+            max_movement: r.read_f32()?,
+            max_substeps: r.read_u32()?,
+        })
+    } else {
+        Ok(CcdConfigDto::default())
     }
 }
 
@@ -3527,7 +3628,7 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
     write_f32(out, c.smoothing_length);
     write_f32(out, c.stiffness);
     // Schema v5: EOS/viscosity/surface-tension block.
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         write_f32(out, c.gamma);
         write_f32(out, c.artificial_viscosity);
         write_f32(out, c.surface_tension);
@@ -3584,7 +3685,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         merge_density_ratio,
         boundary_particles,
         wall_friction,
-    ) = if version >= SNAPSHOT_SCHEMA_VERSION {
+    ) = if version >= SNAPSHOT_SCHEMA_AMBIENT {
         (
             r.read_f32()?,
             r.read_f32()?,
@@ -3611,7 +3712,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             0.0,
         )
     };
-    let (phase_count, phase_rest_density, phase_mass) = if version >= SNAPSHOT_SCHEMA_VERSION {
+    let (phase_count, phase_rest_density, phase_mass) = if version >= SNAPSHOT_SCHEMA_AMBIENT {
         let count = r.read_u8()?;
         let mut rho = [1.0f32; 4];
         for v in rho.iter_mut() {
@@ -3670,7 +3771,7 @@ fn encode_fluid2(out: &mut Vec<u8>, f: &Fluid2Dto, version: u32) {
         write_f32(out, p.position.y);
         write_f32(out, p.velocity.x);
         write_f32(out, p.velocity.y);
-        if version >= SNAPSHOT_SCHEMA_VERSION {
+        if version >= SNAPSHOT_SCHEMA_AMBIENT {
             write_f32(out, p.mass);
             write_u8(out, p.phase);
         }
@@ -3696,12 +3797,12 @@ fn decode_fluid2(r: &mut Reader, version: u32) -> Result<Fluid2Dto, SnapshotErro
                 x: r.read_f32()?,
                 y: r.read_f32()?,
             },
-            mass: if version >= SNAPSHOT_SCHEMA_VERSION {
+            mass: if version >= SNAPSHOT_SCHEMA_AMBIENT {
                 r.read_f32()?
             } else {
                 0.0
             },
-            phase: if version >= SNAPSHOT_SCHEMA_VERSION {
+            phase: if version >= SNAPSHOT_SCHEMA_AMBIENT {
                 r.read_u8()?
             } else {
                 0
@@ -3716,7 +3817,7 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
     write_f32(out, c.rest_density);
     write_f32(out, c.smoothing_length);
     write_f32(out, c.stiffness);
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    if version >= SNAPSHOT_SCHEMA_AMBIENT {
         write_f32(out, c.gamma);
         write_f32(out, c.artificial_viscosity);
         write_f32(out, c.surface_tension);
@@ -3776,7 +3877,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         phase_count,
         phase_rest_density,
         phase_mass,
-    ) = if version >= SNAPSHOT_SCHEMA_VERSION {
+    ) = if version >= SNAPSHOT_SCHEMA_AMBIENT {
         (
             r.read_f32()?,
             r.read_f32()?,
@@ -3856,7 +3957,7 @@ fn encode_fluid3(out: &mut Vec<u8>, f: &Fluid3Dto, version: u32) {
         write_f32(out, p.velocity.x);
         write_f32(out, p.velocity.y);
         write_f32(out, p.velocity.z);
-        if version >= SNAPSHOT_SCHEMA_VERSION {
+        if version >= SNAPSHOT_SCHEMA_AMBIENT {
             write_f32(out, p.mass);
             write_u8(out, p.phase);
         }
@@ -3884,12 +3985,12 @@ fn decode_fluid3(r: &mut Reader, version: u32) -> Result<Fluid3Dto, SnapshotErro
                 y: r.read_f32()?,
                 z: r.read_f32()?,
             },
-            mass: if version >= SNAPSHOT_SCHEMA_VERSION {
+            mass: if version >= SNAPSHOT_SCHEMA_AMBIENT {
                 r.read_f32()?
             } else {
                 0.0
             },
-            phase: if version >= SNAPSHOT_SCHEMA_VERSION {
+            phase: if version >= SNAPSHOT_SCHEMA_AMBIENT {
                 r.read_u8()?
             } else {
                 0
@@ -4395,6 +4496,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         gravity_config: decode_opt_gravity_2(&mut r, version)?,
         ambient: decode_opt_ambient_2(&mut r, version)?,
         time: decode_opt_time(&mut r, version)?,
+        ccd: decode_opt_ccd(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -4518,10 +4620,16 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         encode_gravity_config_3(&mut p, &dto.gravity_config);
     }
     // Schema v5: ambient config block + clock (see `world2_to_binary`).
-    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_VERSION;
+    let ambient_v5 = dto.schema >= SNAPSHOT_SCHEMA_AMBIENT;
     if ambient_v5 {
         encode_ambient_config_3(&mut p, &dto.ambient);
         write_f32(&mut p, dto.time);
+    }
+    // Schema v6: CCD config block.
+    if dto.schema >= SNAPSHOT_SCHEMA_VERSION {
+        write_u8(&mut p, dto.ccd.enabled as u8);
+        write_f32(&mut p, dto.ccd.max_movement);
+        write_u32(&mut p, dto.ccd.max_substeps);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -4604,6 +4712,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         gravity_config: decode_opt_gravity_3(&mut r, version)?,
         ambient: decode_opt_ambient_3(&mut r, version)?,
         time: decode_opt_time(&mut r, version)?,
+        ccd: decode_opt_ccd(&mut r, version)?,
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {

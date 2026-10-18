@@ -136,6 +136,37 @@ public class NativeInteropTests
     }
 
     [Fact]
+    public void Native_CcdConfig_Roundtrips()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        using var world = new PhiNativeWorld();
+        var cfg = new Dynamics.CcdConfig
+        {
+            Enabled = true,
+            MaxMovement = 0.05f,
+            MaxSubsteps = 64,
+        };
+        world.SetCcdConfig(cfg);
+        var back = world.GetCcdConfig();
+        Assert.True(back.Enabled);
+        Assert.Equal(0.05f, back.MaxMovement);
+        Assert.Equal(64, back.MaxSubsteps);
+
+        // Bad configs rejected without mutating the world.
+        var badMovement = new Dynamics.CcdConfig { Enabled = true, MaxMovement = 0.0f, MaxSubsteps = 64 };
+        Assert.Throws<ArgumentException>(() => world.SetCcdConfig(badMovement));
+        var badSteps = new Dynamics.CcdConfig { Enabled = true, MaxMovement = 0.05f, MaxSubsteps = 0 };
+        Assert.Throws<ArgumentException>(() => world.SetCcdConfig(badSteps));
+        Assert.Equal(0.05f, world.GetCcdConfig().MaxMovement);
+        Assert.Equal(64, world.GetCcdConfig().MaxSubsteps);
+    }
+
+    [Fact]
     public void Native_FluidConfig_Roundtrips()
     {
         if (!NativeAvailable())
@@ -329,6 +360,32 @@ public class NativeInteropTests
         Assert.Equal(2u, world.FluidCount);
         world.FluidClear();
         Assert.Equal(0u, world.FluidCount);
+    }
+
+    [Fact]
+    public void Native3D_CcdConfig_Roundtrips()
+    {
+        if (!NativeAvailable())
+        {
+            _output.WriteLine("skipped: staged native library is win-x64 only");
+            return;
+        }
+
+        using var world = new PhiNativeWorld3();
+        var cfg = new Dynamics.CcdConfig
+        {
+            Enabled = true,
+            MaxMovement = 0.05f,
+            MaxSubsteps = 32,
+        };
+        world.SetCcdConfig(cfg);
+        var back = world.GetCcdConfig();
+        Assert.True(back.Enabled);
+        Assert.Equal(0.05f, back.MaxMovement);
+        Assert.Equal(32, back.MaxSubsteps);
+        var bad = new Dynamics.CcdConfig { Enabled = true, MaxMovement = -1.0f, MaxSubsteps = 32 };
+        Assert.Throws<ArgumentException>(() => world.SetCcdConfig(bad));
+        Assert.Equal(0.05f, world.GetCcdConfig().MaxMovement);
     }
 
     [Fact]

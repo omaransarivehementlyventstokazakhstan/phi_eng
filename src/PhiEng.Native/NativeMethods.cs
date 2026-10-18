@@ -278,6 +278,43 @@ internal static partial class NativeMethods
         IntPtr world,
         AmbientConfig3Ffi* outCfg);
 
+    /// <summary>CCD config FFI struct (shared 2D/3D). Mirrors Rust <c>CcdConfigFfi</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CcdConfigFfi
+    {
+        public uint Enabled;
+        public float MaxMovement;
+        public uint MaxSubsteps;
+    }
+
+    /// <summary>Sets the 2D CCD config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_ccd_config(
+        IntPtr world,
+        CcdConfigFfi* cfg);
+
+    /// <summary>Reads the 2D CCD config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_ccd_config(
+        IntPtr world,
+        CcdConfigFfi* outCfg);
+
+    /// <summary>Sets the 3D CCD config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_ccd_config(
+        IntPtr world,
+        CcdConfigFfi* cfg);
+
+    /// <summary>Reads the 3D CCD config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_ccd_config(
+        IntPtr world,
+        CcdConfigFfi* outCfg);
+
     /// <summary>Sets the 2D simulation clock.</summary>
     /// <returns>1 on success, 0 for null world or non-finite input.</returns>
     [LibraryImport(LibraryName)]

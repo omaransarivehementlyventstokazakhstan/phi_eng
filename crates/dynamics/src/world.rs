@@ -99,6 +99,9 @@ pub struct World2 {
     /// Ambient force fields — spring (SHM), aerodynamic drag, and
     /// turbulence (see [`crate::ambient`]). Default is a no-op.
     pub ambient: super::ambient::AmbientConfig2,
+    /// Continuous collision detection via adaptive substepping (see
+    /// [`crate::ccd`]). Default is a no-op (single legacy substep).
+    pub ccd: super::ccd::CcdConfig,
     /// Monotonic simulation clock in seconds, advanced by `dt` each step.
     /// Drives time-varying ambient fields (turbulence).
     pub time: f32,
@@ -146,6 +149,7 @@ impl World2 {
             gravity: Vec2::new(0.0, -9.81),
             gravity_config: super::gravity::GravityConfig2::default(),
             ambient: super::ambient::AmbientConfig2::default(),
+            ccd: super::ccd::CcdConfig::default(),
             time: 0.0,
             next_body_id: 0,
             contact_cache: FxHashMap::default(),
@@ -416,10 +420,49 @@ impl World2 {
     }
 
     /// Step the physics simulation
+    /// Advance the simulation by `dt` seconds. With CCD enabled (see
+    /// [`crate::ccd`]), the step splits into substeps so no body travels
+    /// more than `max_movement` per substep; each substep runs the full
+    /// pipeline. Disabled (default) is a single legacy substep,
+    /// bit-identical to pre-CCD behavior.
     pub fn step(&mut self, dt: f32) {
-        // Reset validation report
+        // Reset validation report once for the whole step; substeps merge.
         self.validation_report = ValidationReport::default();
+        let n = if self.ccd.is_active() {
+            self.ccd.substeps(dt, self.ccd_peak_speed())
+        } else {
+            1
+        };
+        if n <= 1 {
+            self.step_inner(dt);
+        } else {
+            let sub = dt / n as f32;
+            for _ in 0..n {
+                self.step_inner(sub);
+            }
+        }
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        self.time += dt;
+    }
 
+    /// Peak effective body speed (linear plus angular sweep at the body
+    /// extents) for CCD substepping. Static and sleeping bodies carry
+    /// zero velocity, so they contribute nothing.
+    fn ccd_peak_speed(&self) -> f32 {
+        let mut peak = 0.0f32;
+        for body in &self.bodies {
+            if body.is_static {
+                continue;
+            }
+            let (min, max) = self.get_body_aabb(body);
+            let extent = (max - min).length() * 0.5;
+            let eff = body.velocity.length() + body.angular_velocity.abs() * extent;
+            peak = peak.max(eff);
+        }
+        peak
+    }
+
+    fn step_inner(&mut self, dt: f32) {
         // 1. Gravity kick (see `crate::gravity`): uniform background field
         // plus Central/N-body terms per `gravity_config`, one full-step
         // kick (Euler) or the first half-kick (Verlet, with linear
@@ -606,9 +649,6 @@ impl World2 {
                 body.angular_velocity = 0.0;
             }
         }
-
-        // 8. Advance the simulation clock (drives time-varying ambient fields).
-        self.time += dt;
     }
 
     pub fn wake_body(&mut self, body_id: usize) {
@@ -1065,6 +1105,9 @@ pub struct World3 {
     /// Ambient force fields — spring (SHM), aerodynamic drag, and
     /// turbulence (see [`crate::ambient`]). Default is a no-op.
     pub ambient: super::ambient::AmbientConfig3,
+    /// Continuous collision detection via adaptive substepping (see
+    /// [`crate::ccd`]). Default is a no-op (single legacy substep).
+    pub ccd: super::ccd::CcdConfig,
     /// Monotonic simulation clock in seconds (see [`World2::time`]).
     pub time: f32,
     /// Next body ID
@@ -1118,6 +1161,7 @@ impl World3 {
             gravity: Vec3::new(0.0, -9.81, 0.0),
             gravity_config: super::gravity::GravityConfig3::default(),
             ambient: super::ambient::AmbientConfig3::default(),
+            ccd: super::ccd::CcdConfig::default(),
             time: 0.0,
             next_body_id: 0,
             dt: 1.0 / 60.0,
@@ -1253,10 +1297,49 @@ impl World3 {
     }
 
     /// Step the physics simulation
+    /// Advance the simulation by `dt` seconds. With CCD enabled (see
+    /// [`crate::ccd`]), the step splits into substeps so no body travels
+    /// more than `max_movement` per substep; each substep runs the full
+    /// pipeline. Disabled (default) is a single legacy substep,
+    /// bit-identical to pre-CCD behavior.
     pub fn step(&mut self, dt: f32) {
-        // Reset validation report
+        // Reset validation report once for the whole step; substeps merge.
         self.validation_report = ValidationReport::default();
+        let n = if self.ccd.is_active() {
+            self.ccd.substeps(dt, self.ccd_peak_speed())
+        } else {
+            1
+        };
+        if n <= 1 {
+            self.step_inner(dt);
+        } else {
+            let sub = dt / n as f32;
+            for _ in 0..n {
+                self.step_inner(sub);
+            }
+        }
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        self.time += dt;
+    }
 
+    /// Peak effective body speed (linear plus angular sweep at the body
+    /// extents) for CCD substepping. Static bodies carry zero velocity,
+    /// so they contribute nothing.
+    fn ccd_peak_speed(&self) -> f32 {
+        let mut peak = 0.0f32;
+        for body in &self.bodies {
+            if body.is_static {
+                continue;
+            }
+            let (min, max) = self.get_body_aabb(body);
+            let extent = (max - min).length() * 0.5;
+            let eff = body.velocity.length() + body.angular_velocity.length() * extent;
+            peak = peak.max(eff);
+        }
+        peak
+    }
+
+    fn step_inner(&mut self, dt: f32) {
         // 1. Gravity kick (see `crate::gravity`): uniform background field
         // plus Central/N-body terms per `gravity_config`, one full-step
         // kick (Euler) or the first half-kick (Verlet, with linear
@@ -1437,9 +1520,6 @@ impl World3 {
                 body.angular_velocity = Vec3::ZERO;
             }
         }
-
-        // 8. Advance the simulation clock (drives time-varying ambient fields).
-        self.time += dt;
 
         // Return scratch buffers for the next step.
         self.scratch_pairs = pairs;

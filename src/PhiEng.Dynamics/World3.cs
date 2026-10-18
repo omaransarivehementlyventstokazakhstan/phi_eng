@@ -48,6 +48,11 @@ public class World3
     /// (see <see cref="AmbientConfig3"/>). Default is a no-op.
     /// </summary>
     public AmbientConfig3 Ambient { get; set; } = AmbientConfig3.Default;
+    /// <summary>
+    /// Continuous collision detection via adaptive substepping (see
+    /// <see cref="CcdConfig"/>). Default is a no-op (single legacy substep).
+    /// </summary>
+    public CcdConfig Ccd { get; set; } = CcdConfig.Default;
     /// <summary>Monotonic simulation clock (s), advanced by Dt each step.</summary>
     public float Time { get; set; }
     /// <summary>Next body id.</summary>
@@ -220,12 +225,60 @@ public class World3
         }
     }
 
-    /// <summary>Steps the simulation: gravity, broadphase, narrowphase, solve, integrate, sleep.</summary>
+    /// <summary>
+    /// Steps the simulation: gravity, broadphase, narrowphase, solve,
+    /// integrate, sleep. With CCD enabled (see <see cref="CcdConfig"/>),
+    /// the step splits into substeps so no body travels more than
+    /// MaxMovement per substep; disabled (default) is a single legacy
+    /// substep, bit-identical to pre-CCD behavior.
+    /// </summary>
     public void Step(float dt)
     {
-        // Reset validation report
+        // Reset validation report once for the whole step; substeps merge.
         ValidationReport = new ValidationReport();
 
+        uint n = Ccd.IsActive() ? Ccd.Substeps(dt, CcdPeakSpeed()) : 1u;
+        if (n <= 1)
+        {
+            StepInner(dt);
+        }
+        else
+        {
+            float sub = dt / n;
+            for (uint s = 0; s < n; s++)
+            {
+                StepInner(sub);
+            }
+        }
+
+        // 8. Advance the simulation clock (drives time-varying ambient fields).
+        Time += dt;
+    }
+
+    /// <summary>
+    /// Peak effective body speed (linear plus angular sweep at the body
+    /// extents) for CCD substepping. Static bodies carry zero velocity,
+    /// so they contribute nothing.
+    /// </summary>
+    private float CcdPeakSpeed()
+    {
+        float peak = 0.0f;
+        foreach (var body in Bodies)
+        {
+            if (body.IsStatic)
+            {
+                continue;
+            }
+            var (min, max) = GetBodyAABB(body);
+            float extent = (max - min).Length() * 0.5f;
+            float eff = body.Velocity.Length() + body.AngularVelocity.Length() * extent;
+            peak = System.Math.Max(peak, eff);
+        }
+        return peak;
+    }
+
+    private void StepInner(float dt)
+    {
         // 1. Gravity kick (see GravityIntegration): uniform background
         // field plus Central/N-body terms per GravityConfig, one
         // full-step kick (Euler) or the first half-kick (Verlet).
@@ -354,9 +407,6 @@ public class World3
                 body.AngularVelocity = Vector3.Zero;
             }
         }
-
-        // Advance the simulation clock (drives time-varying ambient fields).
-        Time += dt;
     }
 
     private void UpdateBroadphase()

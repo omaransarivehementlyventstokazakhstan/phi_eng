@@ -576,6 +576,115 @@ pub unsafe extern "C" fn phieng_world3_get_ambient_config(
     1
 }
 
+/// CCD config layout mirrored to C# (shared by 2D and 3D worlds).
+/// `#[repr(C)]`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CcdConfigFfi {
+    /// Master switch (0/1).
+    pub enabled: u32,
+    /// Maximum travel per substep.
+    pub max_movement: f32,
+    /// Hard cap on substeps per world step.
+    pub max_substeps: u32,
+}
+
+fn ccd_from_ffi(c: &CcdConfigFfi) -> Option<phieng_dynamics::ccd::CcdConfig> {
+    if !valid(c.max_movement) || c.max_movement <= 0.0 || c.max_substeps < 1 {
+        return None;
+    }
+    Some(phieng_dynamics::ccd::CcdConfig {
+        enabled: c.enabled != 0,
+        max_movement: c.max_movement,
+        max_substeps: c.max_substeps,
+    })
+}
+
+fn ccd_to_ffi(c: &phieng_dynamics::ccd::CcdConfig) -> CcdConfigFfi {
+    CcdConfigFfi {
+        enabled: c.enabled as u32,
+        max_movement: c.max_movement,
+        max_substeps: c.max_substeps,
+    }
+}
+
+/// Set the 2D CCD config from a caller-owned struct. Returns 1 on
+/// success, 0 for null world/struct or any out-of-range input (world
+/// left unchanged).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `cfg` must be null (clean `0`) or point at an initialized
+/// [`CcdConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_ccd_config(
+    world: *mut World2,
+    cfg: *const CcdConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = ccd_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).ccd = parsed;
+    1
+}
+
+/// Copy the 2D CCD config out. Returns 1 on success, 0 for null
+/// world/out.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `out` must be null (clean `0`) or valid for a write of one
+/// [`CcdConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_ccd_config(
+    world: *mut World2,
+    out: *mut CcdConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = ccd_to_ffi(&(*world).ccd);
+    1
+}
+
+/// Set the 3D CCD config. See [`phieng_world_set_ccd_config`].
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `cfg` must be null (clean `0`) or point at an initialized
+/// [`CcdConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_ccd_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const CcdConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = ccd_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).ccd = parsed;
+    1
+}
+
+/// Copy the 3D CCD config out. See [`phieng_world_get_ccd_config`].
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). `out` must be null (clean `0`) or valid for a write of one
+/// [`CcdConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_ccd_config(
+    world: *mut phieng_dynamics::World3,
+    out: *mut CcdConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = ccd_to_ffi(&(*world).ccd);
+    1
+}
+
 /// SPH fluid config layout (2D) mirrored to C#. `#[repr(C)]`; the
 /// `phase_rest_density` / `phase_mass` arrays are 4 floats each.
 #[repr(C)]
@@ -3362,6 +3471,67 @@ mod tests {
             assert_eq!(t, 3.5);
             assert_eq!(phieng_world_set_time(world, f32::NAN), 0);
             phieng_world_free(world);
+        }
+    }
+
+    #[test]
+    fn ccd_config_roundtrip() {
+        unsafe {
+            let world = phieng_world_new();
+            let cfg = CcdConfigFfi {
+                enabled: 1,
+                max_movement: 0.05,
+                max_substeps: 64,
+            };
+            assert_eq!(phieng_world_set_ccd_config(world, &cfg), 1);
+            let mut out = std::mem::zeroed::<CcdConfigFfi>();
+            assert_eq!(phieng_world_get_ccd_config(world, &mut out), 1);
+            assert_eq!(out.enabled, 1);
+            assert_eq!(out.max_movement, 0.05);
+            assert_eq!(out.max_substeps, 64);
+            // Null tolerance.
+            assert_eq!(phieng_world_set_ccd_config(std::ptr::null_mut(), &cfg), 0);
+            assert_eq!(phieng_world_get_ccd_config(world, std::ptr::null_mut()), 0);
+            // Bad inputs rejected without mutating the world.
+            for bad in [
+                CcdConfigFfi {
+                    max_movement: 0.0,
+                    ..cfg
+                },
+                CcdConfigFfi {
+                    max_movement: -1.0,
+                    ..cfg
+                },
+                CcdConfigFfi {
+                    max_movement: f32::NAN,
+                    ..cfg
+                },
+                CcdConfigFfi {
+                    max_substeps: 0,
+                    ..cfg
+                },
+            ] {
+                assert_eq!(phieng_world_set_ccd_config(world, &bad), 0);
+            }
+            let mut after = std::mem::zeroed::<CcdConfigFfi>();
+            assert_eq!(phieng_world_get_ccd_config(world, &mut after), 1);
+            assert_eq!(after.max_movement, 0.05);
+            assert_eq!(after.max_substeps, 64);
+            phieng_world_free(world);
+
+            // 3D mirror.
+            let world3 = phieng_world3_new();
+            assert_eq!(phieng_world3_set_ccd_config(world3, &cfg), 1);
+            let mut out3 = std::mem::zeroed::<CcdConfigFfi>();
+            assert_eq!(phieng_world3_get_ccd_config(world3, &mut out3), 1);
+            assert_eq!(out3.enabled, 1);
+            assert_eq!(out3.max_movement, 0.05);
+            assert_eq!(phieng_world3_set_ccd_config(std::ptr::null_mut(), &cfg), 0);
+            assert_eq!(
+                phieng_world3_get_ccd_config(world3, std::ptr::null_mut()),
+                0
+            );
+            phieng_world3_free(world3);
         }
     }
 

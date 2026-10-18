@@ -8,6 +8,11 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Tests
+- **CCD parity block C01–C04** (mirrored Rust↔C#): fast-ball-vs-thin-wall
+  tunneling prevented (2D C01, 3D C02), default-off bit-identical
+  trajectories plus schema-v3 JSON without a `ccd` key (C03), and CCD
+  snapshot round-trip through JSON and binary (schema v6) with the fast
+  ball still caught after save/load (C04).
 - **SHM & SPH benchmark suite**: 18 canonical, well-known problems added
   (Rust-only). SHM: damped-oscillator regimes vs the closed-form
   solution, energy-decay rate, `T = 2π√(m/k)` mass scaling, gravity rest
@@ -44,6 +49,17 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **CCD via adaptive substepping (Rust + managed C#)**: a new
+  `phieng_dynamics::ccd::CcdConfig` (`enabled`, `max_movement` default
+  `0.1`, `max_substeps` default `8`) shared by 2D and 3D worlds. When
+  enabled, each world step splits into substeps so no body travels more
+  than `max_movement` per substep (linear plus angular sweep); each
+  substep runs the full pipeline. Off by default — bit-identical
+  trajectories. Persisted through **snapshot schema v6** (conditional:
+  default worlds stay v3/v4/v5 byte-identical), crossed via new
+  `phieng_world[_3]_set/get_ccd_config` FFI plus managed
+  `PhiNativeWorld(3).SetCcdConfig/GetCcdConfig`, and mirrored in
+  managed `World2/3.Step` with native-vs-managed behavior parity.
 - **Fluid wall no-slip** (`wall_friction` ∈ [0, 1], default `0` =
   free-slip, bit-identical): at a particle/body contact the tangential
   velocity is driven toward the wall's tangential velocity (reaction to

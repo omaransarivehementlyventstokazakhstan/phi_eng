@@ -41,8 +41,10 @@ Result: **13 passed, 0 failed** (total suite wall time ≈ 0.21 s in release).
    The shove's peak (73.5) and min_y (−290.59) are byte-identical
    pre/post cap: that escape is driven by the 8 m/s impact itself
    (restitution path, where Baumgarte is skipped by design), plus a thin
-   1 m floor and no CCD. Fixing that residue needs CCD or impact-speed
-   management — a bigger, separate change. Both tests now bound the
+   1 m floor and CCD off by default. Enabling CCD
+   (`CcdConfig.enabled`, C01–C04) arrests this class of escape by
+   substepping fast bodies; the brutal readings above keep CCD off to
+   pin the discrete-stepping baseline. Both tests bound the
    envelope (finite, in-universe) and report tunneling honestly.
 3. **Mesh-vs-mesh towers do not hold.** The GJK catch-all emits a
    single support-midpoint contact per pair, so six stacked convex-mesh
@@ -203,5 +205,23 @@ Findings worth knowing:
 - **Penalty boundaries tunnel** at high speed (no CCD): a violent
   dam-break ejected a fast particle through a thin wall until the test
   used thick walls.
+
+## CCD parity block (2026-10-18)
+
+Conservative advancement via adaptive substepping
+(`CcdConfig.enabled`, `max_movement` 0.05, `max_substeps` 64), pinned
+by `crates/engine/tests/ccd.rs` (C01–C04, mirrored in
+`tests/PhiEng.Tests/CcdTests.cs`):
+
+| Test | Scene | Result |
+| ---- | ----- | ------ |
+| `c01_thin_wall_2d` | ball r=0.25 at 60 m/s vs 0.1-thick wall, 120 steps | tunnels to y &lt; −1 off; rests y ∈ (0.2, 0.6) on |
+| `c02_thin_wall_3d` | sphere r=0.25 at 120 m/s vs 0.1-thick slab, 120 steps | tunnels to y &lt; −1 off; rests y ∈ (0.2, 0.6) on |
+| `c03_default_off_bit_identical` | settling stack, CCD enabled but capped at 1 substep, 300 steps | bitwise identical to CCD-off; default JSON has no `ccd` key |
+| `c04_ccd_snapshot_roundtrip` | CCD wall scene through JSON + binary (schema v6) | config preserved; fast ball still caught after load |
+
+CCD cost is proportional to fast-body speed (substeps × the normal
+pipeline); calm scenes take exactly one substep, so resting piles pay
+nothing. Off (default) is bit-identical to legacy stepping.
 
 

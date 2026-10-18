@@ -1,6 +1,7 @@
 pub mod ambient;
 pub mod barnes_hut;
 pub mod body;
+pub mod ccd;
 pub mod fluid;
 pub mod fluid3;
 pub(crate) mod fxhash;

@@ -152,6 +152,47 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>Set the 3D CCD config (adaptive substepping).</summary>
+    public unsafe void SetCcdConfig(Dynamics.CcdConfig config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.CcdConfigFfi
+            {
+                Enabled = config.Enabled ? 1u : 0u,
+                MaxMovement = config.MaxMovement,
+                MaxSubsteps = (uint)config.MaxSubsteps,
+            };
+            int ok = NativeMethods.phieng_world3_set_ccd_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native 3D world rejected CCD config (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the CCD config from the native 3D world.</summary>
+    public unsafe Dynamics.CcdConfig GetCcdConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.CcdConfigFfi ffi;
+            int ok = NativeMethods.phieng_world3_get_ccd_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native 3D CCD config read failed.");
+            }
+            return new Dynamics.CcdConfig
+            {
+                Enabled = ffi.Enabled != 0,
+                MaxMovement = ffi.MaxMovement,
+                MaxSubsteps = (int)ffi.MaxSubsteps,
+            };
+        }
+    }
+
     /// <summary>Set the simulation clock (3D).</summary>
     public void SetTime(float t)
     {

@@ -34,18 +34,22 @@ public static class Snapshot
     /// Snapshot schema version. Must match Rust SNAPSHOT_SCHEMA_VERSION.
     /// v4 adds the gravity config block and per-body gravity scales; v5
     /// adds the ambient-force config block (spring/drag/turbulence), the
-    /// simulation clock, and per-body ambient scales. Writers emit v3 for
-    /// default worlds and v4 for gravity-only worlds (byte-compatible
-    /// with older files); anything using ambient features uses v5.
+    /// simulation clock, and per-body ambient scales; v6 adds the CCD
+    /// config block. Writers emit v3 for default worlds, v4 for
+    /// gravity-only worlds, v5 for ambient/fluid worlds (byte-compatible
+    /// with older files); anything with a non-default CCD config uses v6.
     /// </summary>
-    public const uint SchemaVersion = 5;
+    public const uint SchemaVersion = 6;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
 
+    /// <summary>Schema that introduced the ambient block (v5).</summary>
+    public const uint AmbientSchemaVersion = 5;
+
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
-    /// they load as defaults. Anything outside [3, 5] is rejected.
+    /// they load as defaults. Anything outside [3, 6] is rejected.
     /// </summary>
     public const uint MinReadableSchemaVersion = 3;
 
@@ -465,6 +469,16 @@ public static class Snapshot
         public bool IsDefault() => Spring.IsDefault() && Drag.IsDefault() && Turbulence.IsDefault();
     }
 
+    /// <summary>CCD config DTO (schema v6, shared 2D/3D).</summary>
+    private sealed class CcdConfigDto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("max_movement")] public float MaxMovement { get; set; } = 0.1f;
+        [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 8;
+
+        public bool IsDefault() => !Enabled && MaxMovement == 0.1f && MaxSubsteps == 8;
+    }
+
     /// <summary>Spring / SHM config DTO (schema v5, 3D).</summary>
     private sealed class Spring3Dto
     {
@@ -613,6 +627,8 @@ public static class Snapshot
         [JsonPropertyName("ambient")] public AmbientConfig2Dto Ambient { get; set; } = new();
         /// <summary>Simulation clock (schema v5); 0 for pre-v5 files.</summary>
         [JsonPropertyName("time")] public float Time { get; set; }
+        /// <summary>CCD config (schema v6); defaults so pre-v6 files decode to no-op.</summary>
+        [JsonPropertyName("ccd")] public CcdConfigDto Ccd { get; set; } = new();
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -630,7 +646,7 @@ public static class Snapshot
         {
             // Conditional schema: default worlds stay v3 (byte-compatible
             // with older files); gravity-only worlds v4; ambient worlds
-            // v5. Mirrors the Rust writer rule.
+            // v5; non-default CCD configs v6. Mirrors the Rust writer rule.
             bool hasAmbient = w.Ambient.IsActive() || w.Bodies.Any(b => b.AmbientScale != 1.0f)
                 || w.Fluid.Config.Gamma != 1.0f || w.Fluid.Config.ArtificialViscosity != 0.0f
                 || w.Fluid.Config.SurfaceTension != 0.0f
@@ -638,8 +654,9 @@ public static class Snapshot
                 || w.Fluid.Config.AdaptiveResolution
                 || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
+            bool hasCcd = !w.Ccd.IsDefault();
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            uint schema = hasCcd ? SchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World2Dto
             {
                 Schema = schema,
@@ -685,6 +702,12 @@ public static class Snapshot
                     },
                 },
                 Time = hasAmbient ? w.Time : 0.0f,
+                Ccd = new CcdConfigDto
+                {
+                    Enabled = w.Ccd.Enabled,
+                    MaxMovement = w.Ccd.MaxMovement,
+                    MaxSubsteps = w.Ccd.MaxSubsteps,
+                },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -886,6 +909,8 @@ public static class Snapshot
         [JsonPropertyName("ambient")] public AmbientConfig3Dto Ambient { get; set; } = new();
         /// <summary>See <c>World2Dto.Time</c>.</summary>
         [JsonPropertyName("time")] public float Time { get; set; }
+        /// <summary>CCD config (schema v6); defaults so pre-v6 files decode to no-op.</summary>
+        [JsonPropertyName("ccd")] public CcdConfigDto Ccd { get; set; } = new();
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -908,8 +933,9 @@ public static class Snapshot
                 || w.Fluid.Config.AdaptiveResolution
                 || w.Fluid.Config.WallFriction != 0.0f
                 || w.Fluid.Config.BoundaryParticles;
+            bool hasCcd = !w.Ccd.IsDefault();
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasAmbient ? SchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            uint schema = hasCcd ? SchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
             var dto = new World3Dto
             {
                 Schema = schema,
@@ -955,6 +981,12 @@ public static class Snapshot
                     },
                 },
                 Time = hasAmbient ? w.Time : 0.0f,
+                Ccd = new CcdConfigDto
+                {
+                    Enabled = w.Ccd.Enabled,
+                    MaxMovement = w.Ccd.MaxMovement,
+                    MaxSubsteps = w.Ccd.MaxSubsteps,
+                },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -1319,6 +1351,20 @@ public static class Snapshot
         };
     }
 
+    private static CcdConfig CcdConfigFrom(CcdConfigDto c)
+    {
+        if (c.MaxMovement <= 0.0f)
+            throw new ArgumentException("CCD max_movement must be positive.");
+        if (c.MaxSubsteps < 1)
+            throw new ArgumentException("CCD max_substeps must be >= 1.");
+        return new CcdConfig
+        {
+            Enabled = c.Enabled,
+            MaxMovement = Fin(c.MaxMovement, "ccd.max_movement"),
+            MaxSubsteps = c.MaxSubsteps,
+        };
+    }
+
     private static Shape2 ShapeFrom(Shape2Dto? s)
     {
         if (s == null) throw new ArgumentException("Missing shape.");
@@ -1364,6 +1410,7 @@ public static class Snapshot
             GravityConfig = GravityConfigFrom(dto.GravityConfig),
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
+            Ccd = CcdConfigFrom(dto.Ccd),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1558,6 +1605,7 @@ public static class Snapshot
             GravityConfig = GravityConfigFrom(dto.GravityConfig),
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
+            Ccd = CcdConfigFrom(dto.Ccd),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -2024,11 +2072,18 @@ public static class Snapshot
         bool gravityV4 = dto.Schema >= GravitySchemaVersion;
         if (gravityV4) WriteGravityConfig2(w, dto.GravityConfig);
         // Schema v5: ambient config block + clock.
-        bool ambientV5 = dto.Schema >= SchemaVersion;
+        bool ambientV5 = dto.Schema >= AmbientSchemaVersion;
         if (ambientV5)
         {
             WriteAmbientConfig2(w, dto.Ambient);
             w.Write(dto.Time);
+        }
+        // Schema v6: CCD config block.
+        if (dto.Schema >= SchemaVersion)
+        {
+            w.Write(dto.Ccd.Enabled);
+            w.Write(dto.Ccd.MaxMovement);
+            w.Write(dto.Ccd.MaxSubsteps);
         }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
@@ -2076,7 +2131,7 @@ public static class Snapshot
         w.Write(c.RestDensity);
         w.Write(c.SmoothingLength);
         w.Write(c.Stiffness);
-        if (version >= SchemaVersion)
+        if (version >= AmbientSchemaVersion)
         {
             w.Write(c.Gamma);
             w.Write(c.ArtificialViscosity);
@@ -2108,7 +2163,7 @@ public static class Snapshot
             SmoothingLength = r.ReadSingle(),
             Stiffness = r.ReadSingle(),
         };
-        if (version >= SchemaVersion)
+        if (version >= AmbientSchemaVersion)
         {
             c.Gamma = r.ReadSingle();
             c.ArtificialViscosity = r.ReadSingle();
@@ -2140,7 +2195,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y);
-            if (version >= SchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
+            if (version >= AmbientSchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
         }
     }
 
@@ -2156,8 +2211,8 @@ public static class Snapshot
             {
                 Position = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 Velocity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
-                Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
-                Phase = version >= SchemaVersion ? r.ReadByte() : (byte)0,
+                Mass = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
+                Phase = version >= AmbientSchemaVersion ? r.ReadByte() : (byte)0,
             });
         }
         return f;
@@ -2169,7 +2224,7 @@ public static class Snapshot
         w.Write(c.RestDensity);
         w.Write(c.SmoothingLength);
         w.Write(c.Stiffness);
-        if (version >= SchemaVersion)
+        if (version >= AmbientSchemaVersion)
         {
             w.Write(c.Gamma);
             w.Write(c.ArtificialViscosity);
@@ -2201,7 +2256,7 @@ public static class Snapshot
             SmoothingLength = r.ReadSingle(),
             Stiffness = r.ReadSingle(),
         };
-        if (version >= SchemaVersion)
+        if (version >= AmbientSchemaVersion)
         {
             c.Gamma = r.ReadSingle();
             c.ArtificialViscosity = r.ReadSingle();
@@ -2233,7 +2288,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y); w.Write(p.Position.Z);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y); w.Write(p.Velocity.Z);
-            if (version >= SchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
+            if (version >= AmbientSchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
         }
     }
 
@@ -2249,8 +2304,8 @@ public static class Snapshot
             {
                 Position = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
-                Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
-                Phase = version >= SchemaVersion ? r.ReadByte() : (byte)0,
+                Mass = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
+                Phase = version >= AmbientSchemaVersion ? r.ReadByte() : (byte)0,
             });
         }
         return f;
@@ -2271,14 +2326,21 @@ public static class Snapshot
             // to defaults (same values a v3 file implies).
             GravityConfig = version >= GravitySchemaVersion ? ReadGravityConfig2(r) : new GravityConfig2Dto(),
             // v5 payloads carry the ambient block + clock.
-            Ambient = version >= SchemaVersion ? ReadAmbientConfig2(r) : new AmbientConfig2Dto(),
-            Time = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
+            Ambient = version >= AmbientSchemaVersion ? ReadAmbientConfig2(r) : new AmbientConfig2Dto(),
+            Time = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
+            // v6 payloads carry the CCD block.
+            Ccd = version >= SchemaVersion ? new CcdConfigDto
+            {
+                Enabled = r.ReadBoolean(),
+                MaxMovement = r.ReadSingle(),
+                MaxSubsteps = r.ReadInt32(),
+            } : new CcdConfigDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
         };
         bool gravityV4 = version >= GravitySchemaVersion;
-        bool ambientV5 = version >= SchemaVersion;
+        bool ambientV5 = version >= AmbientSchemaVersion;
         int nb = r.ReadInt32();
         if (nb < 0 || nb > 1_000_000) throw new ArgumentException("Body count out of range.");
         for (int i = 0; i < nb; i++)
@@ -2519,11 +2581,18 @@ public static class Snapshot
         // Schema v4: gravity config block (see WriteWorld2Payload).
         bool gravityV4 = dto.Schema >= GravitySchemaVersion;
         if (gravityV4) WriteGravityConfig3(w, dto.GravityConfig);
-        bool ambientV5 = dto.Schema >= SchemaVersion;
+        bool ambientV5 = dto.Schema >= AmbientSchemaVersion;
         if (ambientV5)
         {
             WriteAmbientConfig3(w, dto.Ambient);
             w.Write(dto.Time);
+        }
+        // Schema v6: CCD config block.
+        if (dto.Schema >= SchemaVersion)
+        {
+            w.Write(dto.Ccd.Enabled);
+            w.Write(dto.Ccd.MaxMovement);
+            w.Write(dto.Ccd.MaxSubsteps);
         }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
@@ -2579,8 +2648,14 @@ public static class Snapshot
             Solver = ReadSolver(r),
             Validation = ReadValidation(r),
             GravityConfig = version >= GravitySchemaVersion ? ReadGravityConfig3(r) : new GravityConfig3Dto(),
-            Ambient = version >= SchemaVersion ? ReadAmbientConfig3(r) : new AmbientConfig3Dto(),
-            Time = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
+            Ambient = version >= AmbientSchemaVersion ? ReadAmbientConfig3(r) : new AmbientConfig3Dto(),
+            Time = version >= AmbientSchemaVersion ? r.ReadSingle() : 0.0f,
+            Ccd = version >= SchemaVersion ? new CcdConfigDto
+            {
+                Enabled = r.ReadBoolean(),
+                MaxMovement = r.ReadSingle(),
+                MaxSubsteps = r.ReadInt32(),
+            } : new CcdConfigDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
@@ -2610,7 +2685,7 @@ public static class Snapshot
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 AngularVelocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 GravityScale = version >= GravitySchemaVersion ? r.ReadSingle() : 1.0f,
-                AmbientScale = version >= SchemaVersion ? r.ReadSingle() : 1.0f,
+                AmbientScale = version >= AmbientSchemaVersion ? r.ReadSingle() : 1.0f,
             });
         }
         int nj = r.ReadInt32();

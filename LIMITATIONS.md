@@ -8,7 +8,7 @@ C# is enforced by `tools/check_test_parity.py`
 (ID blocks: S01–S05 sleep, W06–W10 warm start, N11–N15 never-guess,
 S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
-snapshots, P31–P34 parallel islands, A01–A05 ambient forces).
+snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD).
 
 ## Sleep is partial (S01, S02)
 
@@ -35,16 +35,21 @@ identically. Prefer capsules/boxes — or the new `ConvexMesh` shape, which
 carries exact closed-mesh mass properties (Mirtich-style) — for dynamic
 bodies whose inertia matters.
 
-## No CCD (N12)
+## CCD via adaptive substepping (C01–C04)
 
-Collision is discrete (`step(dt)`, semi-implicit Euler). Fast or thin
-bodies tunnel; behavior in tunneling regimes is bounded (no NaN, finite
-speeds) but not correct. Two related notes: EPA normals are verified in
+Collision is discrete (`step(dt)`, semi-implicit Euler) by default, so
+fast or thin bodies tunnel; behavior in tunneling regimes is bounded
+(no NaN, finite speeds) but not correct. Opt-in CCD
+(`CcdConfig.enabled`, both languages, snapshot schema v6, FFI
+`phieng_world[_3]_set/get_ccd_config`) splits a step into substeps so
+no body travels more than `max_movement` per substep (default 0.1,
+capped by `max_substeps`, default 8) — a thin wall thinner than that
+budget still tunnels, by design. Off (default) is bit-identical to
+legacy stepping. Two related notes: EPA normals are verified in
 the shallow/moderate-penetration regime the solver maintains — deeply
 interpenetrated pairs (past any range the solver would let persist) can
 report flipped axes, which is another reason penetration must be
-arrested early rather than resolved late. Conservative advancement is
-planned after 3D joints.
+arrested early rather than resolved late.
 
 ## No raycasts, triggers — joints are 2D-only, snapshots are versioned v5
 
