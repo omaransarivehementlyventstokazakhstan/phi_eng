@@ -339,6 +339,17 @@ struct FluidParticle2Dto {
     /// Per-particle mass (schema v5; `0` means "use config mass").
     #[serde(default)]
     mass: f32,
+    /// Phase index (schema v5; default 0).
+    #[serde(default)]
+    phase: u8,
+}
+
+/// Per-phase fluid definition (schema v5). Omitted when single-phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PhasesDto {
+    count: u8,
+    rest_density: [f32; 4],
+    mass: [f32; 4],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +396,9 @@ struct FluidConfig2Dto {
     max_velocity: f32,
     particle_radius: f32,
     enabled: bool,
+    /// Per-phase definitions (schema v5; omitted when single-phase).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phases: Option<PhasesDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -400,6 +414,9 @@ struct FluidParticle3Dto {
     /// Per-particle mass (schema v5; `0` means "use config mass").
     #[serde(default)]
     mass: f32,
+    /// Phase index (schema v5; default 0).
+    #[serde(default)]
+    phase: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,6 +454,9 @@ struct FluidConfig3Dto {
     max_velocity: f32,
     particle_radius: f32,
     enabled: bool,
+    /// Per-phase definitions (schema v5; omitted when single-phase).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phases: Option<PhasesDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -468,6 +488,7 @@ impl Default for FluidConfig2Dto {
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
+            phases: None,
         }
     }
 }
@@ -495,6 +516,7 @@ impl Default for FluidConfig3Dto {
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
+            phases: None,
         }
     }
 }
@@ -1034,6 +1056,30 @@ fn mat_dto(m: PhysicsMaterial) -> MaterialDto {
     }
 }
 
+fn phases_config_2(c: &super::fluid::FluidConfig2) -> Option<PhasesDto> {
+    if c.phase_count <= 1 {
+        None
+    } else {
+        Some(PhasesDto {
+            count: c.phase_count,
+            rest_density: c.phase_rest_density,
+            mass: c.phase_mass,
+        })
+    }
+}
+
+fn phases_config_3(c: &super::fluid3::FluidConfig3) -> Option<PhasesDto> {
+    if c.phase_count <= 1 {
+        None
+    } else {
+        Some(PhasesDto {
+            count: c.phase_count,
+            rest_density: c.phase_rest_density,
+            mass: c.phase_mass,
+        })
+    }
+}
+
 fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
     let c = &f.config;
     Fluid2Dto {
@@ -1057,6 +1103,7 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
+            phases: phases_config_2(c),
         },
         particles: f
             .particles
@@ -1065,6 +1112,7 @@ fn fluid2_dto(f: &super::fluid::FluidState2) -> Fluid2Dto {
                 position: v2(p.position),
                 velocity: v2(p.velocity),
                 mass: p.mass,
+                phase: p.phase,
             })
             .collect(),
     }
@@ -1093,6 +1141,7 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
             max_velocity: c.max_velocity,
             particle_radius: c.particle_radius,
             enabled: c.enabled,
+            phases: phases_config_3(c),
         },
         particles: f
             .particles
@@ -1101,6 +1150,7 @@ fn fluid3_dto(f: &super::fluid3::FluidState3) -> Fluid3Dto {
                 position: v3(p.position),
                 velocity: v3(p.velocity),
                 mass: p.mass,
+                phase: p.phase,
             })
             .collect(),
     }
@@ -1643,6 +1693,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.fluid.config.max_substeps != 1
         || w.fluid.config.adaptive_resolution
         || w.fluid.config.wall_friction != 0.0
+        || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
@@ -1826,6 +1877,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.fluid.config.max_substeps != 1
         || w.fluid.config.adaptive_resolution
         || w.fluid.config.wall_friction != 0.0
+        || w.fluid.config.phase_count > 1
         || w.fluid.config.boundary_particles;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
@@ -2007,6 +2059,17 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
         max_velocity: c.max_velocity,
         particle_radius: c.particle_radius,
         enabled: c.enabled,
+        phase_count: c.phases.as_ref().map(|p| p.count.clamp(1, 4)).unwrap_or(1),
+        phase_rest_density: c
+            .phases
+            .as_ref()
+            .map(|p| p.rest_density)
+            .unwrap_or([1.0; 4]),
+        phase_mass: c
+            .phases
+            .as_ref()
+            .map(|p| p.mass)
+            .unwrap_or([c.particle_mass; 4]),
     };
     w.fluid.clear();
     for p in &f.particles {
@@ -2026,6 +2089,7 @@ fn apply_fluid2(w: &mut World2, f: &Fluid2Dto) -> Result<(), SnapshotError> {
             } else {
                 c.particle_mass.max(0.0)
             },
+            phase: p.phase,
         });
     }
     Ok(())
@@ -2069,6 +2133,17 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
         max_velocity: c.max_velocity,
         particle_radius: c.particle_radius,
         enabled: c.enabled,
+        phase_count: c.phases.as_ref().map(|p| p.count.clamp(1, 4)).unwrap_or(1),
+        phase_rest_density: c
+            .phases
+            .as_ref()
+            .map(|p| p.rest_density)
+            .unwrap_or([1.0; 4]),
+        phase_mass: c
+            .phases
+            .as_ref()
+            .map(|p| p.mass)
+            .unwrap_or([c.particle_mass; 4]),
     };
     w.fluid.clear();
     for p in &f.particles {
@@ -2088,6 +2163,7 @@ fn apply_fluid3(w: &mut World3, f: &Fluid3Dto) -> Result<(), SnapshotError> {
             } else {
                 c.particle_mass.max(0.0)
             },
+            phase: p.phase,
         });
     }
     Ok(())
@@ -3429,6 +3505,22 @@ fn decode_opt_time(r: &mut Reader, version: u32) -> Result<f32, SnapshotError> {
     }
 }
 
+fn read_rho4(r: &mut Reader) -> Result<[f32; 4], SnapshotError> {
+    let mut a = [0.0f32; 4];
+    for v in a.iter_mut() {
+        *v = r.read_f32()?;
+    }
+    Ok(a)
+}
+
+fn read_mass4(r: &mut Reader) -> Result<[f32; 4], SnapshotError> {
+    let mut a = [0.0f32; 4];
+    for v in a.iter_mut() {
+        *v = r.read_f32()?;
+    }
+    Ok(a)
+}
+
 fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
     write_f32(out, c.particle_mass);
     write_f32(out, c.rest_density);
@@ -3446,6 +3538,28 @@ fn encode_fluid_config2(out: &mut Vec<u8>, c: &FluidConfig2Dto, version: u32) {
         write_f32(out, c.merge_density_ratio);
         write_u8(out, c.boundary_particles as u8);
         write_f32(out, c.wall_friction);
+        // Per-phase definitions (schema v5). `None` (single-phase) writes
+        // count=1 + the default arrays so the layout is always fixed-size.
+        match c.phases.as_ref() {
+            Some(ph) => {
+                write_u8(out, ph.count);
+                for &v in ph.rest_density.iter() {
+                    write_f32(out, v);
+                }
+                for &v in ph.mass.iter() {
+                    write_f32(out, v);
+                }
+            }
+            None => {
+                write_u8(out, 1);
+                for _ in 0..4 {
+                    write_f32(out, 1.0);
+                }
+                for _ in 0..4 {
+                    write_f32(out, c.particle_mass);
+                }
+            }
+        }
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3497,6 +3611,29 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
             0.0,
         )
     };
+    let (phase_count, phase_rest_density, phase_mass) = if version >= SNAPSHOT_SCHEMA_VERSION {
+        let count = r.read_u8()?;
+        let mut rho = [1.0f32; 4];
+        for v in rho.iter_mut() {
+            *v = r.read_f32()?;
+        }
+        let mut m = [particle_mass; 4];
+        for v in m.iter_mut() {
+            *v = r.read_f32()?;
+        }
+        (count, rho, m)
+    } else {
+        (1u8, [1.0f32; 4], [particle_mass; 4])
+    };
+    let phases = if phase_count > 1 {
+        Some(PhasesDto {
+            count: phase_count,
+            rest_density: phase_rest_density,
+            mass: phase_mass,
+        })
+    } else {
+        None
+    };
     Ok(FluidConfig2Dto {
         particle_mass,
         rest_density,
@@ -3512,6 +3649,7 @@ fn decode_fluid_config2(r: &mut Reader, version: u32) -> Result<FluidConfig2Dto,
         merge_density_ratio,
         boundary_particles,
         wall_friction,
+        phases,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3534,6 +3672,7 @@ fn encode_fluid2(out: &mut Vec<u8>, f: &Fluid2Dto, version: u32) {
         write_f32(out, p.velocity.y);
         if version >= SNAPSHOT_SCHEMA_VERSION {
             write_f32(out, p.mass);
+            write_u8(out, p.phase);
         }
     }
 }
@@ -3562,6 +3701,11 @@ fn decode_fluid2(r: &mut Reader, version: u32) -> Result<Fluid2Dto, SnapshotErro
             } else {
                 0.0
             },
+            phase: if version >= SNAPSHOT_SCHEMA_VERSION {
+                r.read_u8()?
+            } else {
+                0
+            },
         });
     }
     Ok(Fluid2Dto { config, particles })
@@ -3583,6 +3727,28 @@ fn encode_fluid_config3(out: &mut Vec<u8>, c: &FluidConfig3Dto, version: u32) {
         write_f32(out, c.merge_density_ratio);
         write_u8(out, c.boundary_particles as u8);
         write_f32(out, c.wall_friction);
+        // Per-phase definitions (schema v5). `None` (single-phase) writes
+        // count=1 + the default arrays so the layout is always fixed-size.
+        match c.phases.as_ref() {
+            Some(ph) => {
+                write_u8(out, ph.count);
+                for &v in ph.rest_density.iter() {
+                    write_f32(out, v);
+                }
+                for &v in ph.mass.iter() {
+                    write_f32(out, v);
+                }
+            }
+            None => {
+                write_u8(out, 1);
+                for _ in 0..4 {
+                    write_f32(out, 1.0);
+                }
+                for _ in 0..4 {
+                    write_f32(out, c.particle_mass);
+                }
+            }
+        }
     }
     write_f32(out, c.viscosity);
     write_f32(out, c.drag);
@@ -3607,6 +3773,9 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         merge_density_ratio,
         boundary_particles,
         wall_friction,
+        phase_count,
+        phase_rest_density,
+        phase_mass,
     ) = if version >= SNAPSHOT_SCHEMA_VERSION {
         (
             r.read_f32()?,
@@ -3619,6 +3788,9 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             r.read_f32()?,
             r.read_u8()? != 0,
             r.read_f32()?,
+            r.read_u8()?,
+            read_rho4(r)?,
+            read_mass4(r)?,
         )
     } else {
         (
@@ -3632,7 +3804,19 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
             default_merge_ratio(),
             false,
             0.0,
+            1u8,
+            [1.0; 4],
+            [particle_mass; 4],
         )
+    };
+    let phases = if phase_count > 1 {
+        Some(PhasesDto {
+            count: phase_count,
+            rest_density: phase_rest_density,
+            mass: phase_mass,
+        })
+    } else {
+        None
     };
     Ok(FluidConfig3Dto {
         particle_mass,
@@ -3649,6 +3833,7 @@ fn decode_fluid_config3(r: &mut Reader, version: u32) -> Result<FluidConfig3Dto,
         merge_density_ratio,
         boundary_particles,
         wall_friction,
+        phases,
         viscosity: r.read_f32()?,
         drag: r.read_f32()?,
         max_velocity: r.read_f32()?,
@@ -3673,6 +3858,7 @@ fn encode_fluid3(out: &mut Vec<u8>, f: &Fluid3Dto, version: u32) {
         write_f32(out, p.velocity.z);
         if version >= SNAPSHOT_SCHEMA_VERSION {
             write_f32(out, p.mass);
+            write_u8(out, p.phase);
         }
     }
 }
@@ -3702,6 +3888,11 @@ fn decode_fluid3(r: &mut Reader, version: u32) -> Result<Fluid3Dto, SnapshotErro
                 r.read_f32()?
             } else {
                 0.0
+            },
+            phase: if version >= SNAPSHOT_SCHEMA_VERSION {
+                r.read_u8()?
+            } else {
+                0
             },
         });
     }

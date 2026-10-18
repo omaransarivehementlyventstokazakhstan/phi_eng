@@ -16,6 +16,8 @@ public struct FluidParticle2
     public Vector2 Velocity { get; set; }
     /// <summary>Per-particle mass (0 = use config mass).</summary>
     public float Mass { get; set; }
+    /// <summary>Phase index for multi-phase fluids (0 = default phase).</summary>
+    public byte Phase { get; set; }
 }
 
 /// <summary>
@@ -49,6 +51,12 @@ public class FluidConfig2
     public float MergeDensityRatio { get; set; } = 1.6f;
     /// <summary>Boundary particles (static bodies sampled into fixed ghosts).</summary>
     public bool BoundaryParticles { get; set; }
+    /// <summary>Number of fluid phases (1 = single-phase).</summary>
+    public byte PhaseCount { get; set; } = 1;
+    /// <summary>Per-phase rest density (phase 0 = water, phase 1 = oil, etc.).</summary>
+    public float[] PhaseRestDensity { get; set; } = { 1.0f, 1.0f, 1.0f, 1.0f };
+    /// <summary>Per-phase particle mass.</summary>
+    public float[] PhaseMass { get; set; } = { 0.0625f, 0.0625f, 0.0625f, 0.0625f };
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -89,6 +97,21 @@ public class FluidState2
         return added;
     }
 
+    /// <summary>Adds particles with phase assignment, capped at <see cref="MaxParticles"/> total.</summary>
+    public int AddParticlesPhase(IEnumerable<Vector2> positions, IEnumerable<byte> phases)
+    {
+        var posList = positions as IList<Vector2> ?? positions.ToList();
+        var phaseList = phases as IList<byte> ?? phases.ToList();
+        int added = 0;
+        for (int i = 0; i < posList.Count; i++)
+        {
+            if (Particles.Count >= MaxParticles) break;
+            Particles.Add(new FluidParticle2 { Position = posList[i], Velocity = Vector2.Zero, Mass = Config.ParticleMass, Phase = phaseList[i] });
+            added++;
+        }
+        return added;
+    }
+
     /// <summary>Removes all particles.</summary>
     public void Clear() => Particles.Clear();
 }
@@ -104,6 +127,8 @@ public struct FluidParticle3
     public Vector3 Velocity { get; set; }
     /// <summary>Per-particle mass (0 = use config mass).</summary>
     public float Mass { get; set; }
+    /// <summary>Phase index for multi-phase fluids (0 = default phase).</summary>
+    public byte Phase { get; set; }
 }
 
 /// <summary>
@@ -137,6 +162,12 @@ public class FluidConfig3
     public float MergeDensityRatio { get; set; } = 1.6f;
     /// <summary>Boundary particles (static bodies sampled into fixed ghosts).</summary>
     public bool BoundaryParticles { get; set; }
+    /// <summary>Number of fluid phases (1 = single-phase).</summary>
+    public byte PhaseCount { get; set; } = 1;
+    /// <summary>Per-phase rest density (phase 0 = water, phase 1 = oil, etc.).</summary>
+    public float[] PhaseRestDensity { get; set; } = { 1.0f, 1.0f, 1.0f, 1.0f };
+    /// <summary>Per-phase particle mass.</summary>
+    public float[] PhaseMass { get; set; } = { 0.0625f, 0.0625f, 0.0625f, 0.0625f };
     /// <summary>XSPH smoothing factor in [0, 1].</summary>
     public float Viscosity { get; set; } = 0.3f;
     /// <summary>Quadratic drag coefficient per submerged sample area.</summary>
@@ -172,6 +203,21 @@ public class FluidState3
         {
             if (Particles.Count >= MaxParticles) break;
             Particles.Add(new FluidParticle3 { Position = p, Velocity = Vector3.Zero, Mass = Config.ParticleMass });
+            added++;
+        }
+        return added;
+    }
+
+    /// <summary>Adds particles with phase assignment, capped at <see cref="MaxParticles"/> total.</summary>
+    public int AddParticlesPhase(IEnumerable<Vector3> positions, IEnumerable<byte> phases)
+    {
+        var posList = positions as IList<Vector3> ?? positions.ToList();
+        var phaseList = phases as IList<byte> ?? phases.ToList();
+        int added = 0;
+        for (int i = 0; i < posList.Count; i++)
+        {
+            if (Particles.Count >= MaxParticles) break;
+            Particles.Add(new FluidParticle3 { Position = posList[i], Velocity = Vector3.Zero, Mass = Config.ParticleMass, Phase = phaseList[i] });
             added++;
         }
         return added;

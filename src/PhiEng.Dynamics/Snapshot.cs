@@ -525,6 +525,7 @@ public static class Snapshot
         [JsonPropertyName("position")] public Vec2Dto Position { get; set; } = new();
         [JsonPropertyName("velocity")] public Vec2Dto Velocity { get; set; } = new();
         [JsonPropertyName("mass")] public float Mass { get; set; }
+        [JsonPropertyName("phase")] public byte Phase { get; set; }
     }
 
     private sealed class FluidConfig2Dto
@@ -545,6 +546,9 @@ public static class Snapshot
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("wall_friction")] public float WallFriction { get; set; }
+        [JsonPropertyName("phase_count")] public byte PhaseCount { get; set; } = 1;
+        [JsonPropertyName("phase_rest_density")] public float[] PhaseRestDensity { get; set; } = { 1.0f, 1.0f, 1.0f, 1.0f };
+        [JsonPropertyName("phase_mass")] public float[] PhaseMass { get; set; } = { 0.0625f, 0.0625f, 0.0625f, 0.0625f };
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
         [JsonPropertyName("particle_radius")] public float ParticleRadius { get; set; } = 0.125f;
         [JsonPropertyName("enabled")] public bool Enabled { get; set; } = true;
@@ -561,6 +565,7 @@ public static class Snapshot
         [JsonPropertyName("position")] public Vec3Dto Position { get; set; } = new();
         [JsonPropertyName("velocity")] public Vec3Dto Velocity { get; set; } = new();
         [JsonPropertyName("mass")] public float Mass { get; set; }
+        [JsonPropertyName("phase")] public byte Phase { get; set; }
     }
 
     private sealed class FluidConfig3Dto
@@ -581,6 +586,9 @@ public static class Snapshot
         [JsonPropertyName("viscosity")] public float Viscosity { get; set; } = 0.3f;
         [JsonPropertyName("drag")] public float Drag { get; set; } = 4.0f;
         [JsonPropertyName("wall_friction")] public float WallFriction { get; set; }
+        [JsonPropertyName("phase_count")] public byte PhaseCount { get; set; } = 1;
+        [JsonPropertyName("phase_rest_density")] public float[] PhaseRestDensity { get; set; } = { 1.0f, 1.0f, 1.0f, 1.0f };
+        [JsonPropertyName("phase_mass")] public float[] PhaseMass { get; set; } = { 0.0625f, 0.0625f, 0.0625f, 0.0625f };
         [JsonPropertyName("max_velocity")] public float MaxVelocity { get; set; } = 30.0f;
         [JsonPropertyName("particle_radius")] public float ParticleRadius { get; set; } = 0.125f;
         [JsonPropertyName("enabled")] public bool Enabled { get; set; } = true;
@@ -818,6 +826,9 @@ public static class Snapshot
                     SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
                     MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
                     BoundaryParticles = w.Fluid.Config.BoundaryParticles,
+                    PhaseCount = w.Fluid.Config.PhaseCount,
+                    PhaseRestDensity = (float[])w.Fluid.Config.PhaseRestDensity.Clone(),
+                    PhaseMass = (float[])w.Fluid.Config.PhaseMass.Clone(),
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     WallFriction = w.Fluid.Config.WallFriction,
@@ -833,6 +844,7 @@ public static class Snapshot
                     Position = V2(p.Position),
                     Velocity = V2(p.Velocity),
                     Mass = p.Mass,
+                    Phase = p.Phase,
                 });
             }
             return dto;
@@ -1139,6 +1151,9 @@ public static class Snapshot
                     SplitDensityRatio = w.Fluid.Config.SplitDensityRatio,
                     MergeDensityRatio = w.Fluid.Config.MergeDensityRatio,
                     BoundaryParticles = w.Fluid.Config.BoundaryParticles,
+                    PhaseCount = w.Fluid.Config.PhaseCount,
+                    PhaseRestDensity = (float[])w.Fluid.Config.PhaseRestDensity.Clone(),
+                    PhaseMass = (float[])w.Fluid.Config.PhaseMass.Clone(),
                     Viscosity = w.Fluid.Config.Viscosity,
                     Drag = w.Fluid.Config.Drag,
                     WallFriction = w.Fluid.Config.WallFriction,
@@ -1154,6 +1169,7 @@ public static class Snapshot
                     Position = V3(p.Position),
                     Velocity = V3(p.Velocity),
                     Mass = p.Mass,
+                    Phase = p.Phase,
                 });
             }
             return dto;
@@ -1508,6 +1524,9 @@ public static class Snapshot
             SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
             MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
             BoundaryParticles = cfg.BoundaryParticles,
+            PhaseCount = cfg.PhaseCount,
+            PhaseRestDensity = (float[])cfg.PhaseRestDensity.Clone(),
+            PhaseMass = (float[])cfg.PhaseMass.Clone(),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             WallFriction = Fin(cfg.WallFriction, "fluid"),
@@ -1523,6 +1542,7 @@ public static class Snapshot
                 Position = UV2(p.Position),
                 Velocity = UV2(p.Velocity),
                 Mass = p.Mass > 0.0f ? p.Mass : cfg.ParticleMass,
+                Phase = p.Phase,
             });
         }
     }
@@ -1741,6 +1761,9 @@ public static class Snapshot
             SplitDensityRatio = Fin(cfg.SplitDensityRatio, "fluid"),
             MergeDensityRatio = Fin(cfg.MergeDensityRatio, "fluid"),
             BoundaryParticles = cfg.BoundaryParticles,
+            PhaseCount = cfg.PhaseCount,
+            PhaseRestDensity = (float[])cfg.PhaseRestDensity.Clone(),
+            PhaseMass = (float[])cfg.PhaseMass.Clone(),
             Viscosity = Fin(cfg.Viscosity, "fluid"),
             Drag = Fin(cfg.Drag, "fluid"),
             WallFriction = Fin(cfg.WallFriction, "fluid"),
@@ -1756,6 +1779,7 @@ public static class Snapshot
                 Position = UV3(p.Position),
                 Velocity = UV3(p.Velocity),
                 Mass = p.Mass > 0.0f ? p.Mass : cfg.ParticleMass,
+                Phase = p.Phase,
             });
         }
     }
@@ -2064,6 +2088,9 @@ public static class Snapshot
             w.Write(c.MergeDensityRatio);
             w.Write(c.BoundaryParticles);
             w.Write(c.WallFriction);
+            w.Write(c.PhaseCount);
+            for (int i = 0; i < 4; i++) w.Write(c.PhaseRestDensity[i]);
+            for (int i = 0; i < 4; i++) w.Write(c.PhaseMass[i]);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2093,6 +2120,9 @@ public static class Snapshot
             c.MergeDensityRatio = r.ReadSingle();
             c.BoundaryParticles = r.ReadBoolean();
             c.WallFriction = r.ReadSingle();
+            c.PhaseCount = r.ReadByte();
+            for (int i = 0; i < 4; i++) c.PhaseRestDensity[i] = r.ReadSingle();
+            for (int i = 0; i < 4; i++) c.PhaseMass[i] = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2110,7 +2140,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y);
-            if (version >= SchemaVersion) w.Write(p.Mass);
+            if (version >= SchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
         }
     }
 
@@ -2127,6 +2157,7 @@ public static class Snapshot
                 Position = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 Velocity = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
                 Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
+                Phase = version >= SchemaVersion ? r.ReadByte() : (byte)0,
             });
         }
         return f;
@@ -2150,6 +2181,9 @@ public static class Snapshot
             w.Write(c.MergeDensityRatio);
             w.Write(c.BoundaryParticles);
             w.Write(c.WallFriction);
+            w.Write(c.PhaseCount);
+            for (int i = 0; i < 4; i++) w.Write(c.PhaseRestDensity[i]);
+            for (int i = 0; i < 4; i++) w.Write(c.PhaseMass[i]);
         }
         w.Write(c.Viscosity);
         w.Write(c.Drag);
@@ -2179,6 +2213,9 @@ public static class Snapshot
             c.MergeDensityRatio = r.ReadSingle();
             c.BoundaryParticles = r.ReadBoolean();
             c.WallFriction = r.ReadSingle();
+            c.PhaseCount = r.ReadByte();
+            for (int i = 0; i < 4; i++) c.PhaseRestDensity[i] = r.ReadSingle();
+            for (int i = 0; i < 4; i++) c.PhaseMass[i] = r.ReadSingle();
         }
         c.Viscosity = r.ReadSingle();
         c.Drag = r.ReadSingle();
@@ -2196,7 +2233,7 @@ public static class Snapshot
         {
             w.Write(p.Position.X); w.Write(p.Position.Y); w.Write(p.Position.Z);
             w.Write(p.Velocity.X); w.Write(p.Velocity.Y); w.Write(p.Velocity.Z);
-            if (version >= SchemaVersion) w.Write(p.Mass);
+            if (version >= SchemaVersion) { w.Write(p.Mass); w.Write(p.Phase); }
         }
     }
 
@@ -2213,6 +2250,7 @@ public static class Snapshot
                 Position = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 Velocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 Mass = version >= SchemaVersion ? r.ReadSingle() : 0.0f,
+                Phase = version >= SchemaVersion ? r.ReadByte() : (byte)0,
             });
         }
         return f;

@@ -41,8 +41,12 @@ pub struct Particle2 {
     /// Pressure from the equation of state (recomputed every step).
     pub pressure: f32,
     /// Per-particle mass. Uniform `config.particle_mass` unless adaptive
-    /// resolution split/merged the particle (children carry a share).
+    /// resolution split/merged the particle (children carry a share), or the
+    /// particle belongs to a phase with a different mass.
     pub mass: f32,
+    /// Phase index (0..=3). Single-phase fluids use 0; multi-phase fluids
+    /// give each phase its own rest density and mass (two-phase buoyancy).
+    pub phase: u8,
 }
 
 /// Tunables for the 2D SPH fluid. Defaults suit unit-scale scenes
@@ -113,9 +117,20 @@ pub struct FluidConfig2 {
     /// bit-identical). At a particle/body contact the tangential particle
     /// velocity is driven toward the wall's tangential velocity by `mu`
     /// (`1` = full no-slip) and the reaction impulse is applied to dynamic
-    /// bodies — the origin of the parabolic Poiseuille/Chapman profile.
-    /// Finite only; values outside `[0, 1]` are clamped.
+    /// bodies — the origin of **no-slip** walls and
+    /// the parabolic Poiseuille/Chapman profile. Finite only; values
+    /// outside `[0, 1]` are clamped.
     pub wall_friction: f32,
+    /// Number of active phases (1..=4). Single-phase fluids use 1; the rest
+    /// density / mass arrays below are then unused (phase 0 only).
+    pub phase_count: u8,
+    /// Per-phase rest density (default `1.0`). Two-phase fluids give the
+    /// heavy phase a larger value so it sinks under gravity (Rayleigh–Taylor,
+    /// rising bubble).
+    pub phase_rest_density: [f32; 4],
+    /// Per-phase particle mass (default `particle_mass`). The density sum uses
+    /// each neighbor's mass, so a heavier phase packs more mass per volume.
+    pub phase_mass: [f32; 4],
     /// Hard speed cap (safety net against ejection chains).
     pub max_velocity: f32,
     /// Collision radius used against rigid-body shapes.
@@ -143,6 +158,9 @@ impl Default for FluidConfig2 {
             viscosity: 0.3,
             drag: 4.0,
             wall_friction: 0.0,
+            phase_count: 1,
+            phase_rest_density: [1.0; 4],
+            phase_mass: [0.0625; 4],
             max_velocity: 30.0,
             particle_radius: 0.125,
             enabled: true,
@@ -202,16 +220,27 @@ impl FluidState2 {
     /// [`MAX_PARTICLES_2D`] total; excess is dropped, never partially
     /// applied per-particle).
     pub fn add_particles(&mut self, positions: &[Vec2]) -> usize {
+        let phases = vec![0u8; positions.len()];
+        self.add_particles_phase(positions, &phases)
+    }
+
+    /// Insert particles with per-particle phase indices (0..=3). Each phase's
+    /// mass and rest density come from [`FluidConfig2::phase_mass`] /
+    /// [`FluidConfig2::phase_rest_density`]. Returns the number actually
+    /// added (capped at [`MAX_PARTICLES_2D`]).
+    pub fn add_particles_phase(&mut self, positions: &[Vec2], phases: &[u8]) -> usize {
         let room = MAX_PARTICLES_2D.saturating_sub(self.particles.len());
-        let n = room.min(positions.len());
+        let n = room.min(positions.len()).min(phases.len());
         self.particles.reserve(n);
-        for &p in &positions[..n] {
+        for i in 0..n {
+            let ph = (phases[i] as usize).min(3);
             self.particles.push(Particle2 {
-                position: p,
+                position: positions[i],
                 velocity: Vec2::ZERO,
-                density: self.config.rest_density,
+                density: self.config.phase_rest_density[ph],
                 pressure: 0.0,
-                mass: self.config.particle_mass.max(0.0),
+                mass: self.config.phase_mass[ph].max(0.0),
+                phase: phases[i],
             });
         }
         n
@@ -566,7 +595,8 @@ impl FluidState2 {
             self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
         for p in self.particles.iter_mut() {
-            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
+            let rho0 = cfg.phase_rest_density[(p.phase as usize).min(3)];
+            p.pressure = Self::pressure(p.density, rho0, cfg.stiffness, cfg.gamma);
         }
     }
 
@@ -594,6 +624,7 @@ impl FluidState2 {
                             density: rest,
                             pressure: 0.0,
                             mass,
+                            phase: 0,
                         });
                     }
                 }
@@ -618,6 +649,7 @@ impl FluidState2 {
                                 density: rest,
                                 pressure: 0.0,
                                 mass,
+                                phase: 0,
                             });
                         }
                     }
@@ -642,6 +674,7 @@ impl FluidState2 {
                                 density: rest,
                                 pressure: 0.0,
                                 mass,
+                                phase: 0,
                             });
                         }
                     }
@@ -1934,5 +1967,59 @@ mod tests {
             k1 < k0 && k2 < k1,
             "slosh must damp: k0={k0} k1={k1} k2={k2}"
         );
+    }
+
+    #[test]
+    fn sph_two_phase_heavy_sinks() {
+        // A heavy droplet (phase 0, denser) submerged in light fluid
+        // (phase 1) sinks under gravity.
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::new(0.0, -9.81);
+        tank(&mut world);
+        world.fluid.config.phase_count = 2;
+        world.fluid.config.phase_rest_density = [2.0, 1.0, 1.0, 1.0];
+        world.fluid.config.phase_mass = [0.125, 0.0625, 0.0625, 0.0625];
+        // Light fluid fills the bottom.
+        let mut light_pts = Vec::new();
+        for iy in 0..8 {
+            for ix in 0..18 {
+                light_pts.push(Vec2::new(ix as f32 * 0.25, iy as f32 * 0.25));
+            }
+        }
+        world
+            .fluid
+            .add_particles_phase(&light_pts, &vec![1u8; light_pts.len()]);
+        // A heavy droplet just above the light surface.
+        let mut heavy_pts = Vec::new();
+        for iy in 8..12 {
+            for ix in 6..12 {
+                heavy_pts.push(Vec2::new(ix as f32 * 0.25, iy as f32 * 0.25));
+            }
+        }
+        world
+            .fluid
+            .add_particles_phase(&heavy_pts, &vec![0u8; heavy_pts.len()]);
+        let center = |w: &crate::World2, ph: u8| -> f32 {
+            let mut s = 0.0f32;
+            let mut n = 0;
+            for p in w.fluid.particles.iter() {
+                if p.phase == ph {
+                    s += p.position.y;
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                s / n as f32
+            } else {
+                0.0
+            }
+        };
+        let y0 = center(&world, 0);
+        for _ in 0..600 {
+            world.step(1.0 / 60.0);
+        }
+        finite_fluid(&world, "two-phase");
+        let y1 = center(&world, 0);
+        assert!(y1 < y0, "heavy droplet did not sink: {y0} -> {y1}");
     }
 }

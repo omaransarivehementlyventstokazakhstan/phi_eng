@@ -38,8 +38,11 @@ pub struct Particle3 {
     pub density: f32,
     /// Pressure from the equation of state (recomputed every step).
     pub pressure: f32,
-    /// Per-particle mass (uniform unless adaptive resolution is on).
+    /// Per-particle mass (uniform unless adaptive resolution is on, or the
+    /// particle belongs to a phase with a different mass).
     pub mass: f32,
+    /// Phase index (0..=3). See [`crate::fluid::FluidConfig2::phase_count`].
+    pub phase: u8,
 }
 
 /// Tunables for the 3D SPH fluid. Defaults suit unit-scale scenes
@@ -88,6 +91,12 @@ pub struct FluidConfig3 {
     /// Wall friction coefficient `mu >= 0` (default `0.0` = none). Coulomb
     /// tangential damping at particle/body contacts (no-slip walls).
     pub wall_friction: f32,
+    /// Number of active phases (1..=4).
+    pub phase_count: u8,
+    /// Per-phase rest density (default `1.0`).
+    pub phase_rest_density: [f32; 4],
+    /// Per-phase particle mass (default `particle_mass`).
+    pub phase_mass: [f32; 4],
     /// Hard speed cap (safety net against ejection chains).
     pub max_velocity: f32,
     /// Collision radius used against rigid-body shapes.
@@ -115,6 +124,9 @@ impl Default for FluidConfig3 {
             viscosity: 0.3,
             drag: 4.0,
             wall_friction: 0.0,
+            phase_count: 1,
+            phase_rest_density: [1.0; 4],
+            phase_mass: [0.0625; 4],
             max_velocity: 30.0,
             particle_radius: 0.125,
             enabled: true,
@@ -167,16 +179,25 @@ impl FluidState3 {
     /// Insert particles. Returns the number actually added (capped at
     /// [`MAX_PARTICLES_3D`] total; excess is dropped).
     pub fn add_particles(&mut self, positions: &[Vec3]) -> usize {
+        let phases = vec![0u8; positions.len()];
+        self.add_particles_phase(positions, &phases)
+    }
+
+    /// Insert particles with per-particle phase indices (0..=3). See the 2D
+    /// counterpart.
+    pub fn add_particles_phase(&mut self, positions: &[Vec3], phases: &[u8]) -> usize {
         let room = MAX_PARTICLES_3D.saturating_sub(self.particles.len());
-        let n = room.min(positions.len());
+        let n = room.min(positions.len()).min(phases.len());
         self.particles.reserve(n);
-        for &p in &positions[..n] {
+        for i in 0..n {
+            let ph = (phases[i] as usize).min(3);
             self.particles.push(Particle3 {
-                position: p,
+                position: positions[i],
                 velocity: Vec3::ZERO,
-                density: self.config.rest_density,
+                density: self.config.phase_rest_density[ph],
                 pressure: 0.0,
-                mass: self.config.particle_mass.max(0.0),
+                mass: self.config.phase_mass[ph].max(0.0),
+                phase: phases[i],
             });
         }
         n
@@ -620,7 +641,8 @@ impl FluidState3 {
             self.particles[i].density = rho.clamp(0.0, 3.0 * cfg.rest_density.max(EPS));
         }
         for p in self.particles.iter_mut() {
-            p.pressure = Self::pressure(p.density, cfg.rest_density, cfg.stiffness, cfg.gamma);
+            let rho0 = cfg.phase_rest_density[(p.phase as usize).min(3)];
+            p.pressure = Self::pressure(p.density, rho0, cfg.stiffness, cfg.gamma);
         }
     }
 
@@ -651,6 +673,7 @@ impl FluidState3 {
                             density: rest,
                             pressure: 0.0,
                             mass,
+                            phase: 0,
                         });
                     }
                 }
@@ -694,6 +717,7 @@ impl FluidState3 {
                                 density: rest,
                                 pressure: 0.0,
                                 mass,
+                                phase: 0,
                             });
                         }
                     }
@@ -716,6 +740,7 @@ impl FluidState3 {
                                 density: rest,
                                 pressure: 0.0,
                                 mass,
+                                phase: 0,
                             });
                         }
                     }
@@ -726,6 +751,7 @@ impl FluidState3 {
                             density: rest,
                             pressure: 0.0,
                             mass,
+                            phase: 0,
                         });
                     }
                 }
@@ -738,6 +764,7 @@ impl FluidState3 {
                             density: rest,
                             pressure: 0.0,
                             mass,
+                            phase: 0,
                         });
                     }
                 }
