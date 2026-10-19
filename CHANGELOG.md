@@ -117,6 +117,28 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **Thermal sub-features (Rust + managed C#)**: three opt-in additions to
+  the thermal subsystem, all off by default so default trajectories stay
+  bit-identical.
+  - **Radiation occlusion**: `radiation_occlusion` blocks body-to-body
+    radiation when a third body lies between the pair (a coarse
+    segment/sphere test against the blocker's bounding radius).
+  - **Forced convection**: `forced_convection_coefficient` makes the
+    convection coefficient `h + h_forced·|v|`, so a body moving through
+    still air sheds heat faster than a stationary one.
+  - **Thermal expansion**: `expansion_coefficient` +
+    `expansion_reference_temperature` scale a body's shape by
+    `1 + alpha·(T − T_ref)` and refresh its mass and inertia. The
+    applied factor is tracked per body and applied *relative to the
+    authored shape*, so a body held at a constant temperature does not
+    grow without bound.
+  New FFI: `phieng_world_set_body_velocity`,
+  `phieng_world[_3]_get_body_shape_radius`; managed
+  `ThermalConfig2/3` properties plus
+  `PhiNativeWorld(3).SetBodyVelocity/GetBodyShapeRadius`.
+  Persisted through **snapshot schema v10** (conditional: default
+  worlds stay on older schemas byte-identical, and v8/v9 payloads still
+  load). Parity block T18–T24 (mirrored Rust + C#).
 - **Solver quality tiers (Rust + managed C#)**: `SolverQuality`
   (`Ultra` 8 iters down to `Minimal` 1 iter) plus `enable_friction` /
   `enable_restitution` switches on `Solver`/`Solver3D`

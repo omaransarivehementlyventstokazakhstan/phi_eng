@@ -471,4 +471,269 @@ public class ThermalTests
         Assert.Equal(400.0f, w.GetBodyTemperature(b0));
         Assert.Equal(200.0f, w.GetBodyTemperature(b1));
     }
+
+    /// <summary>T18: a body between two others blocks body-to-body radiation
+    /// when occlusion is enabled. The A/B uses the same three bodies in both
+    /// runs and only flips the flag, so the blocker's own exchange cancels
+    /// out and the difference isolates the blocked 0-1 exchange.</summary>
+    [Fact]
+    public void T18_RadiationOcclusionBlocksIntermediateBody()
+    {
+        float Build(bool occlusion)
+        {
+            using var w = Clean();
+            w.SetThermalConfig(new ThermalConfig2
+            {
+                Enabled = true,
+                RadiationEnabled = true,
+                ConductionEnabled = false,
+                ConvectionEnabled = false,
+                RadiationOcclusion = occlusion,
+                AmbientTemperature = 293.15f,
+                MaxTemperatureRate = 10000.0f,
+            });
+            // Hot body, cold body, and a blocker sitting between them.
+            int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 0.4f, 1.0f, false);
+            int b1 = w.AddCircleBody(new Vector2(2.0f, 0.0f), 0.4f, 1.0f, false);
+            int b2 = w.AddCircleBody(new Vector2(1.0f, 0.0f), 0.4f, 1.0f, false);
+            w.SetBodyTemperature(b0, 600.0f);
+            w.SetBodyTemperature(b1, 300.0f);
+            w.SetBodyTemperature(b2, 400.0f);
+
+            for (int i = 0; i < 10; i++)
+                w.Step(Dt);
+
+            return w.GetBodyTemperature(b0);
+        }
+
+        float blocked = Build(true);
+        float unblocked = Build(false);
+        Assert.True(blocked > unblocked,
+            $"Occlusion must reduce body-to-body exchange: blocked {blocked} vs unblocked {unblocked}");
+    }
+
+    /// <summary>T19: a moving body loses more heat than a stationary one when
+    /// forced convection is enabled.</summary>
+    [Fact]
+    public void T19_ForcedConvectionCoolsMovingBodyFaster()
+    {
+        float Run(float speed)
+        {
+            using var w = Clean();
+            w.SetThermalConfig(new ThermalConfig2
+            {
+                Enabled = true,
+                RadiationEnabled = false,
+                ConductionEnabled = false,
+                ConvectionEnabled = true,
+                ForcedConvectionCoefficient = 50.0f,
+                AmbientTemperature = 293.15f,
+                MaxTemperatureRate = 10000.0f,
+            });
+            int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 1.0f, 1.0f, false);
+            w.SetBodyTemperature(b0, 500.0f);
+            w.SetBodyVelocity(b0, new Vector2(speed, 0.0f));
+
+            for (int i = 0; i < 60; i++)
+                w.Step(Dt);
+
+            return w.GetBodyTemperature(b0);
+        }
+
+        float still = Run(0.0f);
+        float moving = Run(10.0f);
+        Assert.True(moving < still,
+            $"Moving body must cool faster: moving {moving} vs still {still}");
+    }
+
+    /// <summary>T20: a hot body expands when an expansion coefficient is set.</summary>
+    [Fact]
+    public void T20_ExpansionScalesShapeWithTemperature()
+    {
+        using var w = Clean();
+        w.SetThermalConfig(new ThermalConfig2
+        {
+            Enabled = true,
+            RadiationEnabled = false,
+            ConductionEnabled = false,
+            ConvectionEnabled = false,
+            ExpansionCoefficient = 1.0e-3f,
+            ExpansionReferenceTemperature = 293.15f,
+            MaxTemperatureRate = 10000.0f,
+        });
+        int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 1.0f, 1.0f, false);
+        w.SetBodyTemperature(b0, 500.0f);
+
+        float radiusBefore = w.GetBodyShapeRadius(b0);
+        for (int i = 0; i < 10; i++)
+            w.Step(Dt);
+        float radiusAfter = w.GetBodyShapeRadius(b0);
+
+        Assert.True(radiusAfter > radiusBefore,
+            $"Hot body must expand: {radiusBefore} -> {radiusAfter}");
+
+        // The target scale is 1 + alpha * (T - T_ref); applying the factor
+        // directly to the already-expanded shape would overshoot.
+        float expected = 1.0f + 1.0e-3f * (500.0f - 293.15f);
+        Assert.True(MathF.Abs(radiusAfter - expected) < 1e-4f,
+            $"Expected scale {expected}, got {radiusAfter}");
+    }
+
+    /// <summary>T21: expansion is opt-in. With the default (zero) coefficient
+    /// the shape must not change at all.</summary>
+    [Fact]
+    public void T21_ExpansionDisabledIsNoop()
+    {
+        using var w = Clean();
+        w.SetThermalConfig(new ThermalConfig2
+        {
+            Enabled = true,
+            RadiationEnabled = false,
+            ConductionEnabled = false,
+            ConvectionEnabled = false,
+            MaxTemperatureRate = 10000.0f,
+        });
+        int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 1.0f, 1.0f, false);
+        w.SetBodyTemperature(b0, 500.0f);
+
+        float radiusBefore = w.GetBodyShapeRadius(b0);
+        for (int i = 0; i < 10; i++)
+            w.Step(Dt);
+        float radiusAfter = w.GetBodyShapeRadius(b0);
+
+        Assert.Equal(radiusBefore, radiusAfter);
+    }
+
+    /// <summary>T22: expansion is applied by the world step, and reaches the
+    /// exact target scale.</summary>
+    [Fact]
+    public void T22_ExpansionAppliesInWorldStep()
+    {
+        using var w = Clean();
+        w.SetThermalConfig(new ThermalConfig2
+        {
+            Enabled = true,
+            RadiationEnabled = false,
+            ConductionEnabled = false,
+            ConvectionEnabled = false,
+            ExpansionCoefficient = 1.0e-3f,
+            ExpansionReferenceTemperature = 293.15f,
+            MaxTemperatureRate = 10000.0f,
+        });
+        int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 1.0f, 1.0f, false);
+        w.SetBodyTemperature(b0, 500.0f);
+
+        float before = w.GetBodyShapeRadius(b0);
+        for (int i = 0; i < 10; i++)
+            w.Step(Dt);
+        float after = w.GetBodyShapeRadius(b0);
+
+        Assert.True(after > before, $"Hot body must expand: {before} -> {after}");
+        float expected = 1.0f + 1.0e-3f * (500.0f - 293.15f);
+        Assert.True(MathF.Abs(after - expected) < 1e-4f,
+            $"Expected scale {expected}, got {after}");
+    }
+
+    /// <summary>The thermal config must round-trip through the FFI,
+    /// including the three sub-feature fields. A field-order or
+    /// type-width mismatch in the FFI struct would corrupt the values
+    /// that follow it, so every field is checked.</summary>
+    [Fact]
+    public void T25_ThermalConfigFfiRoundtrip()
+    {
+        using var w = Clean();
+        var config = new ThermalConfig2
+        {
+            Enabled = true,
+            AmbientTemperature = 350.0f,
+            StefanBoltzmann = 5.67e-8f,
+            ConvectionCoefficient = 12.5f,
+            RadiationEnabled = false,
+            ConductionEnabled = true,
+            ConvectionEnabled = false,
+            MaxTemperature = 4000.0f,
+            MinTemperature = 10.0f,
+            RadiationRadiusFactor = 3.5f,
+            MaxTemperatureRate = 42.0f,
+            RadiationOcclusion = true,
+            ForcedConvectionCoefficient = 7.25f,
+            ExpansionCoefficient = 1.5e-4f,
+            ExpansionReferenceTemperature = 280.0f,
+        };
+        w.SetThermalConfig(config);
+
+        var back = w.GetThermalConfig();
+        Assert.True(back.Enabled);
+        Assert.Equal(350.0f, back.AmbientTemperature);
+        Assert.Equal(12.5f, back.ConvectionCoefficient);
+        Assert.False(back.RadiationEnabled);
+        Assert.True(back.ConductionEnabled);
+        Assert.False(back.ConvectionEnabled);
+        Assert.Equal(4000.0f, back.MaxTemperature);
+        Assert.Equal(10.0f, back.MinTemperature);
+        Assert.Equal(3.5f, back.RadiationRadiusFactor);
+        Assert.Equal(42.0f, back.MaxTemperatureRate);
+        Assert.True(back.RadiationOcclusion);
+        Assert.Equal(7.25f, back.ForcedConvectionCoefficient);
+        Assert.Equal(1.5e-4f, back.ExpansionCoefficient);
+        Assert.Equal(280.0f, back.ExpansionReferenceTemperature);
+    }
+
+    /// <summary>T24: 3D expansion mirrors the 2D contract.</summary>
+    [Fact]
+    public void T24_Expansion3D()
+    {
+        using var w = new PhiNativeWorld3();
+        w.SetThermalConfig(new ThermalConfig3
+        {
+            Enabled = true,
+            RadiationEnabled = false,
+            ConductionEnabled = false,
+            ConvectionEnabled = false,
+            ExpansionCoefficient = 1.0e-3f,
+            ExpansionReferenceTemperature = 293.15f,
+            MaxTemperatureRate = 10000.0f,
+        });
+        int b0 = w.AddSphereBody(new Vector3(0.0f, 0.0f, 0.0f), 1.0f, 1.0f, false);
+        w.SetBodyTemperature(b0, 500.0f);
+
+        for (int i = 0; i < 10; i++)
+            w.Step(Dt);
+
+        float expected = 1.0f + 1.0e-3f * (500.0f - 293.15f);
+        Assert.True(MathF.Abs(w.GetBodyShapeRadius(b0) - expected) < 1e-4f,
+            $"Expected scale {expected}, got {w.GetBodyShapeRadius(b0)}");
+    }
+
+    /// <summary>T23: expansion must not compound. A body held at a constant
+    /// temperature has a fixed target scale, so it must stop growing.</summary>
+    [Fact]
+    public void T23_ExpansionDoesNotCompound()
+    {
+        float Run(int steps)
+        {
+            using var w = Clean();
+            w.SetThermalConfig(new ThermalConfig2
+            {
+                Enabled = true,
+                RadiationEnabled = false,
+                ConductionEnabled = false,
+                ConvectionEnabled = false,
+                ExpansionCoefficient = 1.0e-3f,
+                ExpansionReferenceTemperature = 293.15f,
+                MaxTemperatureRate = 10000.0f,
+            });
+            int b0 = w.AddCircleBody(new Vector2(0.0f, 0.0f), 1.0f, 1.0f, false);
+            w.SetBodyTemperature(b0, 500.0f);
+
+            for (int i = 0; i < steps; i++)
+                w.Step(Dt);
+
+            return w.GetBodyShapeRadius(b0);
+        }
+
+        float after1 = Run(1);
+        float after100 = Run(100);
+        Assert.Equal(after1, after100);
+    }
 }

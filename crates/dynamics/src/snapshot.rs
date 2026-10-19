@@ -56,7 +56,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 9;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 10;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -65,6 +65,12 @@ const SNAPSHOT_SCHEMA_THERMAL: u32 = 8;
 /// use this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
 const SNAPSHOT_SCHEMA_COLLISION_TIER: u32 = 9;
+
+/// Schema v10: thermal sub-features (radiation occlusion, forced
+/// convection, thermal expansion) are stored in their own block, after
+/// the v9 collision-tier block. Keeping them out of the v8 thermal
+/// block preserves byte-for-byte compatibility with v8/v9 payloads.
+const SNAPSHOT_SCHEMA_THERMAL_EXTRAS: u32 = 10;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -258,6 +264,10 @@ struct Body2Dto {
         skip_serializing_if = "is_default_temperature"
     )]
     temperature: f32,
+    /// Thermal-expansion factor currently applied to the shape (schema
+    /// v10; default 1.0, elided).
+    #[serde(default = "default_expansion_scale", skip_serializing_if = "is_one")]
+    expansion_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +295,9 @@ struct Body3Dto {
         skip_serializing_if = "is_default_temperature"
     )]
     temperature: f32,
+    /// See `Body2Dto::expansion_scale`.
+    #[serde(default = "default_expansion_scale", skip_serializing_if = "is_one")]
+    expansion_scale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -795,6 +808,18 @@ struct CollisionTierConfigDto {
     max_tier: u32,
 }
 
+/// Default expansion reference temperature (room temperature), used when
+/// an older file carries no expansion block.
+/// Default reference temperature for thermal expansion (Kelvin).
+fn default_expansion_reference_temperature() -> f32 {
+    phieng_math::DEFAULT_TEMPERATURE
+}
+
+/// Default thermal-expansion factor (1.0 = not expanded).
+fn default_expansion_scale() -> f32 {
+    1.0
+}
+
 fn default_collision_tier_tag() -> u32 {
     super::collision_tier::CollisionTier::Tier5_GJK_EPA as u32
 }
@@ -865,7 +890,7 @@ fn ccd_config_from_dto(c: &CcdConfigDto) -> super::ccd::CcdConfig {
 
 // ---- Thermal config DTO (schema v8) ----
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ThermalConfigDto {
     /// Master switch for thermal stepping.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -923,6 +948,72 @@ struct ThermalConfigDto {
     max_temperature_rate: f32,
 }
 
+impl Default for ThermalConfigDto {
+    /// Must be the *engine* default, not a zero-valued struct: the
+    /// per-field `serde(default = ...)` attributes supply the file
+    /// side, but `is_default()` compares against this, and a derived
+    /// Default (ambient_temperature = 0.0) would make every world
+    /// look non-default and carry a thermal block.
+    fn default() -> Self {
+        let c = super::thermal::ThermalConfig2D::default();
+        Self {
+            enabled: c.enabled,
+            ambient_temperature: c.ambient_temperature,
+            stefan_boltzmann: c.stefan_boltzmann,
+            convection_coefficient: c.convection_coefficient,
+            radiation_enabled: c.radiation_enabled,
+            conduction_enabled: c.conduction_enabled,
+            convection_enabled: c.convection_enabled,
+            max_temperature: c.max_temperature,
+            min_temperature: c.min_temperature,
+            radiation_radius_factor: c.radiation_radius_factor,
+            max_temperature_rate: c.max_temperature_rate,
+        }
+    }
+}
+
+/// Schema v10 thermal sub-feature block.
+///
+/// Kept separate from the v8 thermal config block so that block keeps its
+/// exact byte layout (v8/v9 payloads must still decode).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ThermalExtrasDto {
+    /// Block body-to-body radiation when another body is in between.
+    #[serde(default)]
+    pub radiation_occlusion: bool,
+    /// Velocity-dependent convection coefficient.
+    #[serde(default)]
+    pub forced_convection_coefficient: f32,
+    /// Linear thermal-expansion coefficient (1/K).
+    #[serde(default)]
+    pub expansion_coefficient: f32,
+    /// Reference temperature the expansion is measured against.
+    #[serde(default = "default_expansion_reference_temperature")]
+    pub expansion_reference_temperature: f32,
+}
+
+impl ThermalExtrasDto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.radiation_occlusion == d.radiation_occlusion
+            && self.forced_convection_coefficient == d.forced_convection_coefficient
+            && self.expansion_coefficient == d.expansion_coefficient
+            && self.expansion_reference_temperature == d.expansion_reference_temperature
+    }
+}
+
+impl Default for ThermalExtrasDto {
+    fn default() -> Self {
+        let c = super::thermal::ThermalConfig2D::default();
+        Self {
+            radiation_occlusion: c.radiation_occlusion,
+            forced_convection_coefficient: c.forced_convection_coefficient,
+            expansion_coefficient: c.expansion_coefficient,
+            expansion_reference_temperature: c.expansion_reference_temperature,
+        }
+    }
+}
+
 impl ThermalConfigDto {
     fn is_default(&self) -> bool {
         let d = Self::default();
@@ -956,7 +1047,10 @@ fn thermal_config_dto(c: &super::thermal::ThermalConfig2D) -> ThermalConfigDto {
     }
 }
 
-fn thermal_config_from_dto(c: &ThermalConfigDto) -> super::thermal::ThermalConfig2D {
+fn thermal_config_from_dto(
+    c: &ThermalConfigDto,
+    extras: &ThermalExtrasDto,
+) -> super::thermal::ThermalConfig2D {
     super::thermal::ThermalConfig2D {
         enabled: c.enabled,
         ambient_temperature: c.ambient_temperature,
@@ -969,6 +1063,20 @@ fn thermal_config_from_dto(c: &ThermalConfigDto) -> super::thermal::ThermalConfi
         min_temperature: c.min_temperature,
         radiation_radius_factor: c.radiation_radius_factor,
         max_temperature_rate: c.max_temperature_rate,
+        radiation_occlusion: extras.radiation_occlusion,
+        forced_convection_coefficient: extras.forced_convection_coefficient,
+        expansion_coefficient: extras.expansion_coefficient,
+        expansion_reference_temperature: extras.expansion_reference_temperature,
+    }
+}
+
+/// Build the schema v10 extras DTO from an engine thermal config.
+fn thermal_extras_dto(c: &super::thermal::ThermalConfig2D) -> ThermalExtrasDto {
+    ThermalExtrasDto {
+        radiation_occlusion: c.radiation_occlusion,
+        forced_convection_coefficient: c.forced_convection_coefficient,
+        expansion_coefficient: c.expansion_coefficient,
+        expansion_reference_temperature: c.expansion_reference_temperature,
     }
 }
 
@@ -1379,6 +1487,11 @@ struct World2Dto {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "CollisionTierConfigDto::is_default")]
     collision_tier: CollisionTierConfigDto,
+    /// Schema v10; thermal sub-features (radiation occlusion, forced
+    /// convection, thermal expansion). Omitted (and defaulted) for
+    /// pre-v10 files so default output stays byte-identical.
+    #[serde(default, skip_serializing_if = "ThermalExtrasDto::is_default")]
+    thermal_extras: ThermalExtrasDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1479,6 +1592,11 @@ struct World3Dto {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "CollisionTierConfigDto::is_default")]
     collision_tier: CollisionTierConfigDto,
+    /// Schema v10; thermal sub-features (radiation occlusion, forced
+    /// convection, thermal expansion). Omitted (and defaulted) for
+    /// pre-v10 files so default output stays byte-identical.
+    #[serde(default, skip_serializing_if = "ThermalExtrasDto::is_default")]
+    thermal_extras: ThermalExtrasDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2003,6 +2121,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         gravity_scale: b.gravity_scale,
         ambient_scale: b.ambient_scale,
         temperature: b.temperature,
+        expansion_scale: b.expansion_scale,
     }
 }
 
@@ -2023,6 +2142,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         gravity_scale: b.gravity_scale,
         ambient_scale: b.ambient_scale,
         temperature: b.temperature,
+        expansion_scale: b.expansion_scale,
     }
 }
 
@@ -2181,7 +2301,13 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // ceiling is still a user choice and must round-trip exactly.
     let has_collision_tier = w.collision_tier.enabled
         || w.collision_tier.max_tier != super::collision_tier::CollisionTier::Tier5_GJK_EPA;
-    let schema = if has_thermal || has_broadphase_mode || has_collision_tier {
+    // Schema v10: thermal sub-features are a user choice too, so they
+    // need the v10 block even when thermal stepping is disabled.
+    let has_thermal_extras = w.thermal.config.radiation_occlusion
+        || w.thermal.config.forced_convection_coefficient != 0.0
+        || w.thermal.config.expansion_coefficient != 0.0
+        || w.thermal.config.expansion_reference_temperature != phieng_math::DEFAULT_TEMPERATURE;
+    let schema = if has_thermal || has_broadphase_mode || has_collision_tier || has_thermal_extras {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
@@ -2203,6 +2329,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         time: if has_ambient { w.time } else { 0.0 },
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
+        thermal_extras: thermal_extras_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -2384,7 +2511,13 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     // ceiling is still a user choice and must round-trip exactly.
     let has_collision_tier = w.collision_tier.enabled
         || w.collision_tier.max_tier != super::collision_tier::CollisionTier::Tier5_GJK_EPA;
-    let schema = if has_thermal || has_broadphase_mode || has_collision_tier {
+    // Schema v10: thermal sub-features are a user choice too, so they
+    // need the v10 block even when thermal stepping is disabled.
+    let has_thermal_extras = w.thermal.config.radiation_occlusion
+        || w.thermal.config.forced_convection_coefficient != 0.0
+        || w.thermal.config.expansion_coefficient != 0.0
+        || w.thermal.config.expansion_reference_temperature != phieng_math::DEFAULT_TEMPERATURE;
+    let schema = if has_thermal || has_broadphase_mode || has_collision_tier || has_thermal_extras {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
@@ -2406,6 +2539,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         time: if has_ambient { w.time } else { 0.0 },
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
+        thermal_extras: thermal_extras_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -2793,6 +2927,14 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     body.gravity_scale = b.gravity_scale;
     body.ambient_scale = b.ambient_scale;
     body.temperature = b.temperature;
+    // The applied expansion factor travels with the shape: the stored
+    // shape is already scaled, so the tracker must match or the next
+    // expansion step would rescale from the wrong base.
+    body.expansion_scale = if b.expansion_scale.is_finite() && b.expansion_scale > 0.0 {
+        b.expansion_scale
+    } else {
+        default_expansion_scale()
+    };
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -2854,6 +2996,14 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     body.gravity_scale = b.gravity_scale;
     body.ambient_scale = b.ambient_scale;
     body.temperature = b.temperature;
+    // The applied expansion factor travels with the shape: the stored
+    // shape is already scaled, so the tracker must match or the next
+    // expansion step would rescale from the wrong base.
+    body.expansion_scale = if b.expansion_scale.is_finite() && b.expansion_scale > 0.0 {
+        b.expansion_scale
+    } else {
+        default_expansion_scale()
+    };
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -3377,7 +3527,7 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     apply_fluid2(&mut w, &dto.fluid)?;
     // Thermal config: v8+ carries the block; older payloads use defaults.
     if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
-        w.thermal.config = thermal_config_from_dto(&dto.thermal);
+        w.thermal.config = thermal_config_from_dto(&dto.thermal, &dto.thermal_extras);
     }
     Ok(w)
 }
@@ -3439,7 +3589,7 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     apply_fluid3(&mut w, &dto.fluid)?;
     // Thermal config: v8+ carries the block; older payloads use defaults.
     if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
-        w.thermal.config = thermal_config_from_dto(&dto.thermal);
+        w.thermal.config = thermal_config_from_dto(&dto.thermal, &dto.thermal_extras);
     }
     Ok(w)
 }
@@ -3945,6 +4095,15 @@ fn decode_shape3(r: &mut Reader) -> Result<Option<Shape3Dto>, SnapshotError> {
 /// Serialize a 2D world to the versioned binary envelope.
 pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, SnapshotError> {
     let dto = world2_dto(world, mode);
+    encode_world2(&dto)
+}
+
+/// Encode a 2D world DTO to the versioned binary envelope.
+///
+/// Split out from [`world2_to_binary`] so tests can emit a payload with
+/// an older schema (the DTO's `schema` field drives every version gate),
+/// which is how backward compatibility is actually verified.
+fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
     let mut p = Vec::new();
     write_f32(&mut p, dto.gravity.x);
     write_f32(&mut p, dto.gravity.y);
@@ -3997,6 +4156,14 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_u8(&mut p, dto.collision_tier.enabled as u8);
         write_u32(&mut p, dto.collision_tier.max_tier);
     }
+    // Schema v10: thermal sub-features (own block, so v8/v9 payloads
+    // decode unchanged).
+    if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+        write_u8(&mut p, dto.thermal_extras.radiation_occlusion as u8);
+        write_f32(&mut p, dto.thermal_extras.forced_convection_coefficient);
+        write_f32(&mut p, dto.thermal_extras.expansion_coefficient);
+        write_f32(&mut p, dto.thermal_extras.expansion_reference_temperature);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_f32(&mut p, dto.cell_size);
@@ -4036,6 +4203,10 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         // Schema v8: per-body temperature.
         if thermal_v8 {
             write_f32(&mut p, b.temperature);
+        }
+        // Schema v10: per-body expansion factor.
+        if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+            write_f32(&mut p, b.expansion_scale);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -5068,6 +5239,18 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         } else {
             CollisionTierConfigDto::default()
         },
+        // Schema v10: thermal sub-features (own block, after the v9
+        // collision-tier block in the byte stream).
+        thermal_extras: if version >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+            ThermalExtrasDto {
+                radiation_occlusion: r.read_u8()? != 0,
+                forced_convection_coefficient: r.read_f32()?,
+                expansion_coefficient: r.read_f32()?,
+                expansion_reference_temperature: r.read_f32()?,
+            }
+        } else {
+            ThermalExtrasDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -5128,6 +5311,12 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                         r.read_f32()?
                     } else {
                         default_temperature()
+                    },
+                    // Schema v10: per-body expansion factor.
+                    expansion_scale: if version >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+                        r.read_f32()?
+                    } else {
+                        default_expansion_scale()
                     },
                 };
                 v.push(body);
@@ -5198,6 +5387,13 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
 /// Serialize a 3D world to the versioned binary envelope.
 pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, SnapshotError> {
     let dto = world3_dto(world, mode);
+    encode_world3(&dto)
+}
+
+/// Encode a 3D world DTO to the versioned binary envelope.
+///
+/// See [`encode_world2`] for why this is split out.
+fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
     let mut p = Vec::new();
     write_f32(&mut p, dto.gravity.x);
     write_f32(&mut p, dto.gravity.y);
@@ -5247,6 +5443,14 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_u8(&mut p, dto.collision_tier.enabled as u8);
         write_u32(&mut p, dto.collision_tier.max_tier);
     }
+    // Schema v10: thermal sub-features (own block, so v8/v9 payloads
+    // decode unchanged).
+    if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+        write_u8(&mut p, dto.thermal_extras.radiation_occlusion as u8);
+        write_f32(&mut p, dto.thermal_extras.forced_convection_coefficient);
+        write_f32(&mut p, dto.thermal_extras.expansion_coefficient);
+        write_f32(&mut p, dto.thermal_extras.expansion_reference_temperature);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_u32(&mut p, dto.bodies.len() as u32);
@@ -5289,6 +5493,10 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         // Schema v8: per-body temperature.
         if thermal_v8 {
             write_f32(&mut p, b.temperature);
+        }
+        // Schema v10: per-body expansion factor.
+        if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+            write_f32(&mut p, b.expansion_scale);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -5372,6 +5580,18 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         } else {
             CollisionTierConfigDto::default()
         },
+        // Schema v10: thermal sub-features (own block, after the v9
+        // collision-tier block in the byte stream).
+        thermal_extras: if version >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+            ThermalExtrasDto {
+                radiation_occlusion: r.read_u8()? != 0,
+                forced_convection_coefficient: r.read_f32()?,
+                expansion_coefficient: r.read_f32()?,
+                expansion_reference_temperature: r.read_f32()?,
+            }
+        } else {
+            ThermalExtrasDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {
@@ -5437,6 +5657,12 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         r.read_f32()?
                     } else {
                         default_temperature()
+                    },
+                    // Schema v10: per-body expansion factor.
+                    expansion_scale: if version >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
+                        r.read_f32()?
+                    } else {
+                        default_expansion_scale()
                     },
                 });
             }
@@ -6251,8 +6477,8 @@ mod tests {
         w.broadphase_mode = phieng_broadphase::BroadphaseMode::BruteForce;
         let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
         assert!(
-            text.contains("\"schema\": 9"),
-            "non-default world writes v9"
+            text.contains(&format!("\"schema\": {SNAPSHOT_SCHEMA_VERSION}")),
+            "non-default world writes the current schema"
         );
 
         // A v8-shaped document (tier key absent) must load as full
@@ -6267,6 +6493,147 @@ mod tests {
             back.collision_tier.max_tier,
             crate::collision_tier::CollisionTier::Tier5_GJK_EPA,
             "an absent tier block must default to full fidelity, not Tier1"
+        );
+    }
+
+    /// A genuine v8 binary payload (no collision-tier block, no thermal
+    /// sub-feature block) must still decode, defaulting the v9/v10
+    /// blocks instead of misparsing them.
+    #[test]
+    fn test_snapshot_v8_binary_payload_loads() {
+        let mut w = scene2();
+        w.broadphase_mode = phieng_broadphase::BroadphaseMode::BruteForce;
+        w.thermal.config = crate::thermal::ThermalConfig2D::default();
+        w.collision_tier = crate::collision_tier::CollisionTierConfig::default();
+
+        // Re-encode the DTO as a v8 payload: the DTO's `schema` field
+        // drives every version gate, so lowering it produces a genuine
+        // v8 byte stream.
+        let mut dto = world2_dto(&w, LoadMode::Exact);
+        dto.schema = 8;
+        let bytes = encode_world2(&dto).expect("serializes");
+
+        let back = world2_from_binary(&bytes, LoadMode::Exact).expect("v8 payload loads");
+        // The v9 block was absent, so the tier must default to full
+        // fidelity, not to a derived-zero Tier1.
+        assert!(!back.collision_tier.enabled);
+        assert_eq!(
+            back.collision_tier.max_tier,
+            crate::collision_tier::CollisionTier::Tier5_GJK_EPA,
+            "an absent v9 tier block must default to full fidelity"
+        );
+        // The v10 block was absent, so the thermal sub-features must
+        // default rather than read garbage.
+        assert!(!back.thermal.config.radiation_occlusion);
+        assert_eq!(back.thermal.config.forced_convection_coefficient, 0.0);
+        assert_eq!(back.thermal.config.expansion_coefficient, 0.0);
+        assert_eq!(
+            back.thermal.config.expansion_reference_temperature,
+            phieng_math::DEFAULT_TEMPERATURE
+        );
+    }
+
+    /// A genuine v9 binary payload (collision-tier block present, no
+    /// thermal sub-feature block) must still decode.
+    #[test]
+    fn test_snapshot_v9_binary_payload_loads() {
+        let mut w = scene2();
+        w.broadphase_mode = phieng_broadphase::BroadphaseMode::BruteForce;
+        w.thermal.config = crate::thermal::ThermalConfig2D::default();
+        w.collision_tier = crate::collision_tier::CollisionTierConfig {
+            enabled: true,
+            max_tier: crate::collision_tier::CollisionTier::Tier3_SphereSphere,
+        };
+
+        let mut dto = world2_dto(&w, LoadMode::Exact);
+        dto.schema = 9;
+        let bytes = encode_world2(&dto).expect("serializes");
+
+        let back = world2_from_binary(&bytes, LoadMode::Exact).expect("v9 payload loads");
+        assert!(back.collision_tier.enabled);
+        assert_eq!(
+            back.collision_tier.max_tier,
+            crate::collision_tier::CollisionTier::Tier3_SphereSphere
+        );
+        // The v10 block was absent: thermal sub-features default.
+        assert!(!back.thermal.config.radiation_occlusion);
+        assert_eq!(back.thermal.config.expansion_coefficient, 0.0);
+    }
+
+    /// The thermal sub-feature block must round-trip through both JSON
+    /// and binary, at both schema versions that carry it.
+    #[test]
+    fn test_snapshot_thermal_extras_roundtrip() {
+        let mut w = scene2();
+        w.thermal.config = crate::thermal::ThermalConfig2D {
+            enabled: true,
+            radiation_occlusion: true,
+            forced_convection_coefficient: 12.5,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 300.0,
+            ..Default::default()
+        };
+
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        assert!(
+            text.contains("thermal_extras"),
+            "non-default thermal sub-features must be serialized"
+        );
+        let back = world2_from_json(&text, LoadMode::Exact).expect("deserializes");
+        assert!(back.thermal.config.radiation_occlusion);
+        assert_eq!(back.thermal.config.forced_convection_coefficient, 12.5);
+        assert_eq!(back.thermal.config.expansion_coefficient, 1.0e-3);
+        assert_eq!(back.thermal.config.expansion_reference_temperature, 300.0);
+
+        let bytes = world2_to_binary(&w, LoadMode::Exact).expect("serializes");
+        let back = world2_from_binary(&bytes, LoadMode::Exact).expect("deserializes");
+        assert!(back.thermal.config.radiation_occlusion);
+        assert_eq!(back.thermal.config.forced_convection_coefficient, 12.5);
+        assert_eq!(back.thermal.config.expansion_coefficient, 1.0e-3);
+        assert_eq!(back.thermal.config.expansion_reference_temperature, 300.0);
+    }
+
+    /// The per-body expansion factor must round-trip: the stored shape is
+    /// already scaled, so a lost tracker would make the next expansion
+    /// step rescale from the wrong base.
+    #[test]
+    fn test_snapshot_expansion_scale_roundtrip() {
+        let mut w = scene2();
+        w.thermal.config = crate::thermal::ThermalConfig2D {
+            enabled: true,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 300.0,
+            ..Default::default()
+        };
+        // Simulate a body that has already been expanded.
+        w.bodies[0].expansion_scale = 1.25;
+
+        for fmt in [LoadMode::Exact, LoadMode::Fresh] {
+            let bytes = world2_to_binary(&w, fmt).expect("serializes");
+            let back = world2_from_binary(&bytes, fmt).expect("deserializes");
+            assert_eq!(
+                back.bodies[0].expansion_scale, 1.25,
+                "binary must preserve the applied expansion factor"
+            );
+        }
+
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        let back = world2_from_json(&text, LoadMode::Exact).expect("deserializes");
+        assert_eq!(
+            back.bodies[0].expansion_scale, 1.25,
+            "JSON must preserve the applied expansion factor"
+        );
+    }
+
+    /// A default world must not carry an expansion-scale key: the field
+    /// is elided when it is 1.0 so pre-v10 output stays byte-identical.
+    #[test]
+    fn test_snapshot_default_body_omits_expansion_scale() {
+        let w = scene2();
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        assert!(
+            !text.contains("expansion_scale"),
+            "a default body must not carry an expansion_scale key"
         );
     }
 

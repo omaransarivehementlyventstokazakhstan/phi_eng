@@ -9,7 +9,7 @@ C# is enforced by `tools/check_test_parity.py`
 S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
 snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
-Q01–Q05 solver quality, T01–T17 thermal, B01–B06 broadphase tiers,
+Q01–Q05 solver quality, T01–T24 thermal, B01–B06 broadphase tiers,
 K31–K44 3D joints,
 H01–H05 collision tiers).
 
@@ -282,25 +282,41 @@ documented consequences:
   per-shape override, so a scene mixing hulls (Tier5) with boxes (Tier4)
   cannot keep exact hull contacts under a Tier4 ceiling.
 
-## Thermodynamics & radiation (T01–T17)
+## Thermodynamics & radiation (T01–T24)
 
 The thermal subsystem adds per-body temperature evolution via conduction,
-radiation, and convection. Documented gaps:
+radiation, and convection, plus three opt-in sub-features: radiation
+occlusion, forced convection, and thermal expansion. Documented gaps:
 
-- **No thermal expansion.** A body's dimensions, mass, and inertia are
-  independent of temperature — heating a body never changes its shape,
-  collision geometry, or mass properties. Thermal expansion (and the
-  resulting solver coupling) is deferred to a future phase.
 - **No phase change.** Bodies carry fixed material properties; there is
   no melting/solidification or latent heat. A body's specific heat,
   conductivity, and emissivity never change with temperature.
-- **Radiation is unoccluded.** Body-to-body radiation does not account
-  for intermediate bodies blocking the line of sight. Every pair within
-  `radiation_radius_factor` × combined bounding radii exchanges
-  radiation, regardless of what lies between them.
-- **Constant convection coefficient.** `h` is fixed per-world; there is
-  no velocity-dependent forced convection (`h ∝ |v|`) and no natural
-  convection model (Rayleigh–Bénard, etc.). Opt-in per-world.
+- **Radiation occlusion is a coarse test.** `radiation_occlusion`
+  (opt-in, per-world) blocks body-to-body radiation when a third body
+  lies between the pair. The test is a segment/sphere overlap against
+  the blocker's bounding radius, not an exact shadow volume: a body
+  that is *near* the line of sight but does not actually touch it can
+  still block radiation, and the blocker is treated as fully opaque
+  regardless of its size or material. Off by default (an O(n) scan per
+  pair).
+- **Forced convection is a linear speed model.** The convection
+  coefficient becomes `h + h_forced · |v|`, where `|v|` is the body's
+  speed relative to the (still) ambient. There is no boundary-layer
+  model, no flow direction (a body moving *towards* a wall sheds heat
+  exactly like one moving away), and no natural-convection model
+  (Rayleigh–Bénard, etc.). Opt-in per-world.
+- **Thermal expansion rescales the shape, not the mesh topology.**
+  `expansion_coefficient` (opt-in, per-world) scales a body's shape by
+  `1 + alpha · (T − T_ref)` and refreshes its mass and inertia. The
+  factor is applied relative to the *authored* shape (the applied
+  factor is tracked per body and persisted in snapshots), so a body
+  held at a constant temperature does not grow without bound. Off by
+  default, so default trajectories stay bit-identical. Gaps: expansion
+  is uniform (no anisotropic or phase-specific swelling), the shape is
+  rescaled in place (vertex data is not regenerated, so a polygon's
+  original vertex count and winding are preserved but its tessellation
+  is not refined), and a body that changes shape mid-step has its
+  broad-phase bounds refreshed on the next step.
 - **Static bodies are thermal reservoirs.** A static body's temperature
   never changes (infinite heat capacity); it can supply or absorb
   unlimited heat without temperature drift. This is intentional for
@@ -312,7 +328,7 @@ radiation, and convection. Documented gaps:
   than strict SI units.
 - **Cross-language parity is tolerance-based.** Rust and C# thermal
   trajectories agree on statistical/energy/amplitude bounds but are not
-  bit-equal (same rule as ambient turbulence and gravity). T01–T17 pin
+  bit-equal (same rule as ambient turbulence and gravity). T01–T24 pin
   per-backend determinism, not cross-language bit-equality.
 - **Managed C# mirror does not step thermal.** `PhiEng.Dynamics`
   `World2/3` and its snapshot ignore thermal state (no `Temperature` on

@@ -14,6 +14,17 @@
 //!   cutoff.
 //! - **Convection**: ambient coupling, Newton's law of cooling.
 //!
+//! Opt-in sub-features (all default to off, so default trajectories are
+//! bit-identical):
+//! - **Radiation occlusion**: a third body between two bodies blocks their
+//!   radiative exchange (coarse segment/sphere test).
+//! - **Forced convection**: the convection coefficient grows with the
+//!   body's speed (`h + h_forced·|v|`).
+//! - **Thermal expansion**: the shape is scaled by `1 + alpha·(T − T_ref)`.
+//!   The applied factor is tracked per body ([`RigidBody2::expansion_scale`])
+//!   and applied *relative to the authored shape*, so the factor never
+//!   compounds across steps.
+//!
 //! Determinism: pure per-body computation in index order, no RNG, no
 //! allocation (buffers are pooled and recycled).
 
@@ -38,6 +49,20 @@ pub struct ThermalConfig2D {
     pub min_temperature: f32,
     pub radiation_radius_factor: f32,
     pub max_temperature_rate: f32,
+    /// Block body-to-body radiation when another body lies between the
+    /// pair (line-of-sight test). Off by default: it is O(n) per pair and
+    /// changes exchanged heat, so it is opt-in.
+    pub radiation_occlusion: bool,
+    /// Extra convection coefficient per unit of relative speed
+    /// (W/(m²·K) per m/s). Models forced convection over a moving
+    /// surface. Off by default (0.0 = free convection only).
+    pub forced_convection_coefficient: f32,
+    /// Linear thermal-expansion coefficient (1/K). Scales a body's shape by
+    /// `1 + alpha * (T - reference_temperature)`. Off by default
+    /// (0.0 = no expansion) so default trajectories are bit-identical.
+    pub expansion_coefficient: f32,
+    /// Reference temperature (K) the expansion is measured against.
+    pub expansion_reference_temperature: f32,
 }
 
 impl Default for ThermalConfig2D {
@@ -54,6 +79,10 @@ impl Default for ThermalConfig2D {
             min_temperature: MIN_TEMPERATURE,
             radiation_radius_factor: 5.0,
             max_temperature_rate: 100.0,
+            radiation_occlusion: false,
+            forced_convection_coefficient: 0.0,
+            expansion_coefficient: 0.0,
+            expansion_reference_temperature: DEFAULT_TEMPERATURE,
         }
     }
 }
@@ -295,12 +324,97 @@ fn compute_radiation_2d(
 
             let view_factor = (r_j / dist).powi(2).min(1.0);
 
+            // Occlusion: a third body between the pair blocks the line of
+            // sight, so the pair exchanges no radiative heat. Opt-in: it
+            // costs an O(n) scan per pair.
+            if config.radiation_occlusion && is_occluded_2d(bodies, i, j) {
+                continue;
+            }
+
             let q_rad = eps_eff * sigma * l_i * view_factor * (t_i_fourth - t_j_fourth);
 
             state.heat_flux[i] -= q_rad;
             state.heat_flux[j] += q_rad;
         }
     }
+}
+
+/// True when a third body lies between bodies `a` and `b` (2D), blocking
+/// the line of sight. The blocker must be *between* them along the
+/// segment and strictly closer to the midpoint (so the endpoints
+/// themselves never block each other).
+fn is_occluded_2d(bodies: &[RigidBody2], a: usize, b: usize) -> bool {
+    let pa = bodies[a].transform.position;
+    let pb = bodies[b].transform.position;
+    let ab = pb - pa;
+    let len_sq = ab.length_squared();
+    if len_sq <= 0.0 {
+        return false;
+    }
+    let mid = (pa + pb) * 0.5;
+    let half = len_sq.sqrt() * 0.5;
+
+    for (idx, body) in bodies.iter().enumerate() {
+        if idx == a || idx == b || body.shape.is_none() {
+            continue;
+        }
+        let p = body.transform.position;
+        // Parameter along the segment; must be strictly inside.
+        let t = (p - pa).dot(ab) / len_sq;
+        if !(0.0 < t && t < 1.0) {
+            continue;
+        }
+        // Distance from the segment.
+        let closest = pa + ab * t;
+        let d = (p - closest).length();
+        let radius = body
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        // The blocker must reach the line (within its radius) and sit
+        // closer to the midpoint than the endpoints do.
+        if d <= radius && (p - mid).length() < half {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when a third body lies between bodies `a` and `b` (3D), blocking
+/// the line of sight. 3D counterpart of [`is_occluded_2d`].
+fn is_occluded_3d(bodies: &[RigidBody3], a: usize, b: usize) -> bool {
+    let pa = bodies[a].transform.position;
+    let pb = bodies[b].transform.position;
+    let ab = pb - pa;
+    let len_sq = ab.length_squared();
+    if len_sq <= 0.0 {
+        return false;
+    }
+    let mid = (pa + pb) * 0.5;
+    let half = len_sq.sqrt() * 0.5;
+
+    for (idx, body) in bodies.iter().enumerate() {
+        if idx == a || idx == b || body.shape.is_none() {
+            continue;
+        }
+        let p = body.transform.position;
+        let t = (p - pa).dot(ab) / len_sq;
+        if !(0.0 < t && t < 1.0) {
+            continue;
+        }
+        let closest = pa + ab * t;
+        let d = (p - closest).length();
+        let radius = body
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        if d <= radius && (p - mid).length() < half {
+            return true;
+        }
+    }
+    false
 }
 
 fn compute_convection_2d(
@@ -310,6 +424,7 @@ fn compute_convection_2d(
 ) {
     let h = config.convection_coefficient;
     let t_amb = config.ambient_temperature;
+    let h_forced = config.forced_convection_coefficient;
 
     for (i, body) in bodies.iter().enumerate() {
         if body.shape.is_none() {
@@ -319,13 +434,25 @@ fn compute_convection_2d(
         if a_surf <= 0.0 {
             continue;
         }
+        // Forced convection: the coefficient grows with the surface speed
+        // (a body moving through still air sheds heat faster).
+        let h_eff = if h_forced > 0.0 {
+            h + h_forced * body.velocity.length()
+        } else {
+            h
+        };
         // q_conv is the convective *loss* (Newton's law, positive when
         // hotter than ambient); heat_flux accumulates heat gained.
-        let q_conv = h * a_surf * (body.temperature - t_amb);
+        let q_conv = h_eff * a_surf * (body.temperature - t_amb);
         state.heat_flux[i] -= q_conv;
     }
 }
 
+/// Target linear scale factor for a body at `temperature`, given the
+/// expansion coefficient and reference temperature.
+///
+/// Returns 1.0 (no expansion) when the coefficient is 0, and clamps to a
+/// small positive floor so a body never collapses to a degenerate shape.
 fn update_temperatures_2d(
     bodies: &mut [RigidBody2],
     config: &ThermalConfig2D,
@@ -350,6 +477,105 @@ fn update_temperatures_2d(
 
         let delta_t = ((*flux / c_i) * dt).clamp(-max_delta, max_delta);
         body.temperature = (body.temperature + delta_t).clamp(min_t, max_t);
+    }
+}
+
+pub fn expansion_factor(config: &ThermalConfig2D, temperature: f32) -> f32 {
+    let alpha = config.expansion_coefficient;
+    if !alpha.is_finite() || alpha == 0.0 {
+        return 1.0;
+    }
+    let dt = temperature - config.expansion_reference_temperature;
+    if !dt.is_finite() {
+        return 1.0;
+    }
+    let factor = 1.0 + alpha * dt;
+    // A non-positive or non-finite factor would produce a degenerate
+    // shape (zero radius, inverted hull); clamp instead.
+    if !factor.is_finite() || factor <= 0.0 {
+        return 1.0;
+    }
+    factor.clamp(0.01, 100.0)
+}
+
+/// Rescale a body's shape from its currently-applied expansion factor to
+/// the target factor.
+///
+/// The shape is multiplied by `target / applied` (not by `target`), so
+/// the result is always `authored_shape * target` regardless of how the
+/// body reached its current temperature. Applying `target` directly
+/// would compound the factor on every step (a body held at a constant
+/// temperature would grow without bound).
+fn rescale_for_expansion_2d(body: &mut RigidBody2, target: f32) {
+    let applied = body.expansion_scale;
+    if !applied.is_finite() || applied <= 0.0 {
+        // Defensive: an invalid tracker would make the ratio NaN.
+        body.expansion_scale = 1.0;
+        return;
+    }
+    if (target - applied).abs() <= f32::EPSILON {
+        return;
+    }
+    let Some(shape) = body.shape.clone() else {
+        return;
+    };
+    let ratio = target / applied;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return;
+    }
+    let scaled = shape.scaled(ratio);
+    // `set_shape` recomputes mass/inertia from the (unchanged) density,
+    // so the body stays consistent with its new size.
+    let density = body.material.density;
+    if body.set_shape(scaled, density).is_ok() {
+        body.material.density = density;
+        body.expansion_scale = target;
+    }
+}
+
+/// Apply thermal expansion to 2D bodies: rescale each shape to match its
+/// expansion factor and refresh the mass properties.
+///
+/// Off by default (`expansion_coefficient == 0`), in which case this is a
+/// no-op and every trajectory stays bit-identical.
+pub fn apply_expansion_2d(bodies: &mut [RigidBody2], config: &ThermalConfig2D) {
+    if !config.expansion_coefficient.is_finite() || config.expansion_coefficient == 0.0 {
+        return;
+    }
+    for body in bodies.iter_mut() {
+        let target = expansion_factor(config, body.temperature);
+        rescale_for_expansion_2d(body, target);
+    }
+}
+
+/// Apply thermal expansion to 3D bodies. See [`apply_expansion_2d`].
+pub fn apply_expansion_3d(bodies: &mut [RigidBody3], config: &ThermalConfig3D) {
+    if !config.expansion_coefficient.is_finite() || config.expansion_coefficient == 0.0 {
+        return;
+    }
+    for body in bodies.iter_mut() {
+        let applied = body.expansion_scale;
+        if !applied.is_finite() || applied <= 0.0 {
+            body.expansion_scale = 1.0;
+            continue;
+        }
+        let target = expansion_factor(config, body.temperature);
+        if (target - applied).abs() <= f32::EPSILON {
+            continue;
+        }
+        let Some(shape) = body.shape.clone() else {
+            continue;
+        };
+        let ratio = target / applied;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            continue;
+        }
+        let scaled = shape.scaled(ratio);
+        let density = body.material.density;
+        if body.set_shape(scaled, density).is_ok() {
+            body.material.density = density;
+            body.expansion_scale = target;
+        }
     }
 }
 
@@ -513,6 +739,11 @@ fn compute_radiation_3d(
 
             let view_factor = (r_j / dist).powi(2).min(1.0);
 
+            // Occlusion (3D): see `is_occluded_2d`.
+            if config.radiation_occlusion && is_occluded_3d(bodies, i, j) {
+                continue;
+            }
+
             let q_rad = eps_eff * sigma * a_surf * view_factor * (t_i_fourth - t_j_fourth);
 
             state.heat_flux[i] -= q_rad;
@@ -528,6 +759,7 @@ fn compute_convection_3d(
 ) {
     let h = config.convection_coefficient;
     let t_amb = config.ambient_temperature;
+    let h_forced = config.forced_convection_coefficient;
 
     for (i, body) in bodies.iter().enumerate() {
         if body.shape.is_none() {
@@ -537,9 +769,15 @@ fn compute_convection_3d(
         if a_surf <= 0.0 {
             continue;
         }
+        // Forced convection (3D): see `compute_convection_2d`.
+        let h_eff = if h_forced > 0.0 {
+            h + h_forced * body.velocity.length()
+        } else {
+            h
+        };
         // q_conv is the convective *loss* (Newton's law, positive when
         // hotter than ambient); heat_flux accumulates heat gained.
-        let q_conv = h * a_surf * (body.temperature - t_amb);
+        let q_conv = h_eff * a_surf * (body.temperature - t_amb);
         state.heat_flux[i] -= q_conv;
     }
 }
@@ -1058,5 +1296,331 @@ mod tests {
         }
         assert_eq!(bodies[0].temperature, 400.0);
         assert_eq!(bodies[1].temperature, 200.0);
+    }
+
+    // ---- Radiation occlusion (T18) ----
+
+    /// T18: a body between two others blocks body-to-body radiation when
+    /// occlusion is enabled.
+    ///
+    /// The A/B uses the *same* three bodies in both runs and only flips
+    /// the occlusion flag, so the blocker's own heat exchange (which is
+    /// unaffected: it is not between any pair that changes) cancels out
+    /// and the difference isolates the blocked 0-1 exchange.
+    #[test]
+    fn t18_radiation_occlusion_blocks_intermediate_body() {
+        let make = |x: f32, temp: f32| {
+            let mut b = make_body_2d(0, temp, 10.0);
+            b.transform.position = Vec2::new(x, 0.0);
+            b
+        };
+        // Hot body, cold body, and a blocker sitting between them.
+        let build = |occlusion: bool| {
+            let mut bodies = vec![make(0.0, 600.0), make(2.0, 300.0), make(1.0, 400.0)];
+            let config = ThermalConfig2D {
+                enabled: true,
+                radiation_enabled: true,
+                conduction_enabled: false,
+                convection_enabled: false,
+                radiation_occlusion: occlusion,
+                ambient_temperature: 293.15,
+                max_temperature_rate: 10000.0,
+                ..Default::default()
+            };
+            let mut state = ThermalState2::new();
+            for _ in 0..10 {
+                step_thermal_2d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+            }
+            bodies[0].temperature
+        };
+
+        let blocked = build(true);
+        let unblocked = build(false);
+        assert!(
+            blocked > unblocked,
+            "occlusion must reduce body-to-body exchange: blocked {} vs unblocked {}",
+            blocked,
+            unblocked
+        );
+    }
+
+    // ---- Forced convection (T19) ----
+
+    /// T19: a moving body loses more heat than a stationary one when
+    /// forced convection is enabled.
+    #[test]
+    fn t19_forced_convection_cools_moving_body_faster() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: true,
+            forced_convection_coefficient: 50.0,
+            ambient_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+
+        let run = |speed: f32| {
+            let mut bodies = vec![make_body_2d(0, 500.0, 10.0)];
+            bodies[0].velocity = Vec2::new(speed, 0.0);
+            let mut state = ThermalState2::new();
+            for _ in 0..60 {
+                step_thermal_2d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+            }
+            bodies[0].temperature
+        };
+
+        let still = run(0.0);
+        let moving = run(10.0);
+        assert!(
+            moving < still,
+            "moving body must cool faster: moving {} vs still {}",
+            moving,
+            still
+        );
+    }
+
+    // ---- Thermal expansion (T20, T21) ----
+
+    /// T20: a hot body expands when an expansion coefficient is set.
+    #[test]
+    fn t20_expansion_scales_shape_with_temperature() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: false,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+
+        let mut bodies = vec![make_body_2d(0, 500.0, 10.0)];
+        let radius_before = bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        let mut state = ThermalState2::new();
+        for _ in 0..10 {
+            step_thermal_2d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+            apply_expansion_2d(&mut bodies, &config);
+        }
+        let radius_after = bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+
+        assert!(
+            radius_after > radius_before,
+            "hot body must expand: {} -> {}",
+            radius_before,
+            radius_after
+        );
+    }
+
+    /// T22: expansion is applied by the world step, not only by the
+    /// thermal phase in isolation.
+    ///
+    /// A body that is hot and never exchanges heat must still reach (and
+    /// hold) the target scale `1 + alpha * (T - T_ref)`.
+    #[test]
+    fn t22_expansion_applies_in_world_step() {
+        use crate::body::{RigidBody2, Shape2};
+        use crate::world::World2;
+
+        let mut w = World2::new();
+        w.thermal.config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: false,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut body = RigidBody2::new(0);
+        body.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        body.temperature = 500.0;
+        w.add_body(body).expect("adds body");
+
+        let before = w.bodies[0].shape.as_ref().unwrap().bounding_radius();
+        for _ in 0..10 {
+            w.step(1.0 / 60.0);
+        }
+        let after = w.bodies[0].shape.as_ref().unwrap().bounding_radius();
+
+        let expected = 1.0 + 1.0e-3 * (500.0 - 293.15);
+        assert!(
+            after > before,
+            "hot body must expand: {} -> {}",
+            before,
+            after
+        );
+        assert!(
+            (after - expected).abs() < 1e-4,
+            "expected scale {}, got {}",
+            expected,
+            after
+        );
+    }
+
+    /// T24: 3D expansion mirrors the 2D contract.
+    ///
+    /// A hot sphere must reach the target scale, and a hot convex mesh
+    /// must expand without the mesh recentering drifting.
+    #[test]
+    fn t24_expansion_3d() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: false,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+
+        // Sphere.
+        let mut body = crate::body::RigidBody3::new(0);
+        body.set_shape(crate::body::Shape3::Sphere { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        body.temperature = 500.0;
+        let mut bodies = vec![body];
+        let mut state = ThermalState2::new();
+        for _ in 0..10 {
+            step_thermal_3d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+            apply_expansion_3d(&mut bodies, &config);
+        }
+        let radius = bodies[0].shape.as_ref().unwrap().bounding_radius();
+        let expected = 1.0 + 1.0e-3 * (500.0 - 293.15);
+        assert!(
+            (radius - expected).abs() < 1e-4,
+            "expected scale {}, got {}",
+            expected,
+            radius
+        );
+
+        // Convex mesh: the vertices must scale, and the recentering in
+        // `set_shape` must not drift the mesh away from the body origin.
+        let mut mesh = crate::body::RigidBody3::new(0);
+        mesh.set_shape(
+            crate::body::Shape3::ConvexHull {
+                vertices: vec![
+                    glam::Vec3::new(-1.0, -1.0, -1.0),
+                    glam::Vec3::new(1.0, -1.0, -1.0),
+                    glam::Vec3::new(1.0, 1.0, -1.0),
+                    glam::Vec3::new(-1.0, 1.0, -1.0),
+                    glam::Vec3::new(0.0, 0.0, 1.0),
+                ],
+            },
+            1.0,
+        )
+        .expect("valid shape");
+        mesh.temperature = 500.0;
+        let radius_before = mesh.shape.as_ref().unwrap().bounding_radius();
+        let mut meshes = vec![mesh];
+        let mut state2 = ThermalState2::new();
+        for _ in 0..10 {
+            step_thermal_3d(&mut meshes, &[], &config, &mut state2, 1.0 / 60.0);
+            apply_expansion_3d(&mut meshes, &config);
+        }
+        let radius = meshes[0].shape.as_ref().unwrap().bounding_radius();
+        // The hull's bounding radius is not 1.0, so compare the *ratio*.
+        assert!(
+            (radius / radius_before - expected).abs() < 1e-4,
+            "convex hull expected scale {}, got {}",
+            expected,
+            radius / radius_before
+        );
+    }
+
+    /// T23: expansion must not compound.
+    ///
+    /// A body held at a constant temperature has a *fixed* target scale.
+    /// Applying the factor directly to the (already-expanded) shape would
+    /// multiply it every step, so a body held hot would grow without
+    /// bound. The applied factor is tracked per body, so the shape stays
+    /// at exactly `authored * target`.
+    #[test]
+    fn t23_expansion_does_not_compound() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: false,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+
+        let run = |steps: usize| {
+            let mut bodies = vec![make_body_2d(0, 500.0, 10.0)];
+            let mut state = ThermalState2::new();
+            for _ in 0..steps {
+                step_thermal_2d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+                apply_expansion_2d(&mut bodies, &config);
+            }
+            bodies[0]
+                .shape
+                .as_ref()
+                .map(|s| s.bounding_radius())
+                .unwrap_or(0.0)
+        };
+
+        let after_1 = run(1);
+        let after_100 = run(100);
+        assert_eq!(
+            after_1, after_100,
+            "a body at a constant temperature must not keep growing"
+        );
+        // The expected target is 1 + alpha * (T - T_ref).
+        let expected = 1.0 + 1.0e-3 * (500.0 - 293.15);
+        assert!(
+            (after_100 - expected).abs() < 1e-4,
+            "expected scale {}, got {}",
+            expected,
+            after_100
+        );
+    }
+
+    /// T21: expansion is opt-in. With the default (zero) coefficient the
+    /// shape must not change at all, so default trajectories stay
+    /// bit-identical.
+    #[test]
+    fn t21_expansion_disabled_is_noop() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            radiation_enabled: false,
+            conduction_enabled: false,
+            convection_enabled: false,
+            ..Default::default()
+        };
+
+        let mut bodies = vec![make_body_2d(0, 500.0, 10.0)];
+        let radius_before = bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        let mut state = ThermalState2::new();
+        for _ in 0..10 {
+            step_thermal_2d(&mut bodies, &[], &config, &mut state, 1.0 / 60.0);
+            apply_expansion_2d(&mut bodies, &config);
+        }
+        let radius_after = bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+
+        assert_eq!(radius_before, radius_after);
     }
 }

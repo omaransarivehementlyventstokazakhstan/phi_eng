@@ -419,6 +419,10 @@ public sealed class PhiNativeWorld : IDisposable
                 MinTemperature = config.MinTemperature,
                 RadiationRadiusFactor = config.RadiationRadiusFactor,
                 MaxTemperatureRate = config.MaxTemperatureRate,
+                RadiationOcclusion = config.RadiationOcclusion ? (byte)1 : (byte)0,
+                ForcedConvectionCoefficient = config.ForcedConvectionCoefficient,
+                ExpansionCoefficient = config.ExpansionCoefficient,
+                ExpansionReferenceTemperature = config.ExpansionReferenceTemperature,
             };
             int ok = NativeMethods.phieng_world_set_thermal_config(_handle, &ffi);
             if (ok == 0)
@@ -453,6 +457,10 @@ public sealed class PhiNativeWorld : IDisposable
                 MinTemperature = ffi.MinTemperature,
                 RadiationRadiusFactor = ffi.RadiationRadiusFactor,
                 MaxTemperatureRate = ffi.MaxTemperatureRate,
+                RadiationOcclusion = ffi.RadiationOcclusion != 0,
+                ForcedConvectionCoefficient = ffi.ForcedConvectionCoefficient,
+                ExpansionCoefficient = ffi.ExpansionCoefficient,
+                ExpansionReferenceTemperature = ffi.ExpansionReferenceTemperature,
             };
         }
     }
@@ -735,6 +743,29 @@ public sealed class PhiNativeWorld : IDisposable
     }
 
     /// <summary>Read a body's linear velocity.</summary>
+    /// <summary>Sets a body's linear velocity.</summary>
+    public void SetBodyVelocity(int bodyId, Vector2 velocity)
+    {
+        if (bodyId < 0)
+            throw new ArgumentOutOfRangeException(nameof(bodyId));
+        NativeMethods.phieng_world_set_body_velocity(
+            _handle,
+            (uint)bodyId,
+            velocity.X,
+            velocity.Y);
+    }
+
+    /// <summary>
+    /// Reads a body's shape bounding radius. Returns 0 for an unknown id
+    /// or a shapeless body.
+    /// </summary>
+    public float GetBodyShapeRadius(int bodyId)
+    {
+        if (bodyId < 0)
+            throw new ArgumentOutOfRangeException(nameof(bodyId));
+        return NativeMethods.phieng_world_get_body_shape_radius(_handle, (uint)bodyId);
+    }
+
     public unsafe Vector2 GetBodyVelocity(int bodyId)
     {
         lock (_gate)

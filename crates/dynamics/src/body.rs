@@ -42,6 +42,12 @@ pub struct RigidBody2 {
     pub ambient_scale: f32,
     /// Current temperature in Kelvin (warm: thermal phase). Default 293.15 K.
     pub temperature: f32,
+    /// Thermal-expansion factor currently applied to this body's shape
+    /// (warm: thermal phase). 1.0 means "not expanded"; the thermal
+    /// phase rescales the shape by `target / expansion_scale`, so the
+    /// factor is applied relative to the authored shape instead of
+    /// compounding every step.
+    pub expansion_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -64,6 +70,28 @@ pub enum Shape2 {
 }
 
 impl Shape2 {
+    /// Uniformly scaled copy of this shape about its origin.
+    ///
+    /// Used by thermal expansion: a body hotter than the reference
+    /// temperature grows by `1 + alpha * dT`. A non-positive or non-finite
+    /// factor returns the shape unchanged (never a degenerate shape).
+    pub fn scaled(&self, factor: f32) -> Shape2 {
+        if !factor.is_finite() || factor <= 0.0 {
+            return self.clone();
+        }
+        match self {
+            Shape2::Circle { radius } => Shape2::Circle {
+                radius: radius * factor,
+            },
+            Shape2::Box { half_extents } => Shape2::Box {
+                half_extents: *half_extents * factor,
+            },
+            Shape2::Polygon { vertices } => Shape2::Polygon {
+                vertices: vertices.iter().map(|v| *v * factor).collect(),
+            },
+        }
+    }
+
     /// Surface area (2D: perimeter) in meters.
     pub fn surface_area(&self) -> f32 {
         match self {
@@ -376,6 +404,7 @@ impl RigidBody2 {
             gravity_scale: 1.0,
             ambient_scale: 1.0,
             temperature: phieng_math::DEFAULT_TEMPERATURE,
+            expansion_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -702,6 +731,9 @@ pub struct RigidBody3 {
     pub ambient_scale: f32,
     /// Current temperature in Kelvin (see `RigidBody2::temperature`).
     pub temperature: f32,
+    /// Thermal-expansion factor currently applied to this body's shape
+    /// (see `RigidBody2::expansion_scale`).
+    pub expansion_scale: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -740,6 +772,37 @@ pub enum Shape3 {
 }
 
 impl Shape3 {
+    /// Uniformly scaled copy of this shape about its origin.
+    ///
+    /// See [`Shape2::scaled`] for the contract.
+    pub fn scaled(&self, factor: f32) -> Shape3 {
+        if !factor.is_finite() || factor <= 0.0 {
+            return self.clone();
+        }
+        match self {
+            Shape3::Sphere { radius } => Shape3::Sphere {
+                radius: radius * factor,
+            },
+            Shape3::Box { half_extents } => Shape3::Box {
+                half_extents: *half_extents * factor,
+            },
+            Shape3::Capsule {
+                radius,
+                half_length,
+            } => Shape3::Capsule {
+                radius: radius * factor,
+                half_length: half_length * factor,
+            },
+            Shape3::ConvexHull { vertices } => Shape3::ConvexHull {
+                vertices: vertices.iter().map(|v| *v * factor).collect(),
+            },
+            Shape3::ConvexMesh { vertices, indices } => Shape3::ConvexMesh {
+                vertices: vertices.iter().map(|v| *v * factor).collect(),
+                indices: indices.clone(),
+            },
+        }
+    }
+
     /// Surface area in m².
     pub fn surface_area(&self) -> f32 {
         match self {
@@ -941,6 +1004,7 @@ impl RigidBody3 {
             gravity_scale: 1.0,
             ambient_scale: 1.0,
             temperature: phieng_math::DEFAULT_TEMPERATURE,
+            expansion_scale: 1.0,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,

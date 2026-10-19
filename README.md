@@ -489,8 +489,10 @@ chase-dominated stalls — not on speculation.
   round-trip, BH determinism, plus a compact 3D set), ambient forces
   (A01–A05: spring/SHM period, drag terminal velocity, turbulence
   determinism, default no-op, scale immunity), thermal subsystem
-  (T01–T17: conduction, radiation, convection, clamping, reservoirs,
-  no-op paths, determinism; 3D conduction + determinism), broad-phase
+  (T01–T24: conduction, radiation, convection, clamping, reservoirs,
+  no-op paths, determinism; 3D conduction + determinism; radiation
+  occlusion, forced convection, thermal expansion including the
+  no-compounding guarantee), broad-phase
   tiers (B01–B06: backend parity 2D/3D, Hybrid auto-select, default
   backend, mid-run switch transparency, body-id invariant, FFI
   round-trip), solver quality tiers (Q01–Q05), CCD tiers (C01–C04),

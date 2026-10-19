@@ -793,6 +793,10 @@ impl World2 {
             &mut self.thermal,
             dt,
         );
+        // 5d. Thermal expansion: rescale shapes by their expansion factor
+        // and refresh mass/inertia. No-op unless the coefficient is
+        // non-zero (the default), so trajectories stay bit-identical.
+        super::thermal::apply_expansion_2d(&mut self.bodies, &thermal_config);
 
         // 6+7. Validate bodies + update sleep in a single fused sweep.
         // Sleep needs slowness AND support (a current contact, tracked
@@ -1875,6 +1879,8 @@ impl World3 {
             &mut self.thermal,
             dt,
         );
+        // 5d. Thermal expansion (see World2::step_inner).
+        super::thermal::apply_expansion_3d(&mut self.bodies, &thermal_config);
 
         // 6+7. Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; see World2).

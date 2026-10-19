@@ -29,6 +29,30 @@ public class ThermalConfig2
     public float RadiationRadiusFactor { get; set; } = 5.0f;
     /// <summary>Maximum temperature change per step in Kelvin.</summary>
     public float MaxTemperatureRate { get; set; } = 100.0f;
+
+    /// <summary>
+    /// Block body-to-body radiation when another body lies between the pair
+    /// (line-of-sight test). Off by default: it costs an O(n) scan per pair
+    /// and changes the exchanged heat, so it is opt-in.
+    /// </summary>
+    public bool RadiationOcclusion { get; set; } = false;
+
+    /// <summary>
+    /// Extra convection coefficient per unit of relative speed
+    /// (W/(m²·K) per m/s). Models forced convection over a moving
+    /// surface. 0 (the default) means free convection only.
+    /// </summary>
+    public float ForcedConvectionCoefficient { get; set; } = 0.0f;
+
+    /// <summary>
+    /// Linear thermal-expansion coefficient (1/K). Scales a body's shape
+    /// by <c>1 + alpha * (T - reference)</c>. 0 (the default) means no
+    /// expansion, so default trajectories stay bit-identical.
+    /// </summary>
+    public float ExpansionCoefficient { get; set; } = 0.0f;
+
+    /// <summary>Reference temperature (K) the expansion is measured against.</summary>
+    public float ExpansionReferenceTemperature { get; set; } = 293.15f;
 }
 
 /// <summary>

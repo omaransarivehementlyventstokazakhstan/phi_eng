@@ -1503,6 +1503,61 @@ pub unsafe extern "C" fn phieng_world_get_body_velocity(
     1
 }
 
+/// Set a body's linear velocity (2D).
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Non-finite input is rejected (clean `0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_velocity(
+    world: *mut World2,
+    body_id: u32,
+    vx: f32,
+    vy: f32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    if !vx.is_finite() || !vy.is_finite() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].velocity = Vec2::new(vx, vy);
+    1
+}
+
+/// Read a body's shape bounding radius (2D).
+///
+/// Returns the radius of the shape's bounding circle (for a circle, its
+/// own radius). Used to observe shape changes such as thermal
+/// expansion. Returns 0.0 for a null world, an unknown id, or a
+/// shapeless body.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_shape_radius(
+    world: *mut World2,
+    body_id: u32,
+) -> f32 {
+    if world.is_null() {
+        return 0.0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0.0;
+    };
+    world_ref.bodies[index]
+        .shape
+        .as_ref()
+        .map(|s| s.bounding_radius())
+        .unwrap_or(0.0)
+}
+
 /// Bulk transform + velocity read: `n` body ids at `ids` are resolved in
 /// one transition instead of N getter calls. Slot `i` of every output
 /// array corresponds to `ids[i]` (index alignment is preserved, never
@@ -2962,6 +3017,34 @@ pub unsafe extern "C" fn phieng_world3_get_body_velocity(
     1
 }
 
+/// Read a body's shape bounding radius (3D).
+///
+/// Returns the radius of the shape's bounding sphere. Used to observe
+/// shape changes such as thermal expansion. Returns 0.0 for a null
+/// world, an unknown id, or a shapeless body.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0.0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_shape_radius(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+) -> f32 {
+    if world.is_null() {
+        return 0.0;
+    }
+    let world_ref: &phieng_dynamics::World3 = &*world;
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0.0;
+    };
+    world_ref.bodies[index]
+        .shape
+        .as_ref()
+        .map(|s| s.bounding_radius())
+        .unwrap_or(0.0)
+}
+
 /// Bulk 3D transform + velocity read: same contract as
 /// [`phieng_world_get_transforms_bulk`] with 3D strides — `out_pos`
 /// holds `3*n` floats (x, y, z), `out_quat` holds `4*n` (x, y, z, w),
@@ -3231,6 +3314,15 @@ pub struct ThermalConfig2Ffi {
     pub min_temperature: f32,
     pub radiation_radius_factor: f32,
     pub max_temperature_rate: f32,
+    /// Radiation occlusion (line-of-sight blocking). 1-byte bool, matching
+    /// the other flags in this struct and the C# `byte` mirror.
+    pub radiation_occlusion: bool,
+    /// Forced-convection coefficient per unit speed.
+    pub forced_convection_coefficient: f32,
+    /// Linear thermal-expansion coefficient (1/K).
+    pub expansion_coefficient: f32,
+    /// Reference temperature the expansion is measured against.
+    pub expansion_reference_temperature: f32,
 }
 
 pub type ThermalConfig3Ffi = ThermalConfig2Ffi;
@@ -3271,6 +3363,10 @@ fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalCo
         min_temperature: c.min_temperature,
         radiation_radius_factor: c.radiation_radius_factor,
         max_temperature_rate: c.max_temperature_rate,
+        radiation_occlusion: c.radiation_occlusion,
+        forced_convection_coefficient: c.forced_convection_coefficient,
+        expansion_coefficient: c.expansion_coefficient,
+        expansion_reference_temperature: c.expansion_reference_temperature,
     })
 }
 
@@ -3287,6 +3383,10 @@ fn thermal2_to_ffi(c: &phieng_dynamics::ThermalConfig2D) -> ThermalConfig2Ffi {
         min_temperature: c.min_temperature,
         radiation_radius_factor: c.radiation_radius_factor,
         max_temperature_rate: c.max_temperature_rate,
+        radiation_occlusion: c.radiation_occlusion,
+        forced_convection_coefficient: c.forced_convection_coefficient,
+        expansion_coefficient: c.expansion_coefficient,
+        expansion_reference_temperature: c.expansion_reference_temperature,
     }
 }
 
@@ -4870,6 +4970,69 @@ mod tests {
 
     fn add_joint_ffi(world: *mut World2, tag: u32, a: u32, b: u32, json: &str) -> i32 {
         unsafe { phieng_world_add_joint(world, tag, a, b, json.as_ptr(), json.len()) }
+    }
+
+    /// T25: the thermal config must round-trip through the FFI,
+    /// including the three sub-feature fields. A field-order or
+    /// type-width mismatch in the FFI struct would corrupt the values
+    /// that follow it, so every field is checked.
+    #[test]
+    fn t25_thermal_config_ffi_roundtrip() {
+        unsafe {
+            let mut world = World2::new();
+            let cfg = ThermalConfig2Ffi {
+                enabled: true,
+                ambient_temperature: 350.0,
+                stefan_boltzmann: 5.67e-8,
+                convection_coefficient: 12.5,
+                radiation_enabled: false,
+                conduction_enabled: true,
+                convection_enabled: false,
+                max_temperature: 4000.0,
+                min_temperature: 10.0,
+                radiation_radius_factor: 3.5,
+                max_temperature_rate: 42.0,
+                radiation_occlusion: true,
+                forced_convection_coefficient: 7.25,
+                expansion_coefficient: 1.5e-4,
+                expansion_reference_temperature: 280.0,
+            };
+            assert_eq!(phieng_world_set_thermal_config(&mut world, &cfg), 1);
+
+            let mut out = ThermalConfig2Ffi {
+                enabled: false,
+                ambient_temperature: 0.0,
+                stefan_boltzmann: 0.0,
+                convection_coefficient: 0.0,
+                radiation_enabled: false,
+                conduction_enabled: false,
+                convection_enabled: false,
+                max_temperature: 0.0,
+                min_temperature: 0.0,
+                radiation_radius_factor: 0.0,
+                max_temperature_rate: 0.0,
+                radiation_occlusion: false,
+                forced_convection_coefficient: 0.0,
+                expansion_coefficient: 0.0,
+                expansion_reference_temperature: 0.0,
+            };
+            assert_eq!(phieng_world_get_thermal_config(&world, &mut out), 1);
+
+            assert!(out.enabled);
+            assert_eq!(out.ambient_temperature, 350.0);
+            assert_eq!(out.convection_coefficient, 12.5);
+            assert!(!out.radiation_enabled);
+            assert!(out.conduction_enabled);
+            assert!(!out.convection_enabled);
+            assert_eq!(out.max_temperature, 4000.0);
+            assert_eq!(out.min_temperature, 10.0);
+            assert_eq!(out.radiation_radius_factor, 3.5);
+            assert_eq!(out.max_temperature_rate, 42.0);
+            assert!(out.radiation_occlusion);
+            assert_eq!(out.forced_convection_coefficient, 7.25);
+            assert_eq!(out.expansion_coefficient, 1.5e-4);
+            assert_eq!(out.expansion_reference_temperature, 280.0);
+        }
     }
 
     #[test]

@@ -239,6 +239,10 @@ internal unsafe struct ThermalConfig2Ffi
     public float MinTemperature;
     public float RadiationRadiusFactor;
     public float MaxTemperatureRate;
+    public byte RadiationOcclusion;
+    public float ForcedConvectionCoefficient;
+    public float ExpansionCoefficient;
+    public float ExpansionReferenceTemperature;
 }
 
 /// <summary>Thermal config FFI struct (3D). Mirrors Rust <c>ThermalConfig3Ffi</c> (same field set as 2D).</summary>
@@ -256,6 +260,10 @@ internal unsafe struct ThermalConfig2Ffi
         public float MinTemperature;
         public float RadiationRadiusFactor;
         public float MaxTemperatureRate;
+        public byte RadiationOcclusion;
+        public float ForcedConvectionCoefficient;
+        public float ExpansionCoefficient;
+        public float ExpansionReferenceTemperature;
     }
 
     /// <summary>SPH fluid config FFI struct (3D). Mirrors Rust <c>FluidConfig3Ffi</c>.</summary>
@@ -482,6 +490,29 @@ internal unsafe struct ThermalConfig2Ffi
         uint bodyId,
         Vector2* outPos,
         float* outRot);
+
+    /// <summary>Reads a body's shape bounding radius (3D).</summary>
+    /// <returns>The bounding radius, or 0.0 for a null world, unknown id, or shapeless body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial float phieng_world3_get_body_shape_radius(
+        IntPtr world,
+        uint bodyId);
+
+    /// <summary>Sets a body's linear velocity (2D).</summary>
+    /// <returns>1 on success, 0 for null world, unknown id, or non-finite input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_velocity(
+        IntPtr world,
+        uint bodyId,
+        float vx,
+        float vy);
+
+    /// <summary>Reads a body's shape bounding radius (2D).</summary>
+    /// <returns>The bounding radius, or 0.0 for a null world, unknown id, or shapeless body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial float phieng_world_get_body_shape_radius(
+        IntPtr world,
+        uint bodyId);
 
     /// <returns>1 on success, 0 on invalid input.</returns>
     [LibraryImport(LibraryName), SuppressGCTransition]
