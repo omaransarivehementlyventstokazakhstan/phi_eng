@@ -24,22 +24,43 @@ fn arbitrary_positive_f32() -> impl Strategy<Value = f32> {
     (0.01f32..1000.0f32).prop_filter("finite", |v| v.is_finite())
 }
 
+/// Shape dimensions, kept physically sane (0.1..5.0 units). Larger
+/// shapes produce AABBs spanning millions of broadphase cells and are
+/// not meaningful energy/determinism inputs; the engine bounds that
+/// separately (see `SpatialHash2::MAX_CELLS_PER_BODY`).
+fn arbitrary_shape_size() -> impl Strategy<Value = f32> {
+    (0.1f32..5.0f32).prop_filter("finite", |v| v.is_finite())
+}
+
+/// Small local vertex in [-2, 2] for triangle polygons.
+fn arbitrary_small_vec2() -> impl Strategy<Value = (f32, f32)> {
+    (-2.0f32..2.0f32).prop_flat_map(|x| (-2.0f32..2.0f32).prop_map(move |y| (x, y)))
+}
+
 fn arbitrary_shape2() -> impl Strategy<Value = Shape2> {
     prop_oneof![
         // Circle
-        arbitrary_positive_f32().prop_map(|r| Shape2::Circle { radius: r }),
+        arbitrary_shape_size().prop_map(|r| Shape2::Circle { radius: r }),
         // Box
-        (arbitrary_positive_f32(), arbitrary_positive_f32()).prop_map(|(w, h)| Shape2::Box {
+        (arbitrary_shape_size(), arbitrary_shape_size()).prop_map(|(w, h)| Shape2::Box {
             half_extents: Vec2::new(w, h)
         }),
         // Polygon (triangle)
-        (arbitrary_vec2(), arbitrary_vec2(), arbitrary_vec2())
+        (
+            arbitrary_small_vec2(),
+            arbitrary_small_vec2(),
+            arbitrary_small_vec2()
+        )
             .prop_filter("non-degenerate", |(a, b, c)| {
-                let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
                 area.abs() > 1e-4
             })
             .prop_map(|(a, b, c)| Shape2::Polygon {
-                vertices: vec![a, b, c]
+                vertices: vec![
+                    Vec2::new(a.0, a.1),
+                    Vec2::new(b.0, b.1),
+                    Vec2::new(c.0, c.1)
+                ]
             }),
     ]
 }

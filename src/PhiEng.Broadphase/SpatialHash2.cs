@@ -12,6 +12,22 @@ public class SpatialHash2
     private Dictionary<(int, int), List<int>> Grid { get; set; } = new();
     private int _count;
     private int _clearsSinceCompact;
+    // Every inserted body id this frame (insertion order), and bodies whose
+    // AABB spans too many cells to grid. Mirrors Rust SpatialHash2.
+    private readonly List<int> _all = new();
+    private readonly List<int> _oversized = new();
+
+    /// <summary>
+    /// Maximum cells a single body may occupy. A body whose AABB exceeds
+    /// this is tracked in the oversized list and paired against the whole
+    /// scene instead of being written into the grid (a 1000-unit body at a
+    /// 1.0 cell size would touch millions of cells and hang the step).
+    /// Sized so ordinary scenes never trigger it.
+    /// </summary>
+    public const int MaxCellsPerBody = 4096;
+    /// <summary>Cell-index magnitude beyond which a coordinate is treated
+    /// as oversized (guards the int casts from saturating).</summary>
+    private const float MaxCellIndex = 2_000_000_000.0f;
 
     public SpatialHash2(float cellSize)
     {
@@ -31,6 +47,8 @@ public class SpatialHash2
     {
         foreach (var list in Grid.Values) list.Clear();
         _count = 0;
+        _all.Clear();
+        _oversized.Clear();
         if (++_clearsSinceCompact >= 256)
         {
             _clearsSinceCompact = 0;
@@ -51,6 +69,24 @@ public class SpatialHash2
             return;
         }
         _count++;
+        _all.Add(bodyId);
+
+        // Cells spanned, computed in float to avoid overflow on
+        // extreme-but-finite coordinates (int casts below saturate).
+        float spanX = (max.X - min.X) / CellSize;
+        float spanY = (max.Y - min.Y) / CellSize;
+        float cellsF = (spanX + 1.0f) * (spanY + 1.0f);
+        float originF = System.MathF.Max(
+            System.MathF.Max(System.MathF.Abs(min.X), System.MathF.Abs(max.X)),
+            System.MathF.Max(System.MathF.Abs(min.Y), System.MathF.Abs(max.Y))) / CellSize;
+
+        // Oversized (too many cells, or coords beyond safe cell indices):
+        // skip the grid, pair against the whole scene in CollectPairs.
+        if (cellsF > MaxCellsPerBody || originF > MaxCellIndex)
+        {
+            _oversized.Add(bodyId);
+            return;
+        }
 
         // Calculate which cells this body overlaps
         int cellMinX = (int)MathF.Floor(min.X / CellSize);
@@ -99,6 +135,16 @@ public class SpatialHash2
                     int b = cellIds[j];
                     output.Add(a < b ? (a, b) : (b, a));
                 }
+            }
+        }
+        // Oversized bodies are not in the grid: pair each against every
+        // body. Determinism holds (_all/_oversized are insertion-ordered,
+        // and the final sort+dedupe canonicalizes).
+        foreach (int o in _oversized)
+        {
+            foreach (int b in _all)
+            {
+                if (o != b) output.Add(o < b ? (o, b) : (b, o));
             }
         }
         output.Sort();

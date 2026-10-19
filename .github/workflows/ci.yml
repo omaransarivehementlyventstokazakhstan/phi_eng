@@ -7,6 +7,9 @@ on:
 jobs:
   rust:
     runs-on: ${{ matrix.os }}
+    # Fail fast if a suite regresses into a hang instead of burning the
+    # 6h default (a pathological broadphase case once did exactly that).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +22,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Cache the cargo registry + target dir: without it every job
+      # rebuilds all deps from scratch, which dominated CI wall time.
+      - uses: Swatinem/rust-cache@v2
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
@@ -27,11 +33,28 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-      - name: Tests
+      - name: Tests (debug)
         run: cargo test --workspace
+
+  # Release-optimized soak: determinism hashes and allocation counts must
+  # hold unchanged under optimization (where vectorization / FMA
+  # contraction, if it ever appeared, would change float results).
+  rust-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests (release)
+        run: cargo test --workspace --release
 
   csharp:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           target: ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-gnu' }}
+      - uses: Swatinem/rust-cache@v2
       - name: Build native (ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: cargo build --release --target x86_64-unknown-linux-gnu -p phieng
@@ -55,6 +79,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/*.csproj"
       - name: Tests
         run: dotnet test tests/PhiEng.Tests/PhiEng.Tests.csproj
       - name: Parity check
@@ -64,6 +90,7 @@ jobs:
   # version must agree (single release version across both ecosystems).
   version-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -80,12 +107,16 @@ jobs:
   # Only the library targets are checked: examples/benches may use newer sugar.
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.78
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.78
       - name: MSRV build (libs only)
         run: cargo build --workspace --lib
 
@@ -93,18 +124,21 @@ jobs:
   # the recorded profile. Timing is NOT gated (CI runners are noisy).
   bench-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Bench smoke (hash + allocs)
         run: cargo run -p phieng --example bench_large --release
 
   # Native-CPU bench: informational only, never gating (runner noise).
   bench-native:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     defaults:
       run:
@@ -112,12 +146,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Native bench (informational)
         run: ./tools/build-native.sh --bench
 
   # From-scratch host example: a broken example is a broken build.
   host-smoke:
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -126,12 +162,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/*.csproj"
       - name: Host headless smoke
         run: dotnet run --project examples/host/PhiEng.Host.csproj -- --smoke --steps 600
 
   # README smoke: validate hello samples compile and run (5-min hello-worlds).
+  # One shared native build + one restore, reused across all sample runs.
   readme-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -140,6 +180,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           target: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
       - name: Build native (ubuntu)
         run: cargo build --release --target x86_64-unknown-linux-gnu -p phieng
       - name: Stage native linux
@@ -149,6 +190,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/*.csproj"
       - name: hello-2d
         run: dotnet run --project samples/hello-2d/hello-2d.csproj
       - name: hello-3d

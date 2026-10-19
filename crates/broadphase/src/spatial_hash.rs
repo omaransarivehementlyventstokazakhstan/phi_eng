@@ -30,9 +30,29 @@ pub struct SpatialHash2 {
     /// of freeing it; new cells draw from it, so re-appearing cells never
     /// re-allocate. Internal (the public API is unchanged).
     pool: Vec<Vec<usize>>,
+    /// Every inserted body id this frame (insertion order). Used to pair
+    /// oversized bodies against the whole scene.
+    all: Vec<usize>,
+    /// Bodies whose AABB spans more cells than [`Self::MAX_CELLS_PER_BODY`].
+    /// Such bodies are NOT written into the grid (a 1000-unit body at a
+    /// 1.0 cell size would touch millions of cells and hang the step);
+    /// instead they are paired against every body in `collect_pairs`.
+    oversized: Vec<usize>,
 }
 
 impl SpatialHash2 {
+    /// Maximum cells a single body may occupy in the grid. A body whose
+    /// AABB exceeds this is tracked in the oversized list and paired
+    /// against the whole scene instead — correctness is preserved
+    /// (it still collides with everything) while keeping insert cost
+    /// bounded. Sized so ordinary scenes never trigger it (e.g. a
+    /// 64x64-cell, 90x90-unit body at cell size 1.0).
+    pub const MAX_CELLS_PER_BODY: usize = 4096;
+    /// Cell-index magnitude beyond which a coordinate is treated as
+    /// oversized (guards the `as i32` casts from saturating to i32::MIN/MAX
+    /// and producing degenerate ranges for extreme-but-finite positions).
+    const MAX_CELL_INDEX: f32 = 2_000_000_000.0;
+
     pub fn new(cell_size: f32) -> Self {
         // Guard against zero/negative/infinite cell sizes: they would produce
         // unbounded cell ranges (hang) on insert.
@@ -47,6 +67,8 @@ impl SpatialHash2 {
             count: 0,
             clears_since_compact: 0,
             pool: Vec::new(),
+            all: Vec::new(),
+            oversized: Vec::new(),
         }
     }
 
@@ -63,6 +85,8 @@ impl SpatialHash2 {
             ids.clear();
         }
         self.count = 0;
+        self.all.clear();
+        self.oversized.clear();
         self.clears_since_compact += 1;
         if self.clears_since_compact >= 256 {
             self.clears_since_compact = 0;
@@ -90,10 +114,26 @@ impl SpatialHash2 {
             return;
         }
         self.count += 1;
+        self.all.push(body_id);
+
+        // Cells spanned per axis, computed in float to avoid overflow on
+        // extreme-but-finite coordinates (integer casts below saturate).
+        let span_x = (max.x - min.x) / self.cell_size;
+        let span_y = (max.y - min.y) / self.cell_size;
+        let cells_f = (span_x + 1.0) * (span_y + 1.0);
+        let origin_f = (min.x.abs().max(max.x.abs()) / self.cell_size)
+            .max(min.y.abs().max(max.y.abs()) / self.cell_size);
+
+        // Oversized (too many cells, or coords beyond safe cell indices):
+        // skip the grid and pair against the whole scene in `collect_pairs`.
+        if cells_f > Self::MAX_CELLS_PER_BODY as f32 || origin_f > Self::MAX_CELL_INDEX {
+            self.oversized.push(body_id);
+            return;
+        }
 
         // Calculate which cells this body overlaps.
         // Use floor (not truncation) so negative coords map correctly,
-        // and do NOT clamp to 0 — CellKey supports negative cells.
+        // and do NOT clamp to 0 �?" CellKey supports negative cells.
         let cell_min_x = (min.x / self.cell_size).floor() as i32;
         let cell_min_y = (min.y / self.cell_size).floor() as i32;
         let cell_max_x = (max.x / self.cell_size).floor() as i32;
@@ -131,6 +171,17 @@ impl SpatialHash2 {
                     let b = cell_ids[j];
                     // Canonical pair key.
                     out.push(if a < b { (a, b) } else { (b, a) });
+                }
+            }
+        }
+        // Oversized bodies are not in the grid: pair each against every
+        // body (their huge AABBs overlap anything in range). Determinism
+        // holds — `all`/`oversized` are insertion-ordered and the final
+        // sort+dedup canonicalizes.
+        for &o in &self.oversized {
+            for &b in &self.all {
+                if o != b {
+                    out.push(if o < b { (o, b) } else { (b, o) });
                 }
             }
         }
@@ -195,6 +246,40 @@ mod tests {
         hash.clear();
 
         assert!(hash.is_empty());
+    }
+
+    #[test]
+    fn test_oversized_body_pairs_with_all_and_is_fast() {
+        // A body too large for the grid (radius 1000 -> ~4M cells) must
+        // not hang insert, and must still pair with every other body.
+        let mut hash = SpatialHash2::new(1.0);
+        let t = std::time::Instant::now();
+        hash.insert(0, Vec2::new(-1000.0, -1000.0), Vec2::new(1000.0, 1000.0));
+        // A far-away small body (no cell overlap with the huge AABB's
+        // center region would be irrelevant: the huge body overlaps it).
+        hash.insert(1, Vec2::new(500.0, 500.0), Vec2::new(501.0, 501.0));
+        assert!(
+            t.elapsed().as_millis() < 500,
+            "oversized insert must be fast, took {:?}",
+            t.elapsed()
+        );
+
+        let pairs = hash.get_pairs();
+        assert!(
+            pairs.contains(&(0, 1)),
+            "oversized body must pair with the small body"
+        );
+    }
+
+    #[test]
+    fn test_normal_body_stays_in_grid() {
+        // A normal-sized body never takes the oversized path: two
+        // overlapping small bodies still pair via cells.
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        hash.insert(1, Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0));
+        assert!(hash.oversized.is_empty());
+        assert!(hash.get_pairs().contains(&(0, 1)));
     }
 
     #[test]

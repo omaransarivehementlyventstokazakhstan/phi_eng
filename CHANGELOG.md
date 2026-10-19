@@ -38,6 +38,32 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Two-phase SPH test**: `sph_two_phase_heavy_sinks` — a heavy droplet
   (phase 0) submerged in light fluid (phase 1) sinks under gravity.
 
+### Fixed
+- **Broadphase hang on oversized bodies (Rust + C#)**: the 2D spatial
+  hash inserted a body into *every* cell its AABB overlapped, so a large
+  body (e.g. a 1000-unit radius circle at cell size 1.0) touched
+  millions of cells and stalled the step. Bodies whose AABB exceeds
+  `SpatialHash2::MAX_CELLS_PER_BODY` (~4096 cells) are now tracked in an
+  oversized list and paired against the whole scene — correctness is
+  preserved (they still collide with everything) while insert cost stays
+  bounded. Ordinary scenes never trigger it (bit-identical trajectories).
+- **Property tests generated pathological shapes**: the proptest shape
+  strategies drew dimensions up to 1000 units, which is what triggered
+  the broadphase hang above; shape sizes are now bounded to a physically
+  sane 0.1–5.0 units (`energy`/`determinism`/`non-finite` property tests
+  went from a multi-hour hang to <0.1 s).
+
+### CI
+- **Caching + timeouts**: every Rust job now uses `Swatinem/rust-cache`
+  and the .NET jobs use the `setup-dotnet` NuGet cache, so runs no longer
+  rebuild all dependencies from scratch. Every job has an explicit
+  `timeout-minutes` (30 for the test jobs) so a future hang fails fast
+  instead of consuming the 6-hour default.
+- **Release soak job**: a new `rust-soak` job runs the full workspace
+  suite under `--release`, pinning the determinism hashes and allocation
+  counts to optimized-code results (the regime where vectorization / FMA
+  contraction would alter floats).
+
 ### Changed
 - **Near-zero-allocation steady state**: the broadphase grid
   (`SpatialHash2`), the contact cache (`World2/3::contact_cache`), and
