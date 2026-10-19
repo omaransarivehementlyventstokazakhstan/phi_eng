@@ -12,9 +12,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     N11-N15  never-guess / self-heal policy
     S16-S21  solver numerical limits
     D22-D27  2D/3D dispatch + shape edges
-    F28-F36  cross-language / FFI boundary (F28-F30 C#-only by nature,
+    F28-F40  cross-language / FFI boundary (F28-F30 C#-only by nature,
              exempt; F31-F33 native joint bridge, F34-F36 native snapshots,
-             mirrored in Rust FFI tests)
+             mirrored in Rust FFI tests; F40 managed-file/native-core
+             cross-boundary check, C#-only by nature (it needs the native
+             DLL on both sides), exempt)
     V01-V11  runtime validation layer (mirrored both languages)
     J31-J44  joint constraints (mirrored both languages)
     E01-E07  snapshots save/load (mirrored both languages)
@@ -49,10 +51,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# F28-F30, F36 are C#-only by nature: F28-F30 predate the mirror blocks,
-# and F36 executes the managed loader against a Rust-written file (the
-# Rust side pins the writer half via e07/f34 round-trips).
-EXEMPT_CS_ONLY = {"F28", "F29", "F30", "F36"}
+# F28-F30, F36, F40 are C#-only by nature: F28-F30 predate the mirror blocks,
+# F36 executes the managed loader against a Rust-written file (the
+# Rust side pins the writer half via e07/f34 round-trips), and F40
+# executes the Rust loader against a managed-written file (it needs the
+# native DLL on both sides).
+EXEMPT_CS_ONLY = {"F28", "F29", "F30", "F36", "F40"}
 
 RUST_FN = re.compile(r"\bfn\s+([A-Za-z])(\d{2})\w*")
 CS_METHOD = re.compile(r"public\s+(?:unsafe\s+)?(?:void|async\s+Task)\s+([A-Za-z])(\d{2})\w*\s*\(")

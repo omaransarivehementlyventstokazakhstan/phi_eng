@@ -101,7 +101,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v9 (loaders accept v3–v9; older unknown versions are rejected, never misparsed) |
+| Snapshot schema | v10 (loaders accept v3–v10; older unknown versions are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 
@@ -295,16 +295,22 @@ contact for that frame rather than a guessed depth.
 - **Thermodynamics & radiation (2D and 3D, Rust core + FFI):**
   per-body temperature (Kelvin, default 293.15 K) evolved by a thermal
   phase running after integration: contact-driven **conduction**,
-  Stefan–Boltzmann T⁴ **radiation** (ambient + body-to-body, unoccluded,
-  distance-bounded), and Newtonian **convection** to ambient temperature.
-  Material carries `specific_heat`, `thermal_conductivity`, `emissivity`;
+  Stefan–Boltzmann T⁴ **radiation** (ambient + body-to-body, distance-
+  bounded), and Newtonian **convection** to ambient temperature. Material
+  carries `specific_heat`, `thermal_conductivity`, `emissivity`;
   `ThermalConfig2/3` toggles each mechanism plus clamps and the radiation
   cutoff. Off by default — bit-identical trajectories. Static bodies act
-  as fixed-temperature reservoirs. Crosses FFI
+  as fixed-temperature reservoirs. Three opt-in sub-features: radiation
+  **occlusion** (a third body blocks the line of sight), **forced
+  convection** (`h + h_forced·|v|`), and **thermal expansion** (the shape
+  scales by `1 + alpha·(T − T_ref)`, applied relative to the authored
+  shape so the factor never compounds). Crosses FFI
   (`phieng_world[_3]_set/get_thermal_config`,
   `set/get_body_temperature`, `set/get_body_thermal_material`) and
-  persists in schema v8. The managed C# mirror (`PhiEng.Dynamics`)
-  does not step thermal yet — use `PhiNativeWorld(3)` for thermal sims.
+  persists in schema v8 (sub-features in v10). The managed C# mirror
+  (`PhiEng.Dynamics`) steps the same thermal subsystem; its snapshot
+  layout is byte-identical to the Rust writer's, so a file written by
+  either engine loads in the other (F40).
 - **Broad-phase tiers (2D and 3D, both languages):** `BroadphaseMode`
   (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
   dynamic AABB tree backend for 2D and 3D, and an explicit O(n²) brute

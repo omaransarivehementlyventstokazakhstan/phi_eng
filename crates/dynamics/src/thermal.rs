@@ -1541,6 +1541,411 @@ mod tests {
         );
     }
 
+    // ----------------------------------------------------------------
+    // Managed-mirror parity block (T26-T37).
+    //
+    // These mirror the managed C# tests in
+    // `tests/PhiEng.Tests/ThermalManagedTests.cs`, which drive the same
+    // scenarios through the pure-managed `World2`. The two engines have
+    // separate solver implementations, so the assertions are on the
+    // qualitative outcome (which way the heat flowed, whether the shape
+    // grew), not on bit-equal numbers.
+    // ----------------------------------------------------------------
+
+    /// Builds a 2D world with the given thermal config and one dynamic
+    /// circle body at `temperature`.
+    fn managed_world_2d(config: ThermalConfig2D, temperature: f32) -> crate::world::World2 {
+        use crate::body::{RigidBody2, Shape2};
+        let mut w = crate::world::World2::new();
+        w.thermal.config = config;
+        let mut body = RigidBody2::new(0);
+        body.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        body.temperature = temperature;
+        w.add_body(body).expect("adds body");
+        w
+    }
+
+    /// T26: conduction between two contacting bodies reaches equilibrium.
+    #[test]
+    fn t26_managed_conduction_reaches_equilibrium() {
+        use crate::body::{RigidBody2, Shape2};
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: true,
+            radiation_enabled: false,
+            convection_enabled: false,
+            ambient_temperature: 200.0,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = crate::world::World2::new();
+        w.thermal.config = config;
+        w.add_static_body(Vec2::new(0.5, 0.0), Shape2::Circle { radius: 1.0 })
+            .expect("adds static body");
+        let mut ball = RigidBody2::new(1);
+        ball.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        ball.temperature = 400.0;
+        w.add_body(ball).expect("adds body");
+        for body in w.bodies.iter_mut() {
+            body.material.specific_heat = 900.0;
+            body.material.thermal_conductivity = 10.0;
+        }
+
+        for _ in 0..500 {
+            w.step(1.0 / 60.0);
+        }
+
+        let hot = w.bodies[1].temperature;
+        let cold = w.bodies[0].temperature;
+        assert!(hot < 400.0 && hot > 200.0, "hot body must cool: {}", hot);
+        assert!(cold >= 200.0, "cold body must warm or hold: {}", cold);
+    }
+
+    /// T27: a hot body radiates heat away.
+    #[test]
+    fn t27_managed_radiation_cools_hot_body() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: false,
+            radiation_enabled: true,
+            convection_enabled: false,
+            ambient_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 500.0);
+        for _ in 0..100 {
+            w.step(1.0 / 60.0);
+        }
+        assert!(
+            w.bodies[0].temperature < 500.0,
+            "hot body must radiate heat away: {}",
+            w.bodies[0].temperature
+        );
+    }
+
+    /// T28: a cold body absorbs radiation from the environment.
+    #[test]
+    fn t28_managed_radiation_warms_cold_body() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: false,
+            radiation_enabled: true,
+            convection_enabled: false,
+            ambient_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 200.0);
+        for _ in 0..100 {
+            w.step(1.0 / 60.0);
+        }
+        assert!(
+            w.bodies[0].temperature > 200.0,
+            "cold body must absorb radiation: {}",
+            w.bodies[0].temperature
+        );
+    }
+
+    /// T29: the temperature is clamped to the configured maximum.
+    #[test]
+    fn t29_managed_temperature_clamped_at_max() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: false,
+            radiation_enabled: false,
+            convection_enabled: true,
+            ambient_temperature: 1000.0,
+            max_temperature: 400.0,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 100.0);
+        for _ in 0..200 {
+            w.step(1.0 / 60.0);
+        }
+        assert!(
+            w.bodies[0].temperature <= 400.0 + 1e-3,
+            "temperature must respect the cap: {}",
+            w.bodies[0].temperature
+        );
+    }
+
+    /// T30: a static body is an infinite-capacity thermal reservoir.
+    #[test]
+    fn t30_managed_static_body_is_reservoir() {
+        use crate::body::{RigidBody2, Shape2};
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: true,
+            radiation_enabled: false,
+            convection_enabled: true,
+            ambient_temperature: 200.0,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = crate::world::World2::new();
+        w.thermal.config = config;
+        w.add_static_body(Vec2::new(0.5, 0.0), Shape2::Circle { radius: 1.0 })
+            .expect("adds static body");
+        // The reservoir sits at the ambient temperature.
+        w.bodies[0].temperature = 200.0;
+        let mut ball = RigidBody2::new(1);
+        ball.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        ball.temperature = 400.0;
+        w.add_body(ball).expect("adds body");
+
+        for _ in 0..300 {
+            w.step(1.0 / 60.0);
+        }
+
+        assert_eq!(w.bodies[0].temperature, 200.0);
+        assert!(
+            w.bodies[1].temperature < 400.0,
+            "the dynamic body must cool: {}",
+            w.bodies[1].temperature
+        );
+    }
+
+    /// T31: a disabled thermal config is a no-op.
+    #[test]
+    fn t31_managed_disabled_config_is_noop() {
+        let config = ThermalConfig2D {
+            enabled: false,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 400.0);
+        for _ in 0..100 {
+            w.step(1.0 / 60.0);
+        }
+        assert_eq!(w.bodies[0].temperature, 400.0);
+    }
+
+    /// T32: the managed thermal phase is deterministic.
+    #[test]
+    fn t32_managed_thermal_determinism() {
+        let run = || {
+            let config = ThermalConfig2D {
+                enabled: true,
+                ambient_temperature: 250.0,
+                max_temperature_rate: 10000.0,
+                ..Default::default()
+            };
+            let mut w = managed_world_2d(config, 400.0);
+            for _ in 0..100 {
+                w.step(1.0 / 60.0);
+            }
+            w.bodies[0].temperature
+        };
+        assert_eq!(run(), run());
+    }
+
+    /// T33: radiation occlusion blocks the exchange between two bodies
+    /// when a third body lies between them.
+    #[test]
+    fn t33_managed_radiation_occlusion_blocks_exchange() {
+        use crate::body::{RigidBody2, Shape2};
+        let build = |occlusion: bool| {
+            let config = ThermalConfig2D {
+                enabled: true,
+                conduction_enabled: false,
+                radiation_enabled: true,
+                convection_enabled: false,
+                radiation_occlusion: occlusion,
+                ambient_temperature: 293.15,
+                max_temperature_rate: 10000.0,
+                ..Default::default()
+            };
+            let mut w = crate::world::World2::new();
+            w.thermal.config = config;
+            for (i, (x, temp)) in [(0.0f32, 600.0f32), (2.0, 300.0), (1.0, 400.0)]
+                .into_iter()
+                .enumerate()
+            {
+                let mut body = RigidBody2::new(i);
+                body.set_shape(Shape2::Circle { radius: 0.4 }, 1.0)
+                    .expect("valid shape");
+                body.transform.position = Vec2::new(x, 0.0);
+                body.temperature = temp;
+                w.add_body(body).expect("adds body");
+            }
+            for _ in 0..10 {
+                w.step(1.0 / 60.0);
+            }
+            w.bodies[0].temperature
+        };
+        let blocked = build(true);
+        let unblocked = build(false);
+        assert!(
+            blocked > unblocked,
+            "occlusion must reduce body-to-body exchange: blocked {} vs unblocked {}",
+            blocked,
+            unblocked
+        );
+    }
+
+    /// T34: forced convection cools a moving body faster.
+    #[test]
+    fn t34_managed_forced_convection_cools_moving_body_faster() {
+        use crate::body::{RigidBody2, Shape2};
+        let run = |speed: f32| {
+            let config = ThermalConfig2D {
+                enabled: true,
+                conduction_enabled: false,
+                radiation_enabled: false,
+                convection_enabled: true,
+                forced_convection_coefficient: 50.0,
+                ambient_temperature: 293.15,
+                max_temperature_rate: 10000.0,
+                ..Default::default()
+            };
+            let mut w = crate::world::World2::new();
+            w.thermal.config = config;
+            let mut body = RigidBody2::new(0);
+            body.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+                .expect("valid shape");
+            body.temperature = 500.0;
+            body.velocity = Vec2::new(speed, 0.0);
+            w.add_body(body).expect("adds body");
+            for _ in 0..60 {
+                w.step(1.0 / 60.0);
+            }
+            w.bodies[0].temperature
+        };
+        let still = run(0.0);
+        let moving = run(10.0);
+        assert!(
+            moving < still,
+            "moving body must cool faster: moving {} vs still {}",
+            moving,
+            still
+        );
+    }
+
+    /// T35: thermal expansion scales a hot body's shape to the target
+    /// factor, without compounding.
+    #[test]
+    fn t35_managed_expansion_scales_shape() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: false,
+            radiation_enabled: false,
+            convection_enabled: false,
+            expansion_coefficient: 1.0e-3,
+            expansion_reference_temperature: 293.15,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 500.0);
+        let radius_before = w.bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        for _ in 0..10 {
+            w.step(1.0 / 60.0);
+        }
+        let radius_after = w.bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        assert!(
+            radius_after > radius_before,
+            "hot body must expand: {} -> {}",
+            radius_before,
+            radius_after
+        );
+        let expected = 1.0 + 1.0e-3 * (500.0 - 293.15);
+        assert!(
+            (radius_after - expected).abs() < 1e-4,
+            "expected scale {}, got {}",
+            expected,
+            radius_after
+        );
+    }
+
+    /// T36: expansion is opt-in — with the default (zero) coefficient the
+    /// shape must not change.
+    #[test]
+    fn t36_managed_expansion_disabled_is_noop() {
+        let config = ThermalConfig2D {
+            enabled: true,
+            conduction_enabled: false,
+            radiation_enabled: false,
+            convection_enabled: false,
+            max_temperature_rate: 10000.0,
+            ..Default::default()
+        };
+        let mut w = managed_world_2d(config, 500.0);
+        let radius_before = w.bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        for _ in 0..10 {
+            w.step(1.0 / 60.0);
+        }
+        let radius_after = w.bodies[0]
+            .shape
+            .as_ref()
+            .map(|s| s.bounding_radius())
+            .unwrap_or(0.0);
+        assert_eq!(radius_before, radius_after);
+    }
+
+    /// T37: the thermal state round-trips through a snapshot (per-body
+    /// temperature, material thermal properties, the config and the
+    /// applied expansion factor).
+    #[test]
+    fn t37_managed_thermal_snapshot_roundtrip() {
+        use crate::body::{RigidBody2, Shape2};
+        let mut w = crate::world::World2::new();
+        w.thermal.config = ThermalConfig2D {
+            enabled: true,
+            ambient_temperature: 320.0,
+            convection_coefficient: 12.5,
+            radiation_occlusion: true,
+            forced_convection_coefficient: 7.25,
+            expansion_coefficient: 1.5e-4,
+            expansion_reference_temperature: 280.0,
+            max_temperature_rate: 42.0,
+            ..Default::default()
+        };
+        let mut body = RigidBody2::new(0);
+        body.set_shape(Shape2::Circle { radius: 1.0 }, 1.0)
+            .expect("valid shape");
+        body.temperature = 456.0;
+        body.expansion_scale = 1.25;
+        body.material.specific_heat = 1234.0;
+        body.material.thermal_conductivity = 5.5;
+        body.material.emissivity = 0.42;
+        w.add_body(body).expect("adds body");
+
+        let bytes = crate::snapshot::world2_to_binary(&w, crate::snapshot::LoadMode::Exact)
+            .expect("serializes");
+        let back = crate::snapshot::world2_from_binary(&bytes, crate::snapshot::LoadMode::Exact)
+            .expect("deserializes");
+
+        assert!(back.thermal.config.enabled);
+        assert_eq!(back.thermal.config.ambient_temperature, 320.0);
+        assert_eq!(back.thermal.config.convection_coefficient, 12.5);
+        assert!(back.thermal.config.radiation_occlusion);
+        assert_eq!(back.thermal.config.forced_convection_coefficient, 7.25);
+        assert_eq!(back.thermal.config.expansion_coefficient, 1.5e-4);
+        assert_eq!(back.thermal.config.expansion_reference_temperature, 280.0);
+        assert_eq!(back.thermal.config.max_temperature_rate, 42.0);
+
+        assert_eq!(back.bodies[0].temperature, 456.0);
+        assert_eq!(back.bodies[0].expansion_scale, 1.25);
+        assert_eq!(back.bodies[0].material.specific_heat, 1234.0);
+        assert_eq!(back.bodies[0].material.thermal_conductivity, 5.5);
+        assert_eq!(back.bodies[0].material.emissivity, 0.42);
+    }
+
     /// T23: expansion must not compound.
     ///
     /// A body held at a constant temperature has a *fixed* target scale.

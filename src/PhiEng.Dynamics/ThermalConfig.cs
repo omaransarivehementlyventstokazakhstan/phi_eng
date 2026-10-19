@@ -7,12 +7,37 @@ namespace PhiEng.Dynamics;
 /// </summary>
 public class ThermalConfig2
 {
+    /// <summary>Default body temperature in Kelvin (293.15 K).</summary>
+    public const float DefaultTemperature = 293.15f;
+
+    /// <summary>Stefan-Boltzmann constant sigma in W/(m²·K⁴).</summary>
+    public const float DefaultStefanBoltzmann = 5.67e-8f;
+
+    /// <summary>Upper temperature clamp (5000 K).</summary>
+    public const float DefaultMaxTemperature = 5000.0f;
+
+    /// <summary>Lower temperature clamp (0 K, absolute zero).</summary>
+    public const float DefaultMinTemperature = 0.0f;
+
+    /// <summary>
+    /// Minimum conduction distance, guarding against a zero-length
+    /// characteristic size.
+    /// </summary>
+    public const float MinConductionDistance = 1e-4f;
+
+    /// <summary>
+    /// Conduction scaling factor that makes thermal dynamics visible on
+    /// game timescales (seconds) rather than minutes for realistic
+    /// materials. Mirrors Rust <c>CONDUCTION_SCALE</c>.
+    /// </summary>
+    public const float ConductionScale = 500.0f;
+
     /// <summary>Master switch for thermal stepping.</summary>
     public bool Enabled { get; set; } = false;
     /// <summary>Ambient/environment temperature in Kelvin (default 293.15 K).</summary>
-    public float AmbientTemperature { get; set; } = 293.15f;
+    public float AmbientTemperature { get; set; } = DefaultTemperature;
     /// <summary>Stefan–Boltzmann constant σ in W/(m²·K⁴).</summary>
-    public float StefanBoltzmann { get; set; } = 5.67e-8f;
+    public float StefanBoltzmann { get; set; } = DefaultStefanBoltzmann;
     /// <summary>Convection coefficient h in W/(m²·K).</summary>
     public float ConvectionCoefficient { get; set; } = 10.0f;
     /// <summary>Enable body-to-body + body-to-environment radiation.</summary>
@@ -22,9 +47,9 @@ public class ThermalConfig2
     /// <summary>Enable ambient convection.</summary>
     public bool ConvectionEnabled { get; set; } = true;
     /// <summary>Safety cap on temperature in Kelvin.</summary>
-    public float MaxTemperature { get; set; } = 5000.0f;
+    public float MaxTemperature { get; set; } = DefaultMaxTemperature;
     /// <summary>Safety floor in Kelvin (absolute zero).</summary>
-    public float MinTemperature { get; set; } = 0.0f;
+    public float MinTemperature { get; set; } = DefaultMinTemperature;
     /// <summary>Radiation cutoff as multiplier of combined bounding radii.</summary>
     public float RadiationRadiusFactor { get; set; } = 5.0f;
     /// <summary>Maximum temperature change per step in Kelvin.</summary>
@@ -52,7 +77,44 @@ public class ThermalConfig2
     public float ExpansionCoefficient { get; set; } = 0.0f;
 
     /// <summary>Reference temperature (K) the expansion is measured against.</summary>
-    public float ExpansionReferenceTemperature { get; set; } = 293.15f;
+    public float ExpansionReferenceTemperature { get; set; } = DefaultTemperature;
+
+    /// <summary>
+    /// True when the thermal phase would do work: the subsystem is
+    /// enabled, at least one heat-transfer mechanism is on, and the
+    /// ambient temperature is usable. Mirrors Rust
+    /// <c>ThermalConfig2D::is_active</c>.
+    /// </summary>
+    public bool IsActive() =>
+        Enabled
+        && (RadiationEnabled || ConductionEnabled || ConvectionEnabled)
+        && float.IsFinite(AmbientTemperature)
+        && AmbientTemperature > 0.0f;
+
+    /// <summary>
+    /// True when every field still holds its default value. Used by the
+    /// snapshot writer to keep default worlds byte-identical on older
+    /// schemas.
+    /// </summary>
+    public bool IsDefault()
+    {
+        var d = new ThermalConfig2();
+        return Enabled == d.Enabled
+            && AmbientTemperature == d.AmbientTemperature
+            && StefanBoltzmann == d.StefanBoltzmann
+            && ConvectionCoefficient == d.ConvectionCoefficient
+            && RadiationEnabled == d.RadiationEnabled
+            && ConductionEnabled == d.ConductionEnabled
+            && ConvectionEnabled == d.ConvectionEnabled
+            && MaxTemperature == d.MaxTemperature
+            && MinTemperature == d.MinTemperature
+            && RadiationRadiusFactor == d.RadiationRadiusFactor
+            && MaxTemperatureRate == d.MaxTemperatureRate
+            && RadiationOcclusion == d.RadiationOcclusion
+            && ForcedConvectionCoefficient == d.ForcedConvectionCoefficient
+            && ExpansionCoefficient == d.ExpansionCoefficient
+            && ExpansionReferenceTemperature == d.ExpansionReferenceTemperature;
+    }
 }
 
 /// <summary>

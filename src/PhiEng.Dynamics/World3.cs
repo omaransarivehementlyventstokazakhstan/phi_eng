@@ -86,6 +86,21 @@ public class World3
     // Scratch buffers reused every step so the per-frame narrowphase
     // performs no allocations in the steady state.
     private readonly List<ContactConstraint3D> _constraints = new();
+
+    /// <summary>
+    /// Thermal simulation tunables for this world. The thermal phase
+    /// runs after velocity integration and before the sleep check, exactly
+    /// as in the Rust core. Disabled by default, so default trajectories
+    /// are bit-identical.
+    /// </summary>
+    public ThermalConfig2 Thermal
+    {
+        get => _thermal.Config;
+        set => _thermal.Config = value;
+    }
+
+    /// <summary>Per-world thermal scratch (heat flux, cached areas).</summary>
+    private readonly ThermalState2 _thermal = new();
     private readonly List<(int, int)> _pairs = new();
     private readonly List<Vector3> _points = new();
     private readonly List<Vector3> _clipTmp = new();
@@ -423,6 +438,14 @@ public class World3
             foreach (var body in Bodies)
                 if (!body.IsSleeping) body.Integrate(dt);
         }
+
+        // 5c. Thermal transfer (conduction / radiation / convection),
+        // then 5d. Thermal expansion. The phase runs after integration
+        // and before the sleep check, matching the Rust core. It does not
+        // modify velocity, so it neither wakes sleeping bodies nor is
+        // affected by sleep.
+        ThermalIntegration.StepThermal3(Bodies, constraints, _thermal.Config, _thermal, dt);
+        ThermalIntegration.ApplyExpansion3(Bodies, _thermal.Config);
 
         // Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; mirrors Rust).

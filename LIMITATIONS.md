@@ -330,12 +330,16 @@ occlusion, forced convection, and thermal expansion. Documented gaps:
   trajectories agree on statistical/energy/amplitude bounds but are not
   bit-equal (same rule as ambient turbulence and gravity). T01–T24 pin
   per-backend determinism, not cross-language bit-equality.
-- **Managed C# mirror does not step thermal.** `PhiEng.Dynamics`
-  `World2/3` and its snapshot ignore thermal state (no `Temperature` on
-  managed bodies, no thermal config block); thermal sims must go through
-  `PhiNativeWorld(3)` (FFI into the Rust core), where stepping, FFI, and
-  snapshots are fully covered. A managed stage-by-stage mirror (like the
-  fluid solver) is future work.
+- **Managed C# thermal mirror covers fewer shapes.** `PhiEng.Dynamics`
+  `World2/3` now steps the same thermal subsystem as the Rust core
+  (conduction, radiation, convection, plus the three opt-in
+  sub-features), and its snapshot layout is byte-identical to the Rust
+  writer's, so a file written by either engine loads in the other. Gaps:
+  the managed side has no `ConvexMesh` shape (the Rust 3D hull is a
+  placeholder in *both* engines — mass 1, identity inertia — so the two
+  agree), and the managed 2D/3D solvers are independent
+  implementations, so thermal trajectories agree on the qualitative
+  outcome (which way the heat flowed) rather than bit-for-bit.
 
 
 

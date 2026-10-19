@@ -44,6 +44,22 @@ This project follows [Semantic Versioning](https://semver.org/) and
   (phase 0) submerged in light fluid (phase 1) sinks under gravity.
 
 ### Fixed
+- **Managed C# snapshot: the CCD tier was 4 bytes wide instead of 1.**
+  The managed writer emitted `Ccd.Tier` as a 32-bit int while the Rust
+  writer emits a one-byte tag, so every v6+ payload was misaligned
+  between the two engines. Latent until now: a managed world only
+  wrote a v6+ payload when the CCD config was non-default, and the
+  native→managed direction (F36) used a default (v3) payload. Now
+  fixed on both sides, and the managed snapshot matches the Rust
+  layout byte-for-byte.
+- **Managed C# `SetShape`/`PhysicsMaterial.Clone` dropped the thermal
+  material properties.** Both rebuilt the material from
+  `(friction, restitution, density)` only, silently resetting
+  `SpecificHeat`, `ThermalConductivity` and `Emissivity` to their
+  defaults. The Rust `set_shape` only touches `material.density`.
+  Harmless before the managed thermal mirror existed; now that the
+  managed engine steps thermal, it would have reset the thermal
+  material on every expansion rescale.
 - **Parallel island solver could hang the run (Rust, 2D)**: the shared
   max-applied-impulse slot had a data race. The barrier orders
   "arrived at iteration *g*" against "left iteration *g*", but nothing
@@ -117,6 +133,21 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **Managed C# thermal mirror**: `PhiEng.Dynamics` `World2/3` now step
+  the same thermal subsystem as the Rust core — conduction, radiation,
+  convection, plus the three opt-in sub-features (radiation occlusion,
+  forced convection, thermal expansion). The managed phase runs in the
+  same position as the Rust one (after velocity integration, before the
+  sleep check). `RigidBody2/3` gained `Temperature` and `ExpansionScale`;
+  `ThermalConfig2` gained `IsActive()`/`IsDefault()` and the shared
+  physical constants; the new `ThermalIntegration`/`ThermalGeometry`
+  types carry the ported algorithm and the shape-geometry helpers.
+  The managed snapshot layout is now **byte-identical to the Rust
+  writer's** (schema v10, including the v8 thermal block, the v9
+  collision-tier block and the broad-phase tag the managed engine does
+  not model), so a file written by either engine loads in the other.
+  Parity block T26–T37 (mirrored Rust ↔ managed C#) plus F40, which
+  loads a managed-written file in the Rust core.
 - **Thermal sub-features (Rust + managed C#)**: three opt-in additions to
   the thermal subsystem, all off by default so default trajectories stay
   bit-identical.

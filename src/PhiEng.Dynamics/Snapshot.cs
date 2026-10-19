@@ -35,12 +35,21 @@ public static class Snapshot
     /// v4 adds the gravity config block and per-body gravity scales; v5
     /// adds the ambient-force config block (spring/drag/turbulence), the
     /// simulation clock, and per-body ambient scales; v6 adds the CCD
-    /// config block; v7 adds the solver friction/restitution switches.
+    /// config block; v7 adds the solver friction/restitution switches;
+    /// v8 adds the thermal config block (with the broad-phase backend
+    /// tag) and the material/per-body thermal fields; v9 adds the
+    /// collision-tier ceiling; v10 adds the thermal sub-feature block
+    /// (radiation occlusion, forced convection, thermal expansion) and
+    /// the per-body applied expansion factor.
     /// Writers emit v3 for default worlds, v4 for gravity-only worlds, v5
     /// for ambient/fluid worlds, v6 for CCD worlds (byte-compatible with
-    /// older files); anything with non-default solver switches uses v7.
+    /// older files), v7 for worlds with non-default solver switches, and
+    /// v10 for worlds with an active thermal config or any non-default
+    /// thermal sub-feature. The binary layout is byte-identical to the
+    /// Rust writer's, so a file written by either engine loads in the
+    /// other.
     /// </summary>
-    public const uint SchemaVersion = 7;
+    public const uint SchemaVersion = 10;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -52,10 +61,51 @@ public static class Snapshot
     public const uint CcdSchemaVersion = 6;
 
     /// <summary>
+    /// Schema that introduced the friction/restitution solver switches.
+    /// This gate is deliberately a named constant and NOT
+    /// <see cref="SchemaVersion"/>: tracking the current version would
+    /// silently retarget it whenever the schema is bumped, breaking
+    /// every older payload.
+    /// </summary>
+    public const uint SolverFlagsSchemaVersion = 7;
+
+    /// <summary>
+    /// Schema that introduced the thermal config block (and, in the same
+    /// block, the broad-phase backend tag).
+    /// </summary>
+    public const uint ThermalSchemaVersion = 8;
+
+    /// <summary>Schema that introduced the collision-tier ceiling block.</summary>
+    public const uint CollisionTierSchemaVersion = 9;
+
+    /// <summary>
+    /// Schema that introduced the thermal sub-feature block (radiation
+    /// occlusion, forced convection, thermal expansion).
+    /// </summary>
+    public const uint ThermalExtrasSchemaVersion = 10;
+
+    /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
     /// they load as defaults. Anything outside [3, 6] is rejected.
     /// </summary>
     public const uint MinReadableSchemaVersion = 3;
+
+    /// <summary>
+    /// Broad-phase backend tag written into the schema v8 block. The
+    /// managed engine has no broad-phase concept, so it always writes the
+    /// Rust default (SpatialHash = 1) and a Rust reader therefore gets
+    /// the same behaviour it would have had without the file.
+    /// </summary>
+    private const uint DefaultBroadphaseModeTag = 1;
+
+    /// <summary>
+    /// Collision-tier ceiling written into the schema v9 block. The
+    /// managed engine has no tier concept, so it always writes the Rust
+    /// defaults: the tier system disabled and the ceiling at Tier5
+    /// (full fidelity).
+    /// </summary>
+    private const byte DefaultCollisionTierEnabled = 0;
+    private const uint DefaultCollisionTierMaxTier = 4;
 
     private const byte KindWorld2 = 2;
     private const byte KindWorld3 = 3;
@@ -248,6 +298,37 @@ public static class Snapshot
         [JsonPropertyName("friction")] public float Friction { get; set; }
         [JsonPropertyName("restitution")] public float Restitution { get; set; }
         [JsonPropertyName("density")] public float Density { get; set; }
+        /// <summary>Specific heat capacity J/(kg·K) (schema v8; default 900).</summary>
+        [JsonPropertyName("specific_heat")] public float SpecificHeat { get; set; } = 900.0f;
+        /// <summary>Thermal conductivity W/(m·K) (schema v8; default 1).</summary>
+        [JsonPropertyName("thermal_conductivity")] public float ThermalConductivity { get; set; } = 1.0f;
+        /// <summary>Surface emissivity 0..1 (schema v8; default 0.9).</summary>
+        [JsonPropertyName("emissivity")] public float Emissivity { get; set; } = 0.9f;
+    }
+
+    // ---- Thermal config DTOs (schema v8 / v10) ----
+
+    private sealed class ThermalConfigDto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("ambient_temperature")] public float AmbientTemperature { get; set; } = 293.15f;
+        [JsonPropertyName("stefan_boltzmann")] public float StefanBoltzmann { get; set; } = 5.67e-8f;
+        [JsonPropertyName("convection_coefficient")] public float ConvectionCoefficient { get; set; } = 10.0f;
+        [JsonPropertyName("radiation_enabled")] public bool RadiationEnabled { get; set; } = true;
+        [JsonPropertyName("conduction_enabled")] public bool ConductionEnabled { get; set; } = true;
+        [JsonPropertyName("convection_enabled")] public bool ConvectionEnabled { get; set; } = true;
+        [JsonPropertyName("max_temperature")] public float MaxTemperature { get; set; } = 5000.0f;
+        [JsonPropertyName("min_temperature")] public float MinTemperature { get; set; }
+        [JsonPropertyName("radiation_radius_factor")] public float RadiationRadiusFactor { get; set; } = 5.0f;
+        [JsonPropertyName("max_temperature_rate")] public float MaxTemperatureRate { get; set; } = 100.0f;
+    }
+
+    private sealed class ThermalExtrasDto
+    {
+        [JsonPropertyName("radiation_occlusion")] public bool RadiationOcclusion { get; set; }
+        [JsonPropertyName("forced_convection_coefficient")] public float ForcedConvectionCoefficient { get; set; }
+        [JsonPropertyName("expansion_coefficient")] public float ExpansionCoefficient { get; set; }
+        [JsonPropertyName("expansion_reference_temperature")] public float ExpansionReferenceTemperature { get; set; } = 293.15f;
     }
 
     private sealed class Shape2Dto
@@ -287,6 +368,10 @@ public static class Snapshot
         [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
         /// <summary>Ambient-force coupling multiplier (schema v5; default 1.0).</summary>
         [JsonPropertyName("ambient_scale")] public float AmbientScale { get; set; } = 1.0f;
+        /// <summary>Temperature in Kelvin (schema v8; default 293.15).</summary>
+        [JsonPropertyName("temperature")] public float Temperature { get; set; } = 293.15f;
+        /// <summary>Applied thermal-expansion factor (schema v10; default 1.0).</summary>
+        [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
     }
 
     private sealed class Body3Dto
@@ -306,6 +391,10 @@ public static class Snapshot
         [JsonPropertyName("gravity_scale")] public float GravityScale { get; set; } = 1.0f;
         /// <summary>See <c>Body2Dto.AmbientScale</c>.</summary>
         [JsonPropertyName("ambient_scale")] public float AmbientScale { get; set; } = 1.0f;
+        /// <summary>See <c>Body2Dto.Temperature</c>.</summary>
+        [JsonPropertyName("temperature")] public float Temperature { get; set; } = 293.15f;
+        /// <summary>See <c>Body2Dto.ExpansionScale</c>.</summary>
+        [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
     }
 
     private sealed class Joint2Dto
@@ -636,6 +725,20 @@ public static class Snapshot
         [JsonPropertyName("time")] public float Time { get; set; }
         /// <summary>CCD config (schema v6); defaults so pre-v6 files decode to no-op.</summary>
         [JsonPropertyName("ccd")] public CcdConfigDto Ccd { get; set; } = new();
+        /// <summary>Thermal config (schema v8).</summary>
+        [JsonPropertyName("thermal")] public ThermalConfigDto Thermal { get; set; } = new();
+        /// <summary>Thermal sub-features (schema v10).</summary>
+        [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
+        /// <summary>
+        /// Broad-phase backend tag (schema v8). The managed engine has no
+        /// broad-phase concept; it always carries the Rust default so a
+        /// Rust reader behaves identically.
+        /// </summary>
+        [JsonPropertyName("broadphase_mode")] public uint BroadphaseMode { get; set; } = 1;
+        /// <summary>Collision-tier switch (schema v9); always false here.</summary>
+        [JsonPropertyName("collision_tier_enabled")] public bool CollisionTierEnabled { get; set; }
+        /// <summary>Collision-tier ceiling (schema v9); always Tier5 here.</summary>
+        [JsonPropertyName("collision_tier_max_tier")] public uint CollisionTierMaxTier { get; set; } = 4;
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -664,7 +767,20 @@ public static class Snapshot
             bool hasCcd = !w.Ccd.IsDefault();
             bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasSolverFlags ? SchemaVersion : hasCcd ? CcdSchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            // Schema v10: an active thermal config OR any non-default
+            // thermal sub-feature needs the v10 block. Mirrors the Rust
+            // writer rule exactly.
+            bool hasThermal = w.Thermal.IsActive()
+                || w.Thermal.RadiationOcclusion
+                || w.Thermal.ForcedConvectionCoefficient != 0.0f
+                || w.Thermal.ExpansionCoefficient != 0.0f
+                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            uint schema = hasThermal ? ThermalExtrasSchemaVersion
+                : hasSolverFlags ? SolverFlagsSchemaVersion
+                : hasCcd ? CcdSchemaVersion
+                : hasAmbient ? AmbientSchemaVersion
+                : hasGravity ? GravitySchemaVersion
+                : MinReadableSchemaVersion;
             var dto = new World2Dto
             {
                 Schema = schema,
@@ -716,6 +832,27 @@ public static class Snapshot
                     Tier = (int)w.Ccd.Tier,
                     MaxMovement = w.Ccd.MaxMovement,
                     MaxSubsteps = w.Ccd.MaxSubsteps,
+                },
+                Thermal = new ThermalConfigDto
+                {
+                    Enabled = w.Thermal.Enabled,
+                    AmbientTemperature = w.Thermal.AmbientTemperature,
+                    StefanBoltzmann = w.Thermal.StefanBoltzmann,
+                    ConvectionCoefficient = w.Thermal.ConvectionCoefficient,
+                    RadiationEnabled = w.Thermal.RadiationEnabled,
+                    ConductionEnabled = w.Thermal.ConductionEnabled,
+                    ConvectionEnabled = w.Thermal.ConvectionEnabled,
+                    MaxTemperature = w.Thermal.MaxTemperature,
+                    MinTemperature = w.Thermal.MinTemperature,
+                    RadiationRadiusFactor = w.Thermal.RadiationRadiusFactor,
+                    MaxTemperatureRate = w.Thermal.MaxTemperatureRate,
+                },
+                ThermalExtras = new ThermalExtrasDto
+                {
+                    RadiationOcclusion = w.Thermal.RadiationOcclusion,
+                    ForcedConvectionCoefficient = w.Thermal.ForcedConvectionCoefficient,
+                    ExpansionCoefficient = w.Thermal.ExpansionCoefficient,
+                    ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
@@ -774,6 +911,9 @@ public static class Snapshot
                         Friction = b.Material.Friction,
                         Restitution = b.Material.Restitution,
                         Density = b.Material.Density,
+                        SpecificHeat = b.Material.SpecificHeat,
+                        ThermalConductivity = b.Material.ThermalConductivity,
+                        Emissivity = b.Material.Emissivity,
                     },
                     Shape = shape,
                     Position = V2(b.Transform.Position),
@@ -782,6 +922,8 @@ public static class Snapshot
                     AngularVelocity = b.AngularVelocity,
                     GravityScale = b.GravityScale,
                     AmbientScale = b.AmbientScale,
+                    Temperature = b.Temperature,
+                    ExpansionScale = b.ExpansionScale,
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -922,6 +1064,20 @@ public static class Snapshot
         [JsonPropertyName("time")] public float Time { get; set; }
         /// <summary>CCD config (schema v6); defaults so pre-v6 files decode to no-op.</summary>
         [JsonPropertyName("ccd")] public CcdConfigDto Ccd { get; set; } = new();
+        /// <summary>Thermal config (schema v8).</summary>
+        [JsonPropertyName("thermal")] public ThermalConfigDto Thermal { get; set; } = new();
+        /// <summary>Thermal sub-features (schema v10).</summary>
+        [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
+        /// <summary>
+        /// Broad-phase backend tag (schema v8). The managed engine has no
+        /// broad-phase concept; it always carries the Rust default so a
+        /// Rust reader behaves identically.
+        /// </summary>
+        [JsonPropertyName("broadphase_mode")] public uint BroadphaseMode { get; set; } = 1;
+        /// <summary>Collision-tier switch (schema v9); always false here.</summary>
+        [JsonPropertyName("collision_tier_enabled")] public bool CollisionTierEnabled { get; set; }
+        /// <summary>Collision-tier ceiling (schema v9); always Tier5 here.</summary>
+        [JsonPropertyName("collision_tier_max_tier")] public uint CollisionTierMaxTier { get; set; } = 4;
         [JsonPropertyName("dt")] public float Dt { get; set; }
         [JsonPropertyName("linear_sleep_threshold")] public float LinearSleepThreshold { get; set; }
         [JsonPropertyName("angular_sleep_threshold")] public float AngularSleepThreshold { get; set; }
@@ -947,7 +1103,20 @@ public static class Snapshot
             bool hasCcd = !w.Ccd.IsDefault();
             bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            uint schema = hasSolverFlags ? SchemaVersion : hasCcd ? CcdSchemaVersion : hasAmbient ? AmbientSchemaVersion : hasGravity ? GravitySchemaVersion : MinReadableSchemaVersion;
+            // Schema v10: an active thermal config OR any non-default
+            // thermal sub-feature needs the v10 block. Mirrors the Rust
+            // writer rule exactly.
+            bool hasThermal = w.Thermal.IsActive()
+                || w.Thermal.RadiationOcclusion
+                || w.Thermal.ForcedConvectionCoefficient != 0.0f
+                || w.Thermal.ExpansionCoefficient != 0.0f
+                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            uint schema = hasThermal ? ThermalExtrasSchemaVersion
+                : hasSolverFlags ? SolverFlagsSchemaVersion
+                : hasCcd ? CcdSchemaVersion
+                : hasAmbient ? AmbientSchemaVersion
+                : hasGravity ? GravitySchemaVersion
+                : MinReadableSchemaVersion;
             var dto = new World3Dto
             {
                 Schema = schema,
@@ -999,6 +1168,27 @@ public static class Snapshot
                     Tier = (int)w.Ccd.Tier,
                     MaxMovement = w.Ccd.MaxMovement,
                     MaxSubsteps = w.Ccd.MaxSubsteps,
+                },
+                Thermal = new ThermalConfigDto
+                {
+                    Enabled = w.Thermal.Enabled,
+                    AmbientTemperature = w.Thermal.AmbientTemperature,
+                    StefanBoltzmann = w.Thermal.StefanBoltzmann,
+                    ConvectionCoefficient = w.Thermal.ConvectionCoefficient,
+                    RadiationEnabled = w.Thermal.RadiationEnabled,
+                    ConductionEnabled = w.Thermal.ConductionEnabled,
+                    ConvectionEnabled = w.Thermal.ConvectionEnabled,
+                    MaxTemperature = w.Thermal.MaxTemperature,
+                    MinTemperature = w.Thermal.MinTemperature,
+                    RadiationRadiusFactor = w.Thermal.RadiationRadiusFactor,
+                    MaxTemperatureRate = w.Thermal.MaxTemperatureRate,
+                },
+                ThermalExtras = new ThermalExtrasDto
+                {
+                    RadiationOcclusion = w.Thermal.RadiationOcclusion,
+                    ForcedConvectionCoefficient = w.Thermal.ForcedConvectionCoefficient,
+                    ExpansionCoefficient = w.Thermal.ExpansionCoefficient,
+                    ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
@@ -1152,6 +1342,9 @@ public static class Snapshot
                         Friction = b.Material.Friction,
                         Restitution = b.Material.Restitution,
                         Density = b.Material.Density,
+                        SpecificHeat = b.Material.SpecificHeat,
+                        ThermalConductivity = b.Material.ThermalConductivity,
+                        Emissivity = b.Material.Emissivity,
                     },
                     Shape = shape,
                     Position = V3(b.Transform.Position),
@@ -1160,6 +1353,8 @@ public static class Snapshot
                     AngularVelocity = V3(b.AngularVelocity),
                     GravityScale = b.GravityScale,
                     AmbientScale = b.AmbientScale,
+                    Temperature = b.Temperature,
+                    ExpansionScale = b.ExpansionScale,
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -1366,6 +1561,39 @@ public static class Snapshot
         };
     }
 
+    /// <summary>
+    /// Rebuilds the thermal config from the v8 block and the v10
+    /// sub-feature block. Older payloads have neither, so they resolve
+    /// to the engine defaults (thermal off).
+    /// </summary>
+    private static ThermalConfig2 ThermalConfigFrom(ThermalConfigDto c, ThermalExtrasDto extras) => new()
+    {
+        Enabled = c.Enabled,
+        AmbientTemperature = Fin(c.AmbientTemperature, "ambient_temperature"),
+        StefanBoltzmann = Fin(c.StefanBoltzmann, "stefan_boltzmann"),
+        ConvectionCoefficient = Fin(c.ConvectionCoefficient, "convection_coefficient"),
+        RadiationEnabled = c.RadiationEnabled,
+        ConductionEnabled = c.ConductionEnabled,
+        ConvectionEnabled = c.ConvectionEnabled,
+        MaxTemperature = Fin(c.MaxTemperature, "max_temperature"),
+        MinTemperature = Fin(c.MinTemperature, "min_temperature"),
+        RadiationRadiusFactor = Fin(c.RadiationRadiusFactor, "radiation_radius_factor"),
+        MaxTemperatureRate = Fin(c.MaxTemperatureRate, "max_temperature_rate"),
+        RadiationOcclusion = extras.RadiationOcclusion,
+        ForcedConvectionCoefficient = Fin(extras.ForcedConvectionCoefficient, "forced_convection_coefficient"),
+        ExpansionCoefficient = Fin(extras.ExpansionCoefficient, "expansion_coefficient"),
+        ExpansionReferenceTemperature = Fin(extras.ExpansionReferenceTemperature, "expansion_reference_temperature"),
+    };
+
+    /// <summary>Rebuilds a material, carrying the thermal properties.</summary>
+    private static PhysicsMaterial MaterialFrom(MaterialDto m) => new(
+        Fin(m.Friction, "friction"),
+        Fin(m.Restitution, "restitution"),
+        Fin(m.Density, "density"),
+        Fin(m.SpecificHeat, "specific_heat"),
+        Fin(m.ThermalConductivity, "thermal_conductivity"),
+        Fin(m.Emissivity, "emissivity"));
+
     private static CcdConfig CcdConfigFrom(CcdConfigDto c)
     {
         if (c.MaxMovement <= 0.0f)
@@ -1429,6 +1657,7 @@ public static class Snapshot
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
             Ccd = CcdConfigFrom(dto.Ccd),
+            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1466,17 +1695,11 @@ public static class Snapshot
             {
                 var shape = ShapeFrom(b.Shape);
                 body.SetShape(shape, Fin(b.Material.Density, "density"));
-                body.SetMaterial(new PhysicsMaterial(
-                    Fin(b.Material.Friction, "friction"),
-                    Fin(b.Material.Restitution, "restitution"),
-                    Fin(b.Material.Density, "density")));
+                body.SetMaterial(MaterialFrom(b.Material));
             }
             else
             {
-                body.Material = new PhysicsMaterial(
-                    Fin(b.Material.Friction, "friction"),
-                    Fin(b.Material.Restitution, "restitution"),
-                    Fin(b.Material.Density, "density"));
+                body.Material = MaterialFrom(b.Material);
             }
             if (b.Rotation.Length != 4)
                 throw new ArgumentException("Body rotation must have 4 components.");
@@ -1491,6 +1714,13 @@ public static class Snapshot
             body.AngularDamping = Fin(b.AngularDamping, "damping");
             body.GravityScale = Fin(b.GravityScale, "gravity_scale");
             body.AmbientScale = Fin(b.AmbientScale, "ambient_scale");
+            body.Temperature = Fin(b.Temperature, "temperature");
+            // The applied expansion factor travels with the shape: the
+            // stored shape is already scaled, so a lost tracker would
+            // make the next expansion step rescale from the wrong base.
+            body.ExpansionScale = Fin(b.ExpansionScale, "expansion_scale") > 0.0f
+                ? Fin(b.ExpansionScale, "expansion_scale")
+                : 1.0f;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1626,6 +1856,7 @@ public static class Snapshot
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
             Ccd = CcdConfigFrom(dto.Ccd),
+            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1662,17 +1893,11 @@ public static class Snapshot
             {
                 var shape = ShapeFrom(b.Shape);
                 body.SetShape(shape, Fin(b.Material.Density, "density"));
-                body.SetMaterial(new PhysicsMaterial(
-                    Fin(b.Material.Friction, "friction"),
-                    Fin(b.Material.Restitution, "restitution"),
-                    Fin(b.Material.Density, "density")));
+                body.SetMaterial(MaterialFrom(b.Material));
             }
             else
             {
-                body.Material = new PhysicsMaterial(
-                    Fin(b.Material.Friction, "friction"),
-                    Fin(b.Material.Restitution, "restitution"),
-                    Fin(b.Material.Density, "density"));
+                body.Material = MaterialFrom(b.Material);
             }
             if (b.Rotation.Length != 4)
                 throw new ArgumentException("Body rotation must have 4 components.");
@@ -1688,6 +1913,13 @@ public static class Snapshot
             body.AngularDamping = Fin(b.AngularDamping, "damping");
             body.GravityScale = Fin(b.GravityScale, "gravity_scale");
             body.AmbientScale = Fin(b.AmbientScale, "ambient_scale");
+            body.Temperature = Fin(b.Temperature, "temperature");
+            // The applied expansion factor travels with the shape: the
+            // stored shape is already scaled, so a lost tracker would
+            // make the next expansion step rescale from the wrong base.
+            body.ExpansionScale = Fin(b.ExpansionScale, "expansion_scale") > 0.0f
+                ? Fin(b.ExpansionScale, "expansion_scale")
+                : 1.0f;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1856,6 +2088,31 @@ public static class Snapshot
 
     // ============ binary payloads (byte-identical layout to Rust) ============
 
+    /// <summary>Reads the schema v8 thermal config block.</summary>
+    private static ThermalConfigDto ReadThermalConfig(BinaryReader r) => new()
+    {
+        Enabled = r.ReadByte() != 0,
+        AmbientTemperature = r.ReadSingle(),
+        StefanBoltzmann = r.ReadSingle(),
+        ConvectionCoefficient = r.ReadSingle(),
+        RadiationEnabled = r.ReadByte() != 0,
+        ConductionEnabled = r.ReadByte() != 0,
+        ConvectionEnabled = r.ReadByte() != 0,
+        MaxTemperature = r.ReadSingle(),
+        MinTemperature = r.ReadSingle(),
+        RadiationRadiusFactor = r.ReadSingle(),
+        MaxTemperatureRate = r.ReadSingle(),
+    };
+
+    /// <summary>Reads the schema v10 thermal sub-feature block.</summary>
+    private static ThermalExtrasDto ReadThermalExtras(BinaryReader r) => new()
+    {
+        RadiationOcclusion = r.ReadByte() != 0,
+        ForcedConvectionCoefficient = r.ReadSingle(),
+        ExpansionCoefficient = r.ReadSingle(),
+        ExpansionReferenceTemperature = r.ReadSingle(),
+    };
+
     private static void WriteSolver(BinaryWriter w, SolverDto s, uint version)
     {
         w.Write(s.Iterations);
@@ -1863,7 +2120,7 @@ public static class Snapshot
         w.Write(s.Baumgarte);
         w.Write(s.EarlyExitTolerance);
         // Schema v7: friction/restitution switches.
-        if (version >= SchemaVersion)
+        if (version >= SolverFlagsSchemaVersion)
         {
             w.Write(s.Friction);
             w.Write(s.Restitution);
@@ -2110,9 +2367,44 @@ public static class Snapshot
         if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
-            w.Write(dto.Ccd.Tier);
+            w.Write((byte)dto.Ccd.Tier);
             w.Write(dto.Ccd.MaxMovement);
             w.Write(dto.Ccd.MaxSubsteps);
+        }
+        // Schema v8: thermal config block, then the broad-phase backend
+        // tag (same block in the Rust layout).
+        bool thermalV8 = dto.Schema >= ThermalSchemaVersion;
+        if (thermalV8)
+        {
+            w.Write(dto.Thermal.Enabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.AmbientTemperature);
+            w.Write(dto.Thermal.StefanBoltzmann);
+            w.Write(dto.Thermal.ConvectionCoefficient);
+            w.Write(dto.Thermal.RadiationEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.ConductionEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.ConvectionEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.MaxTemperature);
+            w.Write(dto.Thermal.MinTemperature);
+            w.Write(dto.Thermal.RadiationRadiusFactor);
+            w.Write(dto.Thermal.MaxTemperatureRate);
+            // The managed engine has no broad-phase concept: always write
+            // the Rust default so a Rust reader behaves identically.
+            w.Write(DefaultBroadphaseModeTag);
+        }
+        // Schema v9: collision-tier ceiling. The managed engine has no
+        // tier concept: always write the Rust defaults (disabled, Tier5).
+        if (dto.Schema >= CollisionTierSchemaVersion)
+        {
+            w.Write(DefaultCollisionTierEnabled);
+            w.Write(DefaultCollisionTierMaxTier);
+        }
+        // Schema v10: thermal sub-feature block.
+        if (dto.Schema >= ThermalExtrasSchemaVersion)
+        {
+            w.Write(dto.ThermalExtras.RadiationOcclusion ? (byte)1 : (byte)0);
+            w.Write(dto.ThermalExtras.ForcedConvectionCoefficient);
+            w.Write(dto.ThermalExtras.ExpansionCoefficient);
+            w.Write(dto.ThermalExtras.ExpansionReferenceTemperature);
         }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
@@ -2127,6 +2419,13 @@ public static class Snapshot
             w.Write(b.Material.Friction);
             w.Write(b.Material.Restitution);
             w.Write(b.Material.Density);
+            // Schema v8: material thermal properties.
+            if (thermalV8)
+            {
+                w.Write(b.Material.SpecificHeat);
+                w.Write(b.Material.ThermalConductivity);
+                w.Write(b.Material.Emissivity);
+            }
             WriteShape2(w, b.Shape);
             w.Write(b.Position.X); w.Write(b.Position.Y);
             foreach (var f in b.Rotation) w.Write(f);
@@ -2134,6 +2433,10 @@ public static class Snapshot
             w.Write(b.AngularVelocity);
             if (gravityV4) w.Write(b.GravityScale);
             if (ambientV5) w.Write(b.AmbientScale);
+            // Schema v8: per-body temperature.
+            if (thermalV8) w.Write(b.Temperature);
+            // Schema v10: per-body applied expansion factor.
+            if (dto.Schema >= ThermalExtrasSchemaVersion) w.Write(b.ExpansionScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -2361,16 +2664,26 @@ public static class Snapshot
             Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
-                Tier = r.ReadInt32(),
+                Tier = r.ReadByte(),
                 MaxMovement = r.ReadSingle(),
                 MaxSubsteps = r.ReadInt32(),
             } : new CcdConfigDto(),
+            // v8 payloads carry the thermal config block, followed by the
+            // broad-phase backend tag (same block in the Rust layout).
+            Thermal = version >= ThermalSchemaVersion ? ReadThermalConfig(r) : new ThermalConfigDto(),
+            BroadphaseMode = version >= ThermalSchemaVersion ? r.ReadUInt32() : DefaultBroadphaseModeTag,
+            // v9 payloads carry the collision-tier ceiling.
+            CollisionTierEnabled = version >= CollisionTierSchemaVersion ? r.ReadByte() != 0 : false,
+            CollisionTierMaxTier = version >= CollisionTierSchemaVersion ? r.ReadUInt32() : DefaultCollisionTierMaxTier,
+            // v10 payloads carry the thermal sub-feature block.
+            ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
         };
         bool gravityV4 = version >= GravitySchemaVersion;
         bool ambientV5 = version >= AmbientSchemaVersion;
+        bool thermalV8 = version >= ThermalSchemaVersion;
         int nb = r.ReadInt32();
         if (nb < 0 || nb > 1_000_000) throw new ArgumentException("Body count out of range.");
         for (int i = 0; i < nb; i++)
@@ -2390,6 +2703,9 @@ public static class Snapshot
                     Friction = r.ReadSingle(),
                     Restitution = r.ReadSingle(),
                     Density = r.ReadSingle(),
+                    SpecificHeat = thermalV8 ? r.ReadSingle() : 900.0f,
+                    ThermalConductivity = thermalV8 ? r.ReadSingle() : 1.0f,
+                    Emissivity = thermalV8 ? r.ReadSingle() : 0.9f,
                 },
                 Shape = ReadShape2(r),
                 Position = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() },
@@ -2398,6 +2714,8 @@ public static class Snapshot
                 AngularVelocity = r.ReadSingle(),
                 GravityScale = gravityV4 ? r.ReadSingle() : 1.0f,
                 AmbientScale = ambientV5 ? r.ReadSingle() : 1.0f,
+                Temperature = thermalV8 ? r.ReadSingle() : 293.15f,
+                ExpansionScale = version >= ThermalExtrasSchemaVersion ? r.ReadSingle() : 1.0f,
             };
             dto.Bodies.Add(b);
         }
@@ -2435,8 +2753,8 @@ public static class Snapshot
         Slop = r.ReadSingle(),
         Baumgarte = r.ReadSingle(),
         EarlyExitTolerance = r.ReadSingle(),
-        Friction = version >= SchemaVersion ? r.ReadBoolean() : true,
-        Restitution = version >= SchemaVersion ? r.ReadBoolean() : true,
+        Friction = version >= SolverFlagsSchemaVersion ? r.ReadBoolean() : true,
+        Restitution = version >= SolverFlagsSchemaVersion ? r.ReadBoolean() : true,
     };
 
     private static void WriteGravityConfig2(BinaryWriter w, GravityConfig2Dto c)
@@ -2623,9 +2941,44 @@ public static class Snapshot
         if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
-            w.Write(dto.Ccd.Tier);
+            w.Write((byte)dto.Ccd.Tier);
             w.Write(dto.Ccd.MaxMovement);
             w.Write(dto.Ccd.MaxSubsteps);
+        }
+        // Schema v8: thermal config block, then the broad-phase backend
+        // tag (same block in the Rust layout).
+        bool thermalV8 = dto.Schema >= ThermalSchemaVersion;
+        if (thermalV8)
+        {
+            w.Write(dto.Thermal.Enabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.AmbientTemperature);
+            w.Write(dto.Thermal.StefanBoltzmann);
+            w.Write(dto.Thermal.ConvectionCoefficient);
+            w.Write(dto.Thermal.RadiationEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.ConductionEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.ConvectionEnabled ? (byte)1 : (byte)0);
+            w.Write(dto.Thermal.MaxTemperature);
+            w.Write(dto.Thermal.MinTemperature);
+            w.Write(dto.Thermal.RadiationRadiusFactor);
+            w.Write(dto.Thermal.MaxTemperatureRate);
+            // The managed engine has no broad-phase concept: always write
+            // the Rust default so a Rust reader behaves identically.
+            w.Write(DefaultBroadphaseModeTag);
+        }
+        // Schema v9: collision-tier ceiling. The managed engine has no
+        // tier concept: always write the Rust defaults (disabled, Tier5).
+        if (dto.Schema >= CollisionTierSchemaVersion)
+        {
+            w.Write(DefaultCollisionTierEnabled);
+            w.Write(DefaultCollisionTierMaxTier);
+        }
+        // Schema v10: thermal sub-feature block.
+        if (dto.Schema >= ThermalExtrasSchemaVersion)
+        {
+            w.Write(dto.ThermalExtras.RadiationOcclusion ? (byte)1 : (byte)0);
+            w.Write(dto.ThermalExtras.ForcedConvectionCoefficient);
+            w.Write(dto.ThermalExtras.ExpansionCoefficient);
+            w.Write(dto.ThermalExtras.ExpansionReferenceTemperature);
         }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
@@ -2639,6 +2992,13 @@ public static class Snapshot
             w.Write(b.Material.Friction);
             w.Write(b.Material.Restitution);
             w.Write(b.Material.Density);
+            // Schema v8: material thermal properties.
+            if (thermalV8)
+            {
+                w.Write(b.Material.SpecificHeat);
+                w.Write(b.Material.ThermalConductivity);
+                w.Write(b.Material.Emissivity);
+            }
             WriteShape3(w, b.Shape);
             w.Write(b.Position.X); w.Write(b.Position.Y); w.Write(b.Position.Z);
             foreach (var f in b.Rotation) w.Write(f);
@@ -2648,6 +3008,10 @@ public static class Snapshot
             w.Write(b.AngularVelocity.Z);
             if (gravityV4) w.Write(b.GravityScale);
             if (ambientV5) w.Write(b.AmbientScale);
+            // Schema v8: per-body temperature.
+            if (thermalV8) w.Write(b.Temperature);
+            // Schema v10: per-body applied expansion factor.
+            if (dto.Schema >= ThermalExtrasSchemaVersion) w.Write(b.ExpansionScale);
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -2686,10 +3050,19 @@ public static class Snapshot
             Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
-                Tier = r.ReadInt32(),
+                Tier = r.ReadByte(),
                 MaxMovement = r.ReadSingle(),
                 MaxSubsteps = r.ReadInt32(),
             } : new CcdConfigDto(),
+            // v8 payloads carry the thermal config block, followed by the
+            // broad-phase backend tag (same block in the Rust layout).
+            Thermal = version >= ThermalSchemaVersion ? ReadThermalConfig(r) : new ThermalConfigDto(),
+            BroadphaseMode = version >= ThermalSchemaVersion ? r.ReadUInt32() : DefaultBroadphaseModeTag,
+            // v9 payloads carry the collision-tier ceiling.
+            CollisionTierEnabled = version >= CollisionTierSchemaVersion ? r.ReadByte() != 0 : false,
+            CollisionTierMaxTier = version >= CollisionTierSchemaVersion ? r.ReadUInt32() : DefaultCollisionTierMaxTier,
+            // v10 payloads carry the thermal sub-feature block.
+            ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
@@ -2712,6 +3085,9 @@ public static class Snapshot
                     Friction = r.ReadSingle(),
                     Restitution = r.ReadSingle(),
                     Density = r.ReadSingle(),
+                    SpecificHeat = version >= ThermalSchemaVersion ? r.ReadSingle() : 900.0f,
+                    ThermalConductivity = version >= ThermalSchemaVersion ? r.ReadSingle() : 1.0f,
+                    Emissivity = version >= ThermalSchemaVersion ? r.ReadSingle() : 0.9f,
                 },
                 Shape = ReadShape3(r),
                 Position = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
@@ -2720,6 +3096,8 @@ public static class Snapshot
                 AngularVelocity = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                 GravityScale = version >= GravitySchemaVersion ? r.ReadSingle() : 1.0f,
                 AmbientScale = version >= AmbientSchemaVersion ? r.ReadSingle() : 1.0f,
+                Temperature = version >= ThermalSchemaVersion ? r.ReadSingle() : 293.15f,
+                ExpansionScale = version >= ThermalExtrasSchemaVersion ? r.ReadSingle() : 1.0f,
             });
         }
         int nj = r.ReadInt32();

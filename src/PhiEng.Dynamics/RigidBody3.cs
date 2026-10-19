@@ -98,6 +98,16 @@ public class RigidBody3
     /// Ambient-force coupling multiplier (see <c>RigidBody2.AmbientScale</c>).
     /// </summary>
     public float AmbientScale { get; set; }
+    /// <summary>
+    /// Current temperature in Kelvin. Mirrors Rust
+    /// <c>RigidBody3::temperature</c>; default 293.15 K.
+    /// </summary>
+    public float Temperature { get; set; }
+    /// <summary>
+    /// Thermal-expansion factor currently applied to this body's shape
+    /// (1.0 = not expanded). See <see cref="RigidBody2.ExpansionScale"/>.
+    /// </summary>
+    public float ExpansionScale { get; set; }
     /// <summary>Surface and mass properties (shapes inherit it).</summary>
     public PhysicsMaterial Material { get; set; }
     /// <summary>Whether the body is immovable.</summary>
@@ -122,6 +132,8 @@ public class RigidBody3
         AngularDamping = 0.01f;
         GravityScale = 1.0f;
         AmbientScale = 1.0f;
+        Temperature = ThermalConfig2.DefaultTemperature;
+        ExpansionScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;
@@ -144,7 +156,16 @@ public class RigidBody3
         ShapeValidation.ValidateShape3(shape);
         density = ShapeValidation.ValidateDensity(IsStatic, density);
         var current = Material ?? PhysicsMaterial.Default;
-        Material = new PhysicsMaterial(current.Friction, current.Restitution, density);
+        // Only the density changes; the thermal properties (specific heat,
+        // conductivity, emissivity) are carried over, matching the Rust
+        // `set_shape` (which touches `material.density` only).
+        Material = new PhysicsMaterial(
+            current.Friction,
+            current.Restitution,
+            density,
+            current.SpecificHeat,
+            current.ThermalConductivity,
+            current.Emissivity);
         Shape = shape;
         var (mass, inertia) = MassProperties(shape, density);
         ApplyMass(mass, inertia);

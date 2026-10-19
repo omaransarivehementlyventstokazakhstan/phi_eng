@@ -46,20 +46,43 @@ public class PhysicsMaterial
 
     /// <summary>Builds a material, sanitizing inputs (see <see cref="DefaultFriction"/>).</summary>
     public PhysicsMaterial(float friction, float restitution, float density)
+        : this(friction, restitution, density, DefaultSpecificHeat, DefaultThermalConductivity, DefaultEmissivity)
+    {
+    }
+
+    /// <summary>
+    /// Builds a material with explicit thermal properties, sanitizing every
+    /// input. Mirrors the Rust <c>PhysicsMaterial</c> field set, so the
+    /// thermal properties survive a copy (see <see cref="Clone"/>).
+    /// </summary>
+    public PhysicsMaterial(
+        float friction,
+        float restitution,
+        float density,
+        float specificHeat,
+        float thermalConductivity,
+        float emissivity)
     {
         Friction = float.IsFinite(friction) && friction >= 0.0f ? friction : DefaultFriction;
         Restitution = float.IsFinite(restitution) ? MathF.Max(0.0f, MathF.Min(1.0f, restitution)) : DefaultRestitution;
         Density = float.IsFinite(density) && density > 0.0f ? density : DefaultDensity;
-        SpecificHeat = DefaultSpecificHeat;
-        ThermalConductivity = DefaultThermalConductivity;
-        Emissivity = DefaultEmissivity;
+        SpecificHeat = float.IsFinite(specificHeat) && specificHeat > 0.0f ? specificHeat : DefaultSpecificHeat;
+        ThermalConductivity = float.IsFinite(thermalConductivity) && thermalConductivity >= 0.0f
+            ? thermalConductivity
+            : DefaultThermalConductivity;
+        Emissivity = float.IsFinite(emissivity) ? MathF.Max(0.0f, MathF.Min(1.0f, emissivity)) : DefaultEmissivity;
     }
 
     /// <summary>Fresh default instance (never a shared singleton).</summary>
     public static PhysicsMaterial Default => new PhysicsMaterial();
 
-    /// <summary>Defensive copy.</summary>
-    public PhysicsMaterial Clone() => new PhysicsMaterial(Friction, Restitution, Density);
+    /// <summary>
+    /// Defensive copy. Carries the thermal properties too: dropping them
+    /// would silently reset a body's specific heat, conductivity and
+    /// emissivity (and hence its thermal trajectory).
+    /// </summary>
+    public PhysicsMaterial Clone() => new PhysicsMaterial(
+        Friction, Restitution, Density, SpecificHeat, ThermalConductivity, Emissivity);
 
     /// <summary>
     /// Combine two friction coefficients with the geometric mean, so a

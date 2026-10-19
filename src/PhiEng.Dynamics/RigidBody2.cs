@@ -53,6 +53,19 @@ public class RigidBody2
     /// </summary>
     public float AmbientScale { get; set; }
     /// <summary>
+    /// Current temperature in Kelvin. Mirrors Rust
+    /// <c>RigidBody2::temperature</c>; default 293.15 K.
+    /// </summary>
+    public float Temperature { get; set; }
+    /// <summary>
+    /// Thermal-expansion factor currently applied to this body's shape
+    /// (1.0 = not expanded). Mirrors Rust
+    /// <c>RigidBody2::expansion_scale</c>: the thermal phase rescales
+    /// the shape by <c>target / expansion_scale</c> so the factor is
+    /// applied relative to the authored shape and never compounds.
+    /// </summary>
+    public float ExpansionScale { get; set; }
+    /// <summary>
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     /// </summary>
@@ -79,6 +92,8 @@ public class RigidBody2
         AngularDamping = 0.01f;
         GravityScale = 1.0f;
         AmbientScale = 1.0f;
+        Temperature = ThermalConfig2.DefaultTemperature;
+        ExpansionScale = 1.0f;
         Material = PhysicsMaterial.Default;
         IsStatic = false;
         IsSleeping = false;
@@ -106,8 +121,17 @@ public class RigidBody2
         ShapeValidation.ValidateShape2(shape);
         density = ShapeValidation.ValidateDensity(IsStatic, density);
         // Fresh instance: never mutate a material the user may share.
+        // Only the density changes; the thermal properties (specific
+        // heat, conductivity, emissivity) are carried over, matching the
+        // Rust `set_shape` (which touches `material.density` only).
         var current = Material ?? PhysicsMaterial.Default;
-        Material = new PhysicsMaterial(current.Friction, current.Restitution, density);
+        Material = new PhysicsMaterial(
+            current.Friction,
+            current.Restitution,
+            density,
+            current.SpecificHeat,
+            current.ThermalConductivity,
+            current.Emissivity);
         Shape = shape;
         switch (shape.Type)
         {
@@ -144,7 +168,7 @@ public class RigidBody2
         ApplyMass(Mass, Inertia);
     }
 
-    private static (float Area, Vector2 Centroid) PolygonAreaAndCentroid(List<Vector2> vertices)
+    internal static (float Area, Vector2 Centroid) PolygonAreaAndCentroid(List<Vector2> vertices)
     {
         float area = 0.0f;
         Vector2 centroid = Vector2.Zero;
