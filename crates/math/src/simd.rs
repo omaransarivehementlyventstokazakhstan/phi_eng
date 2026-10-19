@@ -110,7 +110,8 @@ pub fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     }
 }
 
-/// Process 4 floats at once: horizontal dot product (sum of a[i]*b[i]).
+/// Process 4 floats at once: horizontal dot product (sum of the four
+/// pairwise products).
 #[inline]
 pub fn dot4(a: [f32; 4], b: [f32; 4]) -> f32 {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]

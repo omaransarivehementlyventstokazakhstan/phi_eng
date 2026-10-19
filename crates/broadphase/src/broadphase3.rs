@@ -5,7 +5,7 @@ use super::brute_force3::BruteForce3;
 use super::dynamic_aabb_tree3::DynamicAABBTree3;
 
 /// Broadphase backend for 3D worlds. Wraps the concrete implementation
-/// selected by [`BroadphaseMode`](super::BroadphaseMode).
+/// selected by [`BroadphaseMode`].
 #[derive(Debug, Clone)]
 pub enum Broadphase3 {
     BruteForce(BruteForce3),

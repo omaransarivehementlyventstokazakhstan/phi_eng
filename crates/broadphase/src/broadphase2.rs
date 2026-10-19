@@ -6,7 +6,7 @@ use super::dynamic_aabb_tree2::DynamicAABBTree2;
 use super::spatial_hash::SpatialHash2;
 
 /// Broadphase backend for 2D worlds. Wraps the concrete implementation
-/// selected by [`BroadphaseMode`](super::BroadphaseMode).
+/// selected by [`BroadphaseMode`].
 #[derive(Debug, Clone)]
 pub enum Broadphase2 {
     SpatialHash(SpatialHash2),

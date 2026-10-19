@@ -135,10 +135,10 @@ impl DynamicAABBTree2 {
 
     /// Remove a body. No-op if the body is not present.
     ///
-    /// Marks the leaf and rebuilds bottom-up (see
-    /// [`Self::rebuild_bottom_up`]) rather than splicing the node out of
-    /// the middle of `nodes`, which would invalidate every index that
-    /// pointed at a moved node.
+    /// Marks the leaf and rebuilds the whole tree bottom-up from the
+    /// surviving leaves, rather than splicing the node out of the middle
+    /// of `nodes` (which would invalidate every index that pointed at a
+    /// moved node).
     pub fn remove(&mut self, body_id: usize) {
         let present = self
             .nodes

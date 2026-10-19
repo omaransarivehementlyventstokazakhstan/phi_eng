@@ -93,7 +93,7 @@ impl CcdConfig {
     }
 }
 
-/// Map a [`SolverQuality`] preset to a CCD tier:
+/// Map a [`crate::solver::SolverQuality`] preset to a CCD tier:
 /// - `Ultra` → FullGJK (maximum safety)
 /// - `High` → SweptAABB (good balance)
 /// - `Medium` / `Low` / `Minimal` → Off (cost-sensitive)

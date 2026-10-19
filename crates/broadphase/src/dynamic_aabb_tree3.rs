@@ -124,8 +124,9 @@ impl DynamicAABBTree3 {
         self.rebalance_if_degenerate();
     }
 
-    /// Remove a body. No-op if the body is not present. Rebuilds
-    /// bottom-up from the surviving leaves (see [`Self::rebuild_bottom_up`]).
+    /// Remove a body. No-op if the body is not present. Rebuilds the
+    /// whole tree bottom-up from the surviving leaves (which keeps all
+    /// node indices valid without any splice bookkeeping).
     pub fn remove(&mut self, body_id: usize) {
         let present = self
             .nodes
