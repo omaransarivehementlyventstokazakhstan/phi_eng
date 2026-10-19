@@ -44,6 +44,24 @@ This project follows [Semantic Versioning](https://semver.org/) and
   (phase 0) submerged in light fluid (phase 1) sinks under gravity.
 
 ### Fixed
+- **Parallel island solver could hang the run (Rust, 2D)**: the shared
+  max-applied-impulse slot had a data race. The barrier orders
+  "arrived at iteration *g*" against "left iteration *g*", but nothing
+  ordered one island's *next* write against another island's *current*
+  read — a fast island could overwrite its slot for *g+1* while a slow
+  island was still reading it for *g*. The slow island then computed a
+  smaller global max, decided to exit early, and left the barrier while
+  the others waited for it: a deadlock, not a wrong number. Symptom was a
+  *hung* test on a 2-core Windows CI runner (`brutal_parallel_parity_scale_2d`
+  sat for 20+ minutes), and the same class of hang was the likely cause
+  of the "The operation was canceled" job timeouts with no failing
+  step. Fixed by double-buffering the slots per iteration generation
+  (a value being read can no longer be overwritten) and by replacing
+  `std::sync::Barrier` with a timeout barrier, so any future
+  desynchronization panics with a diagnostic instead of hanging the
+  run. Regression test: `brutal_parallel_island_stress_2d` (12
+  independent islands, repeated rounds, serial cross-check) — it fails
+  loudly on the old code and passes on the fixed code.
 - **Broadphase hang on oversized bodies (Rust + C#)**: the 2D spatial
   hash inserted a body into *every* cell its AABB overlapped, so a large
   body (e.g. a 1000-unit radius circle at cell size 1.0) touched
@@ -66,9 +84,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
   6-hour default.
 - **Split `rust` job into `rust-lint` + `rust-test`**: fmt + clippy +
   doc + a full debug test build and run no longer fit one 30-minute
-  budget — green runs were being killed at exactly 30:00 with "The
-  operation was canceled" and no failing step. Each half keeps a
+  budget (green runs were being killed at exactly 30:00 with "The
+  operation was canceled" and no failing step). Each half keeps a
   fail-fast timeout that fits it (30 min lint, 45 min tests).
+- **Scope debug tests to `--lib --tests`**: skips compiling the 4
+  examples in the test job (clippy `--all-targets` still builds them) —
+  identical test coverage with fewer Windows debug links, the slowest
+  part of the job.
 - **Release soak job**: a new `rust-soak` job runs the full workspace
   suite under `--release`, pinning the determinism hashes and allocation
   counts to optimized-code results (the regime where vectorization / FMA

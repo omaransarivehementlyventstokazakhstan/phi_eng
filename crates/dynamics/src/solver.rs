@@ -1,6 +1,8 @@
 use super::body::RigidBody2;
 use glam::Vec2;
 use phieng_math::{DEFAULT_BAUMGARTE, DEFAULT_SLOP, EARLY_EXIT_TOL, EPS};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 /// Contact constraint for the solver (2D sequential impulse with Coulomb friction).
 #[derive(Debug, Clone)]
@@ -95,6 +97,80 @@ impl SolverQuality {
             self,
             SolverQuality::Ultra | SolverQuality::High | SolverQuality::Medium
         )
+    }
+}
+
+/// How long a parallel island waits for its peers before declaring a
+/// desync. Generous enough for a loaded CI runner, far below any job
+/// timeout.
+const BARRIER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Rendezvous point for the parallel island solve, with a timeout.
+///
+/// `std::sync::Barrier` has no timeout: if the islands ever disagree on
+/// how many iterations to run, every remaining thread blocks forever and
+/// the whole run *hangs* instead of failing. A hang in CI is nearly
+/// invisible — it surfaces as a job timeout with no failing step (and
+/// the tests that were still running never report). This variant turns a
+/// desync into a loud panic with a diagnostic instead.
+struct TimeoutBarrier {
+    state: Mutex<BarrierState>,
+    cv: Condvar,
+    parties: usize,
+    timeout: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BarrierState {
+    /// Incremented every time all parties have arrived.
+    generation: u64,
+    /// Parties that have arrived for the current generation.
+    arrived: usize,
+}
+
+impl TimeoutBarrier {
+    fn new(parties: usize, timeout: Duration) -> Self {
+        Self {
+            state: Mutex::new(BarrierState {
+                generation: 0,
+                arrived: 0,
+            }),
+            cv: Condvar::new(),
+            parties,
+            timeout,
+        }
+    }
+
+    /// Wait for every party. Returns `false` if the timeout expired
+    /// (the caller panics — a desync must never hang the run).
+    fn wait(&self) -> bool {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let gen = st.generation;
+        st.arrived += 1;
+        if st.arrived == self.parties {
+            st.arrived = 0;
+            st.generation = gen + 1;
+            self.cv.notify_all();
+            return true;
+        }
+        let deadline = Instant::now() + self.timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (guard, res) = self
+                .cv
+                .wait_timeout(st, remaining)
+                .unwrap_or_else(|e| e.into_inner());
+            st = guard;
+            if st.generation != gen {
+                return true;
+            }
+            if res.timed_out() {
+                return false;
+            }
+        }
     }
 }
 
@@ -262,8 +338,9 @@ impl Solver {
     /// `island_bodies[i]` / `island_constraints[i]` hold the body and
     /// constraint indices of island `i` (canonical island order, stable
     /// within-island order), and islands are body-disjoint (see
-    /// [`crate::island`]). `max_slots` is caller-owned scratch with one
-    /// `f32` per island, reused across steps (no per-step allocation).
+    /// [`crate::island`]). `max_slots` is caller-owned scratch, resized
+    /// to two `f32` per island and reused across steps (no per-step
+    /// allocation).
     ///
     /// Convergence parity with the serial path is exact: threads
     /// rendezvous on a barrier after every iteration and share one global
@@ -288,7 +365,7 @@ impl Solver {
         constraints: &mut [ContactConstraint],
         island_bodies: &[Vec<usize>],
         island_constraints: &[Vec<usize>],
-        max_slots: &mut [f32],
+        max_slots: &mut Vec<f32>,
         dt: f32,
     ) -> usize {
         debug_assert_eq!(
@@ -361,28 +438,51 @@ impl Solver {
         let bodies_len = bodies.len();
         let constraints_addr = constraints.as_mut_ptr() as usize;
         let constraints_len = constraints.len();
-        let max_addr = max_slots.as_mut_ptr() as usize;
         let iters = self.iterations;
         let tol = self.early_exit_tolerance;
         let friction = self.enable_friction;
         let this = self;
-        let barrier = std::sync::Barrier::new(island_constraints.len());
+
+        // Two slot buffers per island: iteration `g` writes and reads
+        // buffer `g % 2`.
+        //
+        // A single buffer is a data race: the barrier orders
+        // "arrived at generation g" against "left generation g", but
+        // nothing orders one thread's *next* write against another
+        // thread's *current* read. A fast thread could overwrite its
+        // slot for generation g+1 while a slow thread was still
+        // reading that slot for generation g; the slow thread would
+        // then compute a smaller global max, decide to exit early, and
+        // leave the barrier while the others waited for it — a hang,
+        // not a wrong number. Alternating buffers removes the race
+        // entirely: generation g+1 writes the other buffer, so a value
+        // being read can never be overwritten.
+        const SLOT_BUFFERS: usize = 2;
+        let slot_count = island_constraints.len() * SLOT_BUFFERS;
+        if max_slots.len() < slot_count {
+            max_slots.resize(slot_count, 0.0);
+        }
+        let max_addr = max_slots.as_mut_ptr() as usize;
 
         for slot in max_slots.iter_mut() {
             *slot = 0.0;
         }
 
+        let barrier = TimeoutBarrier::new(island_constraints.len(), BARRIER_TIMEOUT);
+
         std::thread::scope(|scope| {
             let mut handles = Vec::with_capacity(island_constraints.len());
             for (ii, list) in island_constraints.iter().enumerate() {
-                // Shared by reference: `&Barrier` is `Send` (`Barrier: Sync`).
+                // Shared by reference: `&TimeoutBarrier` is `Send`
+                // (`TimeoutBarrier: Sync`).
                 let barrier = &barrier;
                 handles.push(scope.spawn(move || {
                     // SAFETY: per-island exclusive indices (verified above
                     // in debug; partitioner-guaranteed in release) plus a
                     // barrier happens-before between iterations, so the
                     // shared max slots are data-race-free: each thread
-                    // writes only its own slot, and reads all slots only
+                    // writes only its own slot (and only the buffer the
+                    // current generation owns), and reads all slots only
                     // after the rendezvous.
                     let bodies = unsafe {
                         std::slice::from_raw_parts_mut(bodies_addr as *mut RigidBody2, bodies_len)
@@ -394,8 +494,9 @@ impl Solver {
                         )
                     };
                     let mut ran = 0;
-                    for _ in 0..iters {
+                    for gen in 0..iters {
                         ran += 1;
+                        let buf = gen % SLOT_BUFFERS;
                         let mut local_max: f32 = 0.0;
                         for &ci in list.iter() {
                             let c = &mut constraints[ci];
@@ -414,13 +515,20 @@ impl Solver {
                             }
                         }
                         unsafe {
-                            *(max_addr as *mut f32).add(ii) = local_max;
+                            *(max_addr as *mut f32).add(ii * SLOT_BUFFERS + buf) = local_max;
                         }
-                        barrier.wait();
+                        if !barrier.wait() {
+                            panic!(
+                                "parallel solver desync: island {ii} timed out after \
+                                 {gen} iterations (islands disagreed on the \
+                                 early-exit decision)"
+                            );
+                        }
                         let mut global_max: f32 = 0.0;
                         for k in 0..island_constraints.len() {
-                            global_max =
-                                global_max.max(unsafe { *(max_addr as *const f32).add(k) });
+                            global_max = global_max.max(unsafe {
+                                *(max_addr as *const f32).add(k * SLOT_BUFFERS + buf)
+                            });
                         }
                         if global_max < tol {
                             break;

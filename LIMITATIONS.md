@@ -101,7 +101,12 @@ Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;
 3D worlds always take the serial path. Conservative advancement is
-planned after 3D joints.
+planned after 3D joints. The parallel path shares one early-exit
+decision across islands (a per-island exit would diverge from serial),
+so the islands rendezvous on a barrier every iteration; that barrier
+carries a timeout, and a desynchronization panics with a diagnostic
+rather than hanging the run (a shared single-slot buffer used to race
+exactly that way — see `CHANGELOG.md`).
 
 ## Solver mass-ratio limit (S16, S17 — quantified)
 

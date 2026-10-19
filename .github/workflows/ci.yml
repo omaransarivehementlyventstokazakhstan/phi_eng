@@ -40,6 +40,8 @@ jobs:
     # test build and run no longer fit one 30-minute budget (green runs
     # were being killed at exactly 30:00 with "The operation was
     # canceled"). Each half keeps a fail-fast timeout that fits it.
+    # `--lib --tests` skips the 4 examples (still compiled by clippy
+    # --all-targets); there are no bins/benches/doctests to lose.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -53,7 +55,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Tests (debug)
-        run: cargo test --workspace
+        # --lib --tests skips compiling the 4 examples (clippy
+        # --all-targets still builds them); identical test coverage,
+        # fewer Windows debug links.
+        run: cargo test --workspace --lib --tests
 
   # Release-optimized soak: determinism hashes and allocation counts must
   # hold unchanged under optimization (where vectorization / FMA

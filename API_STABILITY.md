@@ -26,13 +26,18 @@
 
 - Determinism: same build + same inputs + same steps = bit-identical
   state, within one backend (Rust) and across backends where the
-  equivalence tests (`F28`, `F36`, `P31–P34`) pin it.
+  equivalence tests (`F28`, `F36`, `P31–P34`) pin it. The parallel
+  island solver produces the *same* state as the serial path, and
+  fails loudly (never hangs) if its islands ever desynchronize.
 - MSRV for Rust library code: **1.78** (verified by the `msrv` CI job
   building `--workspace --lib`). Examples and benches may use newer sugar.
 - Snapshot loaders never guess: unknown versions, tags, or trailing
   bytes are errors, never silent reinterpretation.
 - FFI never panics across the boundary on documented inputs: null
   pointers yield documented error codes; hostile payloads yield errors.
+- A hung test is a bug, not a slow test: any wait inside the engine
+  (e.g. the parallel island barrier) is bounded by a timeout and
+  panics with a diagnostic if it expires.
 
 ## Non-goals (explicitly unstable)
 

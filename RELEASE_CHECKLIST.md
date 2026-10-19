@@ -35,7 +35,14 @@ any new additions):
 - `crates/dynamics/src/solver.rs` — parallel island solve reconstructs
   `&mut` slices from raw addresses over disjoint index sets. Sound
   iff body-disjointness AND constraint-index disjointness hold;
-  debug builds re-verify both before spawning threads.
+  debug builds re-verify both before spawning threads. The shared
+  max-applied-impulse slots are **double-buffered per generation**
+  (one buffer per parity): a single shared slot races, because the
+  barrier orders "arrived at generation g" against "left generation g"
+  but not one thread's next write against another thread's current
+  read — that race let islands disagree on the early-exit decision and
+  hang the run. The barrier also carries a timeout, so any future
+  desync panics loudly instead of hanging CI.
 - `crates/dynamics/src/world.rs` — parallel joint solve, same contract
   (disjoint island index sets, debug-verified).
 - `crates/engine/src/ffi.rs` — raw-pointer boundary: every entry point

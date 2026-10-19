@@ -27,7 +27,7 @@ Run these from the repo root; all must be clean:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps
-cargo test --workspace
+cargo test --workspace --lib --tests
 dotnet test PhiEng.slnx -c Release
 python tools/check_test_parity.py   # must print PARITY OK
 ```

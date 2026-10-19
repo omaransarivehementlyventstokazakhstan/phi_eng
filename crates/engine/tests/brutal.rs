@@ -842,6 +842,91 @@ fn brutal_parallel_parity_scale_2d() {
     );
 }
 
+/// Regression: the parallel island solver must never desynchronize.
+///
+/// The early-exit decision is shared: every island rendezvous on a
+/// barrier, reads one global max-applied impulse, and must therefore
+/// agree on when to stop. A single shared slot per island is a data
+/// race — a fast island can overwrite its slot for the next iteration
+/// while a slow island is still reading it for the current one, so the
+/// two disagree on the global max, one exits early, and the others wait
+/// for a party that left. That is a hang, not a wrong number, and it
+/// only shows up under thread-timing luck (observed on a 2-core Windows
+/// CI runner: the suite sat on this test for 20+ minutes).
+///
+/// The fix double-buffers the slots per generation, and the barrier
+/// carries a timeout so any future desync panics loudly instead of
+/// hanging the run. This test stresses the path: many independent
+/// islands, repeated runs, and a serial cross-check.
+#[test]
+fn brutal_parallel_island_stress_2d() {
+    fn piles(parallel: bool, stacks: usize) -> World2 {
+        let mut world = World2::new();
+        world.solver.parallel = parallel;
+        world
+            .add_static_body(
+                Vec2::new(0.0, -1.0),
+                Shape2::Box {
+                    half_extents: Vec2::new(60.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        // Stacks are placed far enough apart to stay independent
+        // islands (no shared floor contact merging them into one).
+        for stack in 0..stacks {
+            let x = -30.0 + stack as f32 * 4.0;
+            for i in 0..4 {
+                world
+                    .add_dynamic_body(
+                        Vec2::new(x, 0.05 + i as f32 * 1.02),
+                        Shape2::Box {
+                            half_extents: Vec2::new(0.4, 0.5),
+                        },
+                        1.0,
+                    )
+                    .expect("valid shape");
+            }
+        }
+        world
+    }
+
+    // Many independent islands, each a separate thread: the widest
+    // scheduling spread, the most likely place for the race to bite.
+    let stacks = 12;
+    let steps = 120;
+
+    let mut serial = piles(false, stacks);
+    for _ in 0..steps {
+        serial.step(BRUTAL_DT);
+    }
+    let serial_hash = brutal_hash2(&serial);
+
+    // Repeat the parallel run: the race is probabilistic, so a single
+    // pass can slip through. Each repetition is a fresh chance to hang
+    // (or, with the fix in place, to complete).
+    let mut parallel_ms = 0.0f64;
+    for round in 0..8 {
+        let mut parallel = piles(true, stacks);
+        let start = Instant::now();
+        for _ in 0..steps {
+            parallel.step(BRUTAL_DT);
+        }
+        parallel_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let hash = brutal_hash2(&parallel);
+        assert_eq!(
+            hash, serial_hash,
+            "parallel run diverged from serial in round {round}"
+        );
+        brutal_assert_finite2(&parallel, "parallel island stress");
+    }
+
+    println!(
+        "BRUTAL name=parallel_island_stress_2d bodies={} steps={steps} rounds=8 parallel_ms_per_step={:.4} hash={serial_hash:#x} match=serial==parallel",
+        serial.bodies.len(),
+        parallel_ms / steps as f64,
+    );
+}
+
 /// Same chaotic scene run twice from scratch: bit-exact determinism.
 #[test]
 fn brutal_determinism_double_run_2d() {

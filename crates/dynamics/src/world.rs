@@ -392,7 +392,8 @@ impl World2 {
 
         // Phase 1: contacts per island, in parallel. Max scratch is
         // resized (only grows) and reused across steps — no per-step
-        // allocation in the steady state.
+        // allocation in the steady state. The solver sizes it to two
+        // slots per island (double-buffered generations).
         let island_bodies: Vec<Vec<usize>> = islands.iter().map(|isl| isl.bodies.clone()).collect();
         self.scratch
             .island_max

@@ -109,8 +109,9 @@ counts, tolerances, and policy decisions).
 
 ```powershell
 # From the repo root:
-# Rust: full workspace tests
-cargo test --workspace
+# Rust: full workspace tests (examples excluded from the test build;
+# clippy --all-targets still compiles them)
+cargo test --workspace --lib --tests
 
 # Rust: 2D demo (deterministic — identical output every run)
 cargo run -p phieng --example demo_2d

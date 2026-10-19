@@ -52,8 +52,9 @@ cargo build --workspace
 # Release build (optimized, used by benches and native DLL)
 cargo build --workspace --release
 
-# All tests (unit + integration)
-cargo test --workspace
+# All tests (unit + integration; skips the 4 examples, which clippy
+# --all-targets still builds — identical coverage, fewer links)
+cargo test --workspace --lib --tests
 
 # Specific test suites
 cargo test --lib                          # workspace library unit tests
