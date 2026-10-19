@@ -159,11 +159,12 @@ jobs:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
+      # No `cache: true` here: this project has no PackageReference (only
+      # local ProjectReferences), so ~/.nuget/packages is never created and
+      # the setup-dotnet cache post-step errors ("folder does not exist").
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-          cache: true
-          cache-dependency-path: "**/*.csproj"
       - name: Host headless smoke
         run: dotnet run --project examples/host/PhiEng.Host.csproj -- --smoke --steps 600
 
@@ -187,11 +188,12 @@ jobs:
         run: |
           mkdir -p src/PhiEng.Native/runtimes/linux-x64/native
           cp target/x86_64-unknown-linux-gnu/release/libphieng.so src/PhiEng.Native/runtimes/linux-x64/native/
+      # No `cache: true` here: the sample projects have no PackageReference
+      # (only local ProjectReferences), so ~/.nuget/packages is never
+      # created and the setup-dotnet cache post-step errors.
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-          cache: true
-          cache-dependency-path: "**/*.csproj"
       - name: hello-2d
         run: dotnet run --project samples/hello-2d/hello-2d.csproj
       - name: hello-3d
