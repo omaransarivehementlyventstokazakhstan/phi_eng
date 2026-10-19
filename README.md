@@ -101,7 +101,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v8 (loaders accept v3–v8; older unknown versions are rejected, never misparsed) |
+| Snapshot schema | v9 (loaders accept v3–v9; older unknown versions are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 
@@ -314,11 +314,14 @@ contact for that frame rather than a guessed depth.
   grid. Mode persists in schema v8; FFI
   `phieng_world[_3]_set/get_broadphase_mode` plus managed
   `PhiNativeWorld(3)` wrappers.
-- **Collision tiers (2D and 3D, Rust core):** `CollisionTier`
+- **Collision tiers (2D and 3D, Rust + managed C#):** `CollisionTier`
   (`Tier1_AABBOnly` … `Tier5_GJK_EPA`) ceilings each shape pair at the
   cheapest separating test (sphere-AABB, sphere-sphere, SAT box-box,
   GJK/EPA); pairs above the ceiling are skipped, never guessed. Maps
-  from `SolverQuality`; off by default (full fidelity).
+  from `SolverQuality`; off by default (full fidelity). FFI
+  `phieng_world[_3]_set/get_collision_tier` plus managed
+  `PhiNativeWorld(3).SetCollisionTier/GetCollisionTier`; persists in
+  schema v9. Pinned by H01–H05 (Rust↔C# parity).
 - **CCD tiers (2D and 3D, both languages):** `CcdTier`
   (`Off` / `SweptAABB` / `FullGJK`) selects which bodies substep —
   swept-AABB substeps only pairs whose swept volumes overlap (sparse
@@ -346,7 +349,8 @@ contact for that frame rather than a guessed depth.
   state, v4 added the gravity block + per-body scales, v5 added the
   ambient-force block + simulation clock + per-body ambient scales, v6
   added the CCD block, v7 added solver friction/restitution switches, v8
-  added the thermal block + per-body temperature + broadphase-mode tag —
+  added the thermal block + per-body temperature + broadphase-mode tag, v9
+  added the collision-tier block —
   all conditional, so default worlds still write byte-identical older
   schemas and loaders accept v3–v8).
   `Exact` mode restores warm-start caches, joint impulses,

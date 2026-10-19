@@ -32,6 +32,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     B01-B06  broad-phase tiers (mirrored both languages: backend parity
              2D/3D, Hybrid auto-select, default backend, mid-run switch
              transparency, body-id invariant, FFI round-trip)
+    H01-H05  collision tiers (mirrored both languages: default is full
+             fidelity, ceiling below the required tier stops contacts,
+             ceiling at the required tier keeps them, 3D mirror,
+             determinism under a capped ceiling)
     Q01-Q05  solver quality tiers (mirrored both languages: iteration
              budgets, friction/restitution switches, snapshot round-trip)
     C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,

@@ -10,7 +10,8 @@ S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
 snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
 Q01–Q05 solver quality, T01–T17 thermal, B01–B06 broadphase tiers,
-K31–K44 3D joints).
+K31–K44 3D joints,
+H01–H05 collision tiers).
 
 ## Sleep is full but support-gated (S01, S02)
 
@@ -69,7 +70,7 @@ interpenetrated pairs (past any range the solver would let persist) can
 report flipped axes, which is another reason penetration must be
 arrested early rather than resolved late.
 
-## No raycasts, triggers — broadphase tiers, joints are 2D-only, snapshots are versioned v8
+## No raycasts, triggers — broadphase tiers, rigid-only joints, snapshots are versioned v8
 
 Broad-phase backends (`BroadphaseMode`: brute force, spatial hash,
 dynamic AABB tree, hybrid auto-select — B01–B06) are behavior-identical
@@ -90,23 +91,24 @@ sequence, so switching mode mid-run is transparent. Known caveats:
   conservative, so adversarial orderings pay one O(n log n) rebuild
   before settling.
 
-2D joints exist (distance, hinge with angle limits, prismatic with travel
-limits, fixed weld — rigid only, see `crates/dynamics/src/joint.rs` and
-the J31–J44 parity tests, plus the generic `phieng_world_add_joint`
-FFI bridge). Not yet built: 3D joints of any kind, non-zero compliance
-(springs — rejected with `JointError::UnsupportedCompliance` rather than
-faked), motors, and breakable limits. No ray/shape queries beyond internal
+Joints exist in both dimensions (distance, hinge with angle limits,
+prismatic with travel limits, fixed weld — rigid only, see
+`crates/dynamics/src/joint.rs` / `joint3.rs`, the J31–J44 (2D) and
+K31–K44 (3D) parity tests, plus the generic
+`phieng_world_add_joint` / `phieng_world3_add_joint` FFI bridges and
+their managed mirrors). Not yet built: non-zero compliance (springs —
+rejected with `JointError::UnsupportedCompliance` rather than faked),
+motors, and breakable limits. No ray/shape queries beyond internal
 broadphase iteration, no sensor flags or contact callbacks.
 Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;
-3D worlds always take the serial path. Conservative advancement is
-planned after 3D joints. The parallel path shares one early-exit
-decision across islands (a per-island exit would diverge from serial),
-so the islands rendezvous on a barrier every iteration; that barrier
-carries a timeout, and a desynchronization panics with a diagnostic
-rather than hanging the run (a shared single-slot buffer used to race
-exactly that way — see `CHANGELOG.md`).
+3D worlds always take the serial path. The parallel path shares one
+early-exit decision across islands (a per-island exit would diverge from
+serial), so the islands rendezvous on a barrier every iteration; that
+barrier carries a timeout, and a desynchronization panics with a
+diagnostic rather than hanging the run (a shared single-slot buffer used
+to race exactly that way — see `CHANGELOG.md`).
 
 ## Solver mass-ratio limit (S16, S17 — quantified)
 
@@ -260,6 +262,22 @@ limitation rather than faking it:
   boundary. For true immiscible multiphase flow, surface tension between
   phases is still missing.
 
+
+## Collision tiers are a fidelity-for-cost trade (H01–H05)
+
+The narrowphase tier ceiling (`CollisionTier`: AABB-only, sphere-AABB,
+sphere-sphere, SAT box-box, GJK/EPA) is opt-in and off by default. Two
+documented consequences:
+
+- **A capped ceiling silently stops contacts.** A pair whose required
+  tier exceeds the ceiling is *skipped*, not approximated, so the bodies
+  pass through each other. That is the intended trade (cheaper
+  narrowphase for scenes that never need exact contact), but it is a
+  fidelity change, not a performance-only change: use it only for
+  scenes whose shape mix fits under the ceiling.
+- **The ceiling is per-world, not per-pair.** There is no per-body or
+  per-shape override, so a scene mixing hulls (Tier5) with boxes (Tier4)
+  cannot keep exact hull contacts under a Tier4 ceiling.
 
 ## Thermodynamics & radiation (T01–T17)
 

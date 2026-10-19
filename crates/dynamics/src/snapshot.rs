@@ -49,17 +49,28 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
 /// unknown versions instead of guessing.
+/// v9 adds the collision-tier block (narrowphase tier ceiling).
 /// v8 adds the thermal block (conduction/radiation/convection config,
 /// per-body temperature, and material thermal properties).
 /// v7 adds the solver friction/restitution switches.
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 8;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 9;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
 const SNAPSHOT_SCHEMA_THERMAL: u32 = 8;
+/// Schema that introduced the collision-tier block (v9). Gates below must
+/// use this (not `VERSION`), so v8 payloads keep decoding after future
+/// schemas land.
+const SNAPSHOT_SCHEMA_COLLISION_TIER: u32 = 9;
+/// Schema that introduced the solver friction/restitution switches (v7).
+/// Explicit rather than `VERSION - 1`: the schema ladder is not
+/// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
+/// positional expression silently retargets the gate when the version
+/// bumps.
+const SNAPSHOT_SCHEMA_SOLVER_FLAGS: u32 = 7;
 /// Schema that introduced the ambient block (v5). Gates below must use
 /// this (not `VERSION`), so v5 payloads keep decoding after v6/v7 land.
 const SNAPSHOT_SCHEMA_AMBIENT: u32 = 5;
@@ -767,6 +778,75 @@ fn ccd_config_dto(c: &super::ccd::CcdConfig) -> CcdConfigDto {
     }
 }
 
+// ---- Collision-tier config DTO (schema v9) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CollisionTierConfigDto {
+    /// Master switch. Omitted when false so default worlds stay
+    /// byte-identical to older schemas.
+    #[serde(default, skip_serializing_if = "is_false")]
+    enabled: bool,
+    /// Ceiling tag (0 = Tier1_AABBOnly .. 4 = Tier5_GJK_EPA). Omitted at
+    /// the default (Tier5) for the same reason.
+    #[serde(
+        default = "default_collision_tier_tag",
+        skip_serializing_if = "is_default_collision_tier_tag"
+    )]
+    max_tier: u32,
+}
+
+fn default_collision_tier_tag() -> u32 {
+    super::collision_tier::CollisionTier::Tier5_GJK_EPA as u32
+}
+
+fn is_default_collision_tier_tag(v: &u32) -> bool {
+    *v == default_collision_tier_tag()
+}
+
+impl Default for CollisionTierConfigDto {
+    /// Must be the *engine* default (Tier5, full fidelity), not a
+    /// zero-valued struct: an absent field in an older file means
+    /// "no tier ceiling", and Tier1 (AABB-only) would silently gut the
+    /// narrowphase.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_tier: default_collision_tier_tag(),
+        }
+    }
+}
+
+impl CollisionTierConfigDto {
+    fn is_default(&self) -> bool {
+        !self.enabled && is_default_collision_tier_tag(&self.max_tier)
+    }
+}
+
+fn collision_tier_dto(c: &super::collision_tier::CollisionTierConfig) -> CollisionTierConfigDto {
+    CollisionTierConfigDto {
+        enabled: c.enabled,
+        max_tier: c.max_tier as u32,
+    }
+}
+
+fn collision_tier_from_dto(
+    d: &CollisionTierConfigDto,
+) -> Result<super::collision_tier::CollisionTierConfig, SnapshotError> {
+    use super::collision_tier::CollisionTier as T;
+    let max_tier = match d.max_tier {
+        0 => T::Tier1_AABBOnly,
+        1 => T::Tier2_SphereAABB,
+        2 => T::Tier3_SphereSphere,
+        3 => T::Tier4_BoxBox,
+        4 => T::Tier5_GJK_EPA,
+        other => return corrupt(format!("unknown collision tier tag {other}")),
+    };
+    Ok(super::collision_tier::CollisionTierConfig {
+        enabled: d.enabled,
+        max_tier,
+    })
+}
+
 use super::ccd::CcdTier;
 
 fn ccd_config_from_dto(c: &CcdConfigDto) -> super::ccd::CcdConfig {
@@ -1294,6 +1374,11 @@ struct World2Dto {
         skip_serializing_if = "is_spatial_hash_tag"
     )]
     broadphase_mode: u32,
+    /// Schema v9; narrowphase collision-tier ceiling. Omitted (and
+    /// defaulted) for pre-v9 files so default output stays
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "CollisionTierConfigDto::is_default")]
+    collision_tier: CollisionTierConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1389,6 +1474,11 @@ struct World3Dto {
         skip_serializing_if = "is_spatial_hash_tag"
     )]
     broadphase_mode: u32,
+    /// Schema v9; narrowphase collision-tier ceiling. Omitted (and
+    /// defaulted) for pre-v9 files so default output stays
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "CollisionTierConfigDto::is_default")]
+    collision_tier: CollisionTierConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2086,10 +2176,15 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let has_thermal = w.thermal.config.is_active();
     let has_broadphase_mode = w.broadphase_mode != phieng_broadphase::BroadphaseMode::SpatialHash;
-    let schema = if has_thermal || has_broadphase_mode {
+    // Schema v9: any non-default collision-tier config needs the v9
+    // block (not just `enabled`): a disabled config with an explicit
+    // ceiling is still a user choice and must round-trip exactly.
+    let has_collision_tier = w.collision_tier.enabled
+        || w.collision_tier.max_tier != super::collision_tier::CollisionTier::Tier5_GJK_EPA;
+    let schema = if has_thermal || has_broadphase_mode || has_collision_tier {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
-        SNAPSHOT_SCHEMA_VERSION - 1
+        SNAPSHOT_SCHEMA_SOLVER_FLAGS
     } else if has_ccd {
         SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
@@ -2109,6 +2204,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
+        collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -2283,10 +2379,15 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
     let has_thermal = w.thermal.config.is_active();
     let has_broadphase_mode = w.broadphase_mode != phieng_broadphase::BroadphaseMode::SpatialHash;
-    let schema = if has_thermal || has_broadphase_mode {
+    // Schema v9: any non-default collision-tier config needs the v9
+    // block (not just `enabled`): a disabled config with an explicit
+    // ceiling is still a user choice and must round-trip exactly.
+    let has_collision_tier = w.collision_tier.enabled
+        || w.collision_tier.max_tier != super::collision_tier::CollisionTier::Tier5_GJK_EPA;
+    let schema = if has_thermal || has_broadphase_mode || has_collision_tier {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
-        SNAPSHOT_SCHEMA_VERSION - 1
+        SNAPSHOT_SCHEMA_SOLVER_FLAGS
     } else if has_ccd {
         SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
@@ -2306,6 +2407,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
+        collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -3243,6 +3345,9 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
         return corrupt("ccd.max_substeps must be >= 1");
     }
     w.ccd = ccd_config_from_dto(&dto.ccd);
+    // Schema v9: collision-tier ceiling (older files default to full
+    // fidelity).
+    w.collision_tier = collision_tier_from_dto(&dto.collision_tier)?;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -3303,6 +3408,9 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
         return corrupt("ccd.max_substeps must be >= 1");
     }
     w.ccd = ccd_config_from_dto(&dto.ccd);
+    // Schema v9: collision-tier ceiling (older files default to full
+    // fidelity).
+    w.collision_tier = collision_tier_from_dto(&dto.collision_tier)?;
     w.dt = dto.dt;
     w.linear_sleep_threshold = dto.linear_sleep_threshold;
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
@@ -3439,7 +3547,7 @@ fn encode_solver(out: &mut Vec<u8>, s: &SolverDto, version: u32) {
     write_f32(out, s.baumgarte);
     write_f32(out, s.early_exit_tolerance);
     // Schema v7+: friction/restitution switches.
-    if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
+    if version >= SNAPSHOT_SCHEMA_SOLVER_FLAGS {
         write_u8(out, s.friction as u8);
         write_u8(out, s.restitution as u8);
     }
@@ -3630,12 +3738,12 @@ fn decode_solver(r: &mut Reader, version: u32) -> Result<SolverDto, SnapshotErro
         baumgarte: r.read_f32()?,
         early_exit_tolerance: r.read_f32()?,
         // Schema v7+: friction/restitution switches.
-        friction: if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
+        friction: if version >= SNAPSHOT_SCHEMA_SOLVER_FLAGS {
             r.read_u8()? != 0
         } else {
             true
         },
-        restitution: if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
+        restitution: if version >= SNAPSHOT_SCHEMA_SOLVER_FLAGS {
             r.read_u8()? != 0
         } else {
             true
@@ -3882,6 +3990,12 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         // this nor the thermal block; strictness is free because the whole
         // block is version-gated.
         write_u32(&mut p, dto.broadphase_mode);
+    }
+    // Schema v9: collision-tier ceiling (version-gated, so v8 payloads
+    // keep decoding unchanged).
+    if dto.schema >= SNAPSHOT_SCHEMA_COLLISION_TIER {
+        write_u8(&mut p, dto.collision_tier.enabled as u8);
+        write_u32(&mut p, dto.collision_tier.max_tier);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -4945,6 +5059,15 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         } else {
             default_broadphase_mode_tag()
         },
+        // Schema v9: collision-tier ceiling.
+        collision_tier: if version >= SNAPSHOT_SCHEMA_COLLISION_TIER {
+            CollisionTierConfigDto {
+                enabled: r.read_u8()? != 0,
+                max_tier: r.read_u32()?,
+            }
+        } else {
+            CollisionTierConfigDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -5119,6 +5242,11 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         // Schema v8: broad-phase backend tag (see `world2_to_binary`).
         write_u32(&mut p, dto.broadphase_mode);
     }
+    // Schema v9: collision-tier ceiling (see `world2_to_binary`).
+    if dto.schema >= SNAPSHOT_SCHEMA_COLLISION_TIER {
+        write_u8(&mut p, dto.collision_tier.enabled as u8);
+        write_u32(&mut p, dto.collision_tier.max_tier);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_u32(&mut p, dto.bodies.len() as u32);
@@ -5234,6 +5362,15 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             r.read_u32()?
         } else {
             default_broadphase_mode_tag()
+        },
+        // Schema v9: collision-tier ceiling.
+        collision_tier: if version >= SNAPSHOT_SCHEMA_COLLISION_TIER {
+            CollisionTierConfigDto {
+                enabled: r.read_u8()? != 0,
+                max_tier: r.read_u32()?,
+            }
+        } else {
+            CollisionTierConfigDto::default()
         },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
@@ -6047,6 +6184,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Schema v9: the collision-tier ceiling round-trips through JSON and
+    /// binary, and a default world still writes the older schema.
+    #[test]
+    fn test_snapshot_collision_tier_roundtrip() {
+        use crate::collision_tier::{CollisionTier, CollisionTierConfig};
+
+        for tier in [
+            CollisionTier::Tier1_AABBOnly,
+            CollisionTier::Tier2_SphereAABB,
+            CollisionTier::Tier3_SphereSphere,
+            CollisionTier::Tier4_BoxBox,
+            CollisionTier::Tier5_GJK_EPA,
+        ] {
+            for enabled in [true, false] {
+                let mut w = scene2();
+                w.collision_tier = CollisionTierConfig {
+                    enabled,
+                    max_tier: tier,
+                };
+
+                for fmt in [LoadMode::Exact, LoadMode::Fresh] {
+                    let text = world2_to_json(&w, fmt).expect("serializes");
+                    let back = world2_from_json(&text, fmt).expect("deserializes");
+                    assert_eq!(back.collision_tier.enabled, enabled);
+                    assert_eq!(back.collision_tier.max_tier, tier);
+
+                    let bytes = world2_to_binary(&w, fmt).expect("serializes");
+                    let back = world2_from_binary(&bytes, fmt).expect("deserializes");
+                    assert_eq!(back.collision_tier.enabled, enabled);
+                    assert_eq!(back.collision_tier.max_tier, tier);
+                }
+            }
+        }
+    }
+
+    /// A default world keeps writing its old schema (byte-identical
+    /// output), so existing files are untouched by the tier addition.
+    #[test]
+    fn test_snapshot_default_world_keeps_old_schema() {
+        let w = scene2();
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        assert!(
+            text.contains("\"schema\": 3"),
+            "default world must stay on its old schema, got: {}",
+            text.lines().next().unwrap_or("")
+        );
+        assert!(
+            !text.contains("collision_tier"),
+            "default world must not carry a collision_tier key"
+        );
+    }
+
+    /// A v8 payload (no collision-tier block) still loads, defaulting to
+    /// full fidelity (Tier5) — not to a derived-zero Tier1.
+    #[test]
+    fn test_snapshot_v8_payload_loads() {
+        let mut w = scene2();
+        // Force the v8 schema by keeping every new field at its default.
+        w.broadphase_mode = phieng_broadphase::BroadphaseMode::SpatialHash;
+        w.thermal.config = crate::thermal::ThermalConfig2D::default();
+        w.collision_tier = crate::collision_tier::CollisionTierConfig::default();
+        // A world with only thermal + broadphase fields set writes v8.
+        w.broadphase_mode = phieng_broadphase::BroadphaseMode::BruteForce;
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        assert!(
+            text.contains("\"schema\": 9"),
+            "non-default world writes v9"
+        );
+
+        // A v8-shaped document (tier key absent) must load as full
+        // fidelity.
+        let stripped = text.replace(
+            "\"collision_tier\": {\n      \"enabled\": true,\n      \"max_tier\": 1\n    },",
+            "",
+        );
+        let back = world2_from_json(&stripped, LoadMode::Exact).expect("deserializes");
+        assert!(!back.collision_tier.enabled);
+        assert_eq!(
+            back.collision_tier.max_tier,
+            crate::collision_tier::CollisionTier::Tier5_GJK_EPA,
+            "an absent tier block must default to full fidelity, not Tier1"
+        );
     }
 
     #[test]

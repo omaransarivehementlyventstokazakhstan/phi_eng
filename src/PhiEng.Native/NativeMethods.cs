@@ -314,8 +314,44 @@ internal unsafe struct ThermalConfig2Ffi
         IntPtr world,
         AmbientConfig3Ffi* outCfg);
 
-    /// <summary>CCD config FFI struct (shared 2D/3D). Mirrors Rust <c>CcdConfigFfi</c>.</summary>
+    /// <summary>Collision-tier config FFI struct (shared 2D/3D). Mirrors Rust <c>CollisionTierConfigFfi</c>.</summary>
     [StructLayout(LayoutKind.Sequential)]
+    internal struct CollisionTierConfigFfi
+    {
+        public uint Enabled;
+        /// <summary>Ceiling tag (0 = Tier1_AABBOnly .. 4 = Tier5_GJK_EPA).</summary>
+        public uint MaxTier;
+    }
+
+    /// <summary>Sets the 2D collision-tier config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or an unknown tier tag.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_collision_tier(
+        IntPtr world,
+        CollisionTierConfigFfi* cfg);
+
+    /// <summary>Reads the 2D collision-tier config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_collision_tier(
+        IntPtr world,
+        CollisionTierConfigFfi* outCfg);
+
+    /// <summary>Sets the 3D collision-tier config.</summary>
+    /// <returns>1 on success, 0 for null world/struct or an unknown tier tag.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_collision_tier(
+        IntPtr world,
+        CollisionTierConfigFfi* cfg);
+
+    /// <summary>Reads the 3D collision-tier config.</summary>
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_collision_tier(
+        IntPtr world,
+        CollisionTierConfigFfi* outCfg);
+
+    /// <summary>CCD config FFI struct (shared 2D/3D). Mirrors Rust <c>CcdConfigFfi</c>.</summary>    [StructLayout(LayoutKind.Sequential)]
     internal struct CcdConfigFfi
     {
         public uint Enabled;

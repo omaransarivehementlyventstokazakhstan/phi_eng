@@ -1,6 +1,12 @@
 # Cargo / Rust
 target/
-Cargo.lock
+# Cargo.lock is deliberately TRACKED (not ignored): this workspace builds
+# native binaries and CI gates on trajectory hashes, so dependency
+# resolution must be reproducible across runs. Without it, every CI run
+# re-resolved ("Locking 56 packages"), which silently changed the
+# dependency set under the determinism gates. Bump it deliberately in a
+# dependency-update commit, and re-run the `msrv` job (a newer
+# transitive release can raise the MSRV).
 
 # .NET build outputs
 bin/

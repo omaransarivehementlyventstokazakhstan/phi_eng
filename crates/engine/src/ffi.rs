@@ -3527,6 +3527,127 @@ pub unsafe extern "C" fn phieng_world3_set_body_thermal_material(
     1
 }
 
+/// Collision-tier config layout mirrored to C# (shared by 2D and 3D worlds).
+/// `#[repr(C)]`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CollisionTierConfigFfi {
+    /// Master switch (0/1). When off, the tier ceiling is ignored.
+    pub enabled: u32,
+    /// Ceiling tag (0 = Tier1_AABBOnly .. 4 = Tier5_GJK_EPA).
+    pub max_tier: u32,
+}
+
+fn collision_tier_from_tag(tag: u32) -> Option<phieng_dynamics::CollisionTier> {
+    use phieng_dynamics::CollisionTier as T;
+    match tag {
+        0 => Some(T::Tier1_AABBOnly),
+        1 => Some(T::Tier2_SphereAABB),
+        2 => Some(T::Tier3_SphereSphere),
+        3 => Some(T::Tier4_BoxBox),
+        4 => Some(T::Tier5_GJK_EPA),
+        _ => None,
+    }
+}
+
+fn collision_tier_to_tag(t: phieng_dynamics::CollisionTier) -> u32 {
+    use phieng_dynamics::CollisionTier as T;
+    match t {
+        T::Tier1_AABBOnly => 0,
+        T::Tier2_SphereAABB => 1,
+        T::Tier3_SphereSphere => 2,
+        T::Tier4_BoxBox => 3,
+        T::Tier5_GJK_EPA => 4,
+    }
+}
+
+fn collision_tier_from_ffi(
+    c: &CollisionTierConfigFfi,
+) -> Option<phieng_dynamics::CollisionTierConfig> {
+    use phieng_dynamics::CollisionTierConfig;
+    Some(CollisionTierConfig {
+        enabled: c.enabled != 0,
+        max_tier: collision_tier_from_tag(c.max_tier)?,
+    })
+}
+
+fn collision_tier_to_ffi(c: &phieng_dynamics::CollisionTierConfig) -> CollisionTierConfigFfi {
+    CollisionTierConfigFfi {
+        enabled: c.enabled as u32,
+        max_tier: collision_tier_to_tag(c.max_tier),
+    }
+}
+
+/// Set the 2D collision-tier config. Returns 1 on success, 0 for null
+/// world/struct or an unknown tier tag (the world is left unchanged).
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_collision_tier(
+    world: *mut World2,
+    cfg: *const CollisionTierConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = collision_tier_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).collision_tier = parsed;
+    1
+}
+
+/// Copy the 2D collision-tier config out. Returns 1 on success, 0 for
+/// null world/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one
+/// [`CollisionTierConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_collision_tier(
+    world: *const World2,
+    out: *mut CollisionTierConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = collision_tier_to_ffi(&(*world).collision_tier);
+    1
+}
+
+/// Set the 3D collision-tier config. See [`phieng_world_set_collision_tier`].
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_collision_tier(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const CollisionTierConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = collision_tier_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).collision_tier = parsed;
+    1
+}
+
+/// Copy the 3D collision-tier config out. See [`phieng_world_get_collision_tier`].
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one
+/// [`CollisionTierConfigFfi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_collision_tier(
+    world: *const phieng_dynamics::World3,
+    out: *mut CollisionTierConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = collision_tier_to_ffi(&(*world).collision_tier);
+    1
+}
+
 /// Get a body's thermal material properties (3D).
 /// Returns 1 on success, 0 on null/out.
 /// # Safety

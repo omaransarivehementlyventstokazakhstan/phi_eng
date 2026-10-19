@@ -271,6 +271,22 @@ This project follows [Semantic Versioning](https://semver.org/) and
   (repr(C) `ThermalConfig2Ffi`/`ThermalConfig3Ffi`),
   `phieng_world[_3]_set/get_body_temperature`,
   `phieng_world[_3]_set/get_body_thermal_material`.
+- **Collision tiers (Rust + managed C#)**: `CollisionTier`
+  (`Tier1_AABBOnly` ... `Tier5_GJK_EPA`) caps each shape pair at the
+  cheapest separating test (sphere-AABB, sphere-sphere, SAT box-box,
+  GJK/EPA); pairs above the ceiling are *skipped* (no contact
+  generated), never guessed. Off by default, so a default world is
+  bit-identical; maps from `SolverQuality`. FFI
+  `phieng_world[_3]_set/get_collision_tier` (repr(C)
+  `CollisionTierConfigFfi`) plus managed
+  `PhiNativeWorld(3).SetCollisionTier/GetCollisionTier` and
+  `PhiEng.Broadphase.CollisionTier` / `CollisionTierConfig`.
+  Persisted through **snapshot schema v9** (conditional: default worlds
+  stay on their old schema byte-identical). Parity block H01–H05
+  (mirrored Rust→C#): the default is full fidelity, a ceiling
+  below a pair's required tier really does stop the contact, a ceiling
+  at that tier keeps it, the 3D mirror behaves the same, and capped
+  runs stay deterministic.
 - **Broad-phase tiers (Rust + managed C#)**: `BroadphaseMode`
   (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
   `DynamicAABBTree` backend for 2D and 3D, and an explicit O(n²)
@@ -307,6 +323,9 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Snapshot schema v8**: adds the thermal config block, per-body
   temperature, and material thermal properties (conditional: default
   worlds stay on older schemas byte-identical).
+- **Snapshot schema v9**: adds the collision-tier block (conditional:
+  default worlds stay on their old schema byte-identical; older files
+  load with the tier ceiling at full fidelity).
 - **Thermal parity block T01–T17** (mirrored Rust↔C#): conduction
   equilibrium, conductivity scaling, zero-conductivity no-flow,
   temperature clamping (max/min), static-body thermal reservoir,

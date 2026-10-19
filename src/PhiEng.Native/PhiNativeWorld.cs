@@ -939,6 +939,49 @@ public sealed class PhiNativeWorld : IDisposable
         }
     }
 
+    /// <summary>
+    /// Select the narrowphase collision-tier ceiling. Pairs whose required
+    /// tier exceeds <paramref name="config"/>'s ceiling are skipped (no
+    /// collision generated). Disabled (the default) means full fidelity.
+    /// </summary>
+    public unsafe void SetCollisionTier(CollisionTierConfig config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.CollisionTierConfigFfi
+            {
+                Enabled = config.Enabled ? 1u : 0u,
+                MaxTier = (uint)config.MaxTier,
+            };
+            int ok = NativeMethods.phieng_world_set_collision_tier(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(config), $"Unknown collision tier tag {(uint)config.MaxTier}.");
+            }
+        }
+    }
+
+    /// <summary>Read the narrowphase collision-tier ceiling.</summary>
+    public unsafe CollisionTierConfig GetCollisionTier()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.CollisionTierConfigFfi ffi;
+            int ok = NativeMethods.phieng_world_get_collision_tier(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native collision tier read failed.");
+            }
+            return new CollisionTierConfig
+            {
+                Enabled = ffi.Enabled != 0,
+                MaxTier = (CollisionTier)ffi.MaxTier,
+            };
+        }
+    }
+
     /// <summary>Read the configured broad-phase backend.</summary>
     public unsafe BroadphaseMode GetBroadphaseMode()
     {
