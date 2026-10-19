@@ -5,9 +5,9 @@ on:
   pull_request:
 
 jobs:
-  rust:
+  rust-lint:
     runs-on: ${{ matrix.os }}
-    # Fail fast if a suite regresses into a hang instead of burning the
+    # Fail fast if a lint regresses into a hang instead of burning the
     # 6h default (a pathological broadphase case once did exactly that).
     timeout-minutes: 30
     strategy:
@@ -33,6 +33,25 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  rust-test:
+    runs-on: ${{ matrix.os }}
+    # Split from lint: fmt + clippy-all-targets + doc + a full debug
+    # test build and run no longer fit one 30-minute budget (green runs
+    # were being killed at exactly 30:00 with "The operation was
+    # canceled"). Each half keeps a fail-fast timeout that fits it.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Tests (debug)
         run: cargo test --workspace
 

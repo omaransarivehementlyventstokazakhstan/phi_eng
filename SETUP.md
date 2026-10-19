@@ -219,7 +219,8 @@ dotnet add package PhiEng.Native --source ./local-nuget
 
 | Job | OS | Purpose |
 |-----|----|---------|
-| `rust` | ubuntu-latest, windows-latest | fmt, clippy, doc, tests |
+| `rust-lint` | ubuntu-latest, windows-latest | fmt, clippy, doc |
+| `rust-test` | ubuntu-latest, windows-latest | debug tests (split from lint: the combined job outgrew 30 min) |
 | `csharp` | ubuntu-latest, windows-latest | dotnet test + parity (ubuntu builds `libphieng.so`) |
 | `version-check` | ubuntu-latest | Cargo version = MSBuild version |
 | `msrv` | ubuntu-latest | Build with Rust 1.78 |

@@ -62,8 +62,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Caching + timeouts**: every Rust job now uses `Swatinem/rust-cache`
   and the .NET jobs use the `setup-dotnet` NuGet cache, so runs no longer
   rebuild all dependencies from scratch. Every job has an explicit
-  `timeout-minutes` (30 for the test jobs) so a future hang fails fast
-  instead of consuming the 6-hour default.
+  `timeout-minutes` so a future hang fails fast instead of consuming the
+  6-hour default.
+- **Split `rust` job into `rust-lint` + `rust-test`**: fmt + clippy +
+  doc + a full debug test build and run no longer fit one 30-minute
+  budget — green runs were being killed at exactly 30:00 with "The
+  operation was canceled" and no failing step. Each half keeps a
+  fail-fast timeout that fits it (30 min lint, 45 min tests).
 - **Release soak job**: a new `rust-soak` job runs the full workspace
   suite under `--release`, pinning the determinism hashes and allocation
   counts to optimized-code results (the regime where vectorization / FMA
