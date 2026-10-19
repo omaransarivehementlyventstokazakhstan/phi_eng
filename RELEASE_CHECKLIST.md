@@ -43,6 +43,11 @@ any new additions):
   caller-validated lengths and capped (`1_000_000`, particle caps).
 - `crates/engine/examples/bench_large.rs` — counting global allocator
   (example only, never ships in the library).
+- `crates/math/src/simd.rs` — `std::arch` SSE intrinsics (`_mm_loadu_ps`
+  / `_mm_storeu_ps` family) behind the opt-in `simd` feature flag.
+  Sound iff every pointer is valid for 4 `f32` reads/writes and every
+  test in `simd::tests` (bit-exact vs scalar on fixed inputs) passes;
+  non-x86 targets compile the scalar fallback with no `unsafe` at all.
 
 Rules for new `unsafe`: debug assertion or test proving the contract,
 plus a line in this section.

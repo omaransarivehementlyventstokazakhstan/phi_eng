@@ -32,6 +32,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     B01-B06  broad-phase tiers (mirrored both languages: backend parity
              2D/3D, Hybrid auto-select, default backend, mid-run switch
              transparency, body-id invariant, FFI round-trip)
+    Q01-Q05  solver quality tiers (mirrored both languages: iteration
+             budgets, friction/restitution switches, snapshot round-trip)
+    C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,
+             default-off bit-identical, snapshot round-trip)
+    K31-K44  3D joint constraints (mirrored both languages: distance,
+             hinge, prismatic, fixed)
 """
 
 import re

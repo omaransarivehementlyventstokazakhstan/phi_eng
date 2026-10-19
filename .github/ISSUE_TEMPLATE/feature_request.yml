@@ -1,0 +1,64 @@
+name: Feature request
+description: Propose a new capability for PhiEng (shape, solver, backend, tooling)
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are evaluated against determinism, parity, and
+        zero-alloc steady state. Proposals that break any of the three
+        need a migration story, not just motivation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What can you not do today? Who is blocked?
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API
+      description: Sketch the Rust + C# surface (types, functions, defaults)
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Which layers does this touch?
+      multiple: true
+      options:
+        - Rust core (crates/)
+        - Managed C# (src/)
+        - FFI bridge
+        - Snapshots (schema bump needed?)
+        - Tests / parity IDs
+        - Docs only
+        - CI / tooling
+  - type: textarea
+    id: determinism
+    attributes:
+      label: Determinism & parity impact
+      description: |
+        How is bit-exactness preserved? Does it need a new parity-ID block?
+        Does it change any trajectory hash or the snapshot schema?
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you try, and why is it insufficient?
+      render: text
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked LIMITATIONS.md and the OPTIMIZATION_PLAN.md — this isn't already planned or wont-fix
+        - label: I am willing to write the Rust↔C# parity tests for this

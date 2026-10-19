@@ -87,7 +87,7 @@ cargo build --target x86_64-pc-windows-gnu --release -p phieng
 |---|---|---|
 | `math` | `PhiEng.Math` | Vectors, quaternions, transforms, AABBs, inertia tensors |
 | `collision` | `PhiEng.Collision` | 2D SAT, 3D SAT / GJK / EPA, contact generation |
-| `broadphase` | `PhiEng.Broadphase` | Spatial hash (2D), flat AABB tree (3D) |
+| `broadphase` | `PhiEng.Broadphase` | Tiered backends (`BroadphaseMode`: brute force, spatial hash, dynamic AABB tree, hybrid auto-select) |
 | `dynamics` | `PhiEng.Dynamics` | Bodies, materials, sequential-impulse solvers, worlds, 2D joints, snapshots |
 | `engine` | `PhiEng` (root) + `PhiEng.Native` | Re-exports, C ABI (`phieng_world_*`, `phieng_world3_*`, `phieng_world_*_joint`) |
 
@@ -101,7 +101,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v5 (loaders accept v3–v5; v1/v2 are rejected, never misparsed) |
+| Snapshot schema | v8 (loaders accept v3–v8; older unknown versions are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 
@@ -194,18 +194,24 @@ contact for that frame rather than a guessed depth.
   under Earth gravity) and is pushed back out over the following frames;
   box–box and sphere pairs never take this path (analytic/SAT dispatch).
   The skip is bounded and convergent, never accumulating.
-- **Sleeping is partial (known limitation).** A body flagged asleep is
-  *not* skipped by the pipeline and there is **no auto-wake on contact**:
-  a sleeping body keeps accumulating gravity and solver impulses each
-  step (velocities are zeroed at the end of the step), and only a manual
-  `wake_body` call clears the flag. Do not rely on sleep for performance
-  yet; it currently only damps residual velocity. Full sleeping (pipeline
-  skip + auto-wake + cascade) is a planned separate phase. See
-  `LIMITATIONS.md`.
-- **Solver (2D and 3D):** max 8 iterations, slop `0.005`, Baumgarte `0.2`,
-  warm starting, early exit when max applied impulse `< 1e-6` (resting
-  contacts typically converge in 1 iteration; proven trajectory-neutral by
-  identical final-state hashes with early exit on/off). The Baumgarte
+- **Sleeping is full but support-gated.** A body flagged asleep is
+  frozen: skipped in gravity, ambient, fluid force application,
+  integration, and the contact solver (treated as infinite mass, exactly
+  like statics). Wakes happen on new contact (with transitive cascade
+  over contact and joint partners), lost contact (support pulled away),
+  direct impulse/force application, and joint-partner motion — plus an
+  explicit `wake_body` that cascades the same way. A body falls asleep
+  only when slow **and** supported by a current contact (ballistic
+  apexes and drifters never sleep), so no wake/sleep history exists and
+  save/load stays exact. See `LIMITATIONS.md`.
+- **Solver (2D and 3D):** quality tiers `Ultra` (8 iterations) down
+  to `Minimal` (1 iteration) via `SolverQuality` (`ApplyQuality()` in
+  C#); `Low`/`Minimal` skip the friction pass (~half the solve cost),
+  with `enable_friction` / `enable_restitution` switches. Slop `0.005`,
+  Baumgarte `0.2`, warm starting, early exit when max applied impulse
+  `< 1e-6` (resting contacts typically converge in 1 iteration; proven
+  trajectory-neutral by identical final-state hashes with early exit
+  on/off). The Baumgarte
   bias velocity is capped at 2.0 m/s (`Solver::MAX_BIAS_VELOCITY`,
   mirrored in C#) so deep overlaps resolve gradually instead of
   ejecting; contacts shallower than ~17 cm at 60 Hz are bit-identical
@@ -285,6 +291,49 @@ contact for that frame rather than a guessed depth.
   bit-equality is *not* claimed (the noise uses different float ops), so
   parity binds to statistical/energy bounds. Ambient config, the clock,
   and per-body scales cross FFI; a default config is a no-op.
+- **Thermodynamics & radiation (2D and 3D, Rust core + FFI):**
+  per-body temperature (Kelvin, default 293.15 K) evolved by a thermal
+  phase running after integration: contact-driven **conduction**,
+  Stefan–Boltzmann T⁴ **radiation** (ambient + body-to-body, unoccluded,
+  distance-bounded), and Newtonian **convection** to ambient temperature.
+  Material carries `specific_heat`, `thermal_conductivity`, `emissivity`;
+  `ThermalConfig2/3` toggles each mechanism plus clamps and the radiation
+  cutoff. Off by default — bit-identical trajectories. Static bodies act
+  as fixed-temperature reservoirs. Crosses FFI
+  (`phieng_world[_3]_set/get_thermal_config`,
+  `set/get_body_temperature`, `set/get_body_thermal_material`) and
+  persists in schema v8. The managed C# mirror (`PhiEng.Dynamics`)
+  does not step thermal yet — use `PhiNativeWorld(3)` for thermal sims.
+- **Broad-phase tiers (2D and 3D, both languages):** `BroadphaseMode`
+  (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
+  dynamic AABB tree backend for 2D and 3D, and an explicit O(n²) brute
+  force backend. Modes are behavior-identical (canonical sorted+deduped
+  pair sequence); `Hybrid` auto-selects from live body count each step
+  (brute force below 50, grid 50–5000, tree above). Default stays the
+  grid. Mode persists in schema v8; FFI
+  `phieng_world[_3]_set/get_broadphase_mode` plus managed
+  `PhiNativeWorld(3)` wrappers.
+- **Collision tiers (2D and 3D, Rust core):** `CollisionTier`
+  (`Tier1_AABBOnly` … `Tier5_GJK_EPA`) ceilings each shape pair at the
+  cheapest separating test (sphere-AABB, sphere-sphere, SAT box-box,
+  GJK/EPA); pairs above the ceiling are skipped, never guessed. Maps
+  from `SolverQuality`; off by default (full fidelity).
+- **CCD tiers (2D and 3D, both languages):** `CcdTier`
+  (`Off` / `SweptAABB` / `FullGJK`) selects which bodies substep —
+  swept-AABB substeps only pairs whose swept volumes overlap (sparse
+  scenes pay nothing), full keeps the legacy peak-speed behavior. Maps
+  from `SolverQuality` (`Ultra`→Full, `High`→Swept, else Off); persists
+  in the v6 `ccd` block's `tier` field.
+- **SIMD math paths (Rust, opt-in):** `phieng-math` `simd` feature flag
+  (off by default for MSRV compatibility) enables batched primitives
+  (`add4`/`sub4`/`mul4`/`dot4`, `dot2_batch`, `add_vec2_batch`) using
+  x86_64/x86 SSE intrinsics with scalar fallbacks everywhere else.
+  Bit-exact vs scalar (pinned by tests); default builds are untouched.
+- **PhysicsConfig facade (Rust):** `PhysicsConfig` unifies
+  `solver_quality`, `collision_tier`, `broadphase_mode`, sleep
+  thresholds, `ccd`, and `thermal` with `Default` (= pre-tier-system
+  behavior), `low_end()`, and `high_fidelity()` presets plus
+  `apply_to_2d`/`apply_to_3d`.
 - **Runtime validation:** every step guards against NaN/Inf state and
   clamps runaway penetration, coordinates, and velocities
   (`ValidationConfig`: `Default`/`Strict`/`Permissive`; per-step
@@ -292,11 +341,13 @@ contact for that frame rather than a guessed depth.
   when the world holds no issues to correct; joint-less worlds step
   exactly as before (proven by unchanged determinism hashes).
 - **Snapshots:** save/load 2D and 3D worlds as JSON or versioned binary
-  (`snapshot.rs`, schema v5: v2 added convex-mesh shapes, v3 added fluid
+  (`snapshot.rs`, schema v8: v2 added convex-mesh shapes, v3 added fluid
   state, v4 added the gravity block + per-body scales, v5 added the
-  ambient-force block + simulation clock + per-body ambient scales, all
-  with conditional versions — default worlds still write byte-identical
-  v3 and gravity-only worlds byte-identical v4, loaders accept v3–v5).
+  ambient-force block + simulation clock + per-body ambient scales, v6
+  added the CCD block, v7 added solver friction/restitution switches, v8
+  added the thermal block + per-body temperature + broadphase-mode tag —
+  all conditional, so default worlds still write byte-identical older
+  schemas and loaders accept v3–v8).
   `Exact` mode restores warm-start caches, joint impulses,
   latched angles, and fluid particles for bit-identical continuation;
   `Fresh` mode restores structure + config with cold solver state.
@@ -422,7 +473,7 @@ chase-dominated stalls — not on speculation.
   needle-overlap pair, strict-seed cases).
 - C#: same coverage via xUnit, including its own 1000-case fuzz with an
   independent xorshift implementation (stable across .NET versions).
-- Robustness suite (IDs S/W/N/D/F/V/J/E/P/G/A, mirrored both languages,
+- Robustness suite (IDs S/W/N/D/F/V/J/E/P/G/A/T/B/Q/C/K, mirrored both languages,
   parity enforced by `tools/check_test_parity.py`): sleep semantics,
   warm-start/cache eviction, never-guess self-heal proofs, solver
   numerical limits, shape-edge validation, FFI boundary + dispose stress,
@@ -432,7 +483,13 @@ chase-dominated stalls — not on speculation.
   determinism, Verlet energy order, softening safety, probes, snapshot
   round-trip, BH determinism, plus a compact 3D set), ambient forces
   (A01–A05: spring/SHM period, drag terminal velocity, turbulence
-  determinism, default no-op, scale immunity), parallel island
+  determinism, default no-op, scale immunity), thermal subsystem
+  (T01–T17: conduction, radiation, convection, clamping, reservoirs,
+  no-op paths, determinism; 3D conduction + determinism), broad-phase
+  tiers (B01–B06: backend parity 2D/3D, Hybrid auto-select, default
+  backend, mid-run switch transparency, body-id invariant, FFI
+  round-trip), solver quality tiers (Q01–Q05), CCD tiers (C01–C04),
+  3D joint constraints (K31–K44), parallel island
   solver (P31–P34, bit-identical to serial; `Solver.Parallel`, off by
   default).
 - Cross-language equivalence (F28): identical fixed scenes through the

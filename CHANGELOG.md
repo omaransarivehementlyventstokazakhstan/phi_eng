@@ -280,7 +280,7 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - **Snapshot schema v8**: adds the thermal config block, per-body
   temperature, and material thermal properties (conditional: default
   worlds stay on older schemas byte-identical).
-- **Thermal parity block T01–T16** (mirrored Rust↔C#): conduction
+- **Thermal parity block T01–T17** (mirrored Rust↔C#): conduction
   equilibrium, conductivity scaling, zero-conductivity no-flow,
   temperature clamping (max/min), static-body thermal reservoir,
   disabled-config no-op, conduction disabled, determinism.

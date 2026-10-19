@@ -9,7 +9,8 @@ C# is enforced by `tools/check_test_parity.py`
 S16–S21 solver limits, D22–D27 dispatch/shape edges, F28–F33 FFI-only,
 V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
 snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
-Q01–Q05 solver quality).
+Q01–Q05 solver quality, T01–T17 thermal, B01–B06 broadphase tiers,
+K31–K44 3D joints).
 
 ## Sleep is full but support-gated (S01, S02)
 
@@ -202,11 +203,11 @@ in form but tuned for gameplay, not CFD. Specific documented gaps:
 
 The broadphase grid and contact cache now recycle their buffers through
 internal pools (dynamic pile: ~0.8 allocs/step 2D, 0.0 3D; resting 0.0).
-Two sources still allocate and are documented gaps, not regressions:
+The Barnes-Hut tree arena is also pooled (thread-local arena reused
+across kicks instead of rebuilt), so BH gravity scenes no longer pay
+per-kick tree allocation. One source still allocates and is a
+documented gap, not a regression:
 
-- **Barnes-Hut** rebuilds its arena and per-leaf index `Vec`s every kick
-  (the tree is not pooled) — a gravity-scene cost only; the exact N-body
-  path stays allocation-free.
 - **Parallel island solve** allocates its per-step island/constraint
   scratch (off by default; serial path is allocation-free).
 - The broadphase grid and contact cache still **compact vacated entries
@@ -285,8 +286,14 @@ radiation, and convection. Documented gaps:
   than strict SI units.
 - **Cross-language parity is tolerance-based.** Rust and C# thermal
   trajectories agree on statistical/energy/amplitude bounds but are not
-  bit-equal (same rule as ambient turbulence and gravity). T01–T16 pin
+  bit-equal (same rule as ambient turbulence and gravity). T01–T17 pin
   per-backend determinism, not cross-language bit-equality.
+- **Managed C# mirror does not step thermal.** `PhiEng.Dynamics`
+  `World2/3` and its snapshot ignore thermal state (no `Temperature` on
+  managed bodies, no thermal config block); thermal sims must go through
+  `PhiNativeWorld(3)` (FFI into the Rust core), where stepping, FFI, and
+  snapshots are fully covered. A managed stage-by-stage mirror (like the
+  fluid solver) is future work.
 
 
 

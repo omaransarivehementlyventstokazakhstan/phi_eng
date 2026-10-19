@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in PhiEng behaves incorrectly (wrong physics, crash, or panic)
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in everything you can — a minimal
+        repro is the single most useful thing you can provide. Security
+        vulnerabilities go through GitHub Security Advisories instead
+        (see `SECURITY.md`), not public issues.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Cargo workspace version and MSBuild version (must agree — see API_STABILITY.md)
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which implementation shows the bug?
+      options:
+        - Rust core (crates/)
+        - Managed C# (PhiEng.Dynamics)
+        - Native bridge (PhiEng.Native / FFI)
+        - Both Rust and C# (parity break)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS / RID
+      options:
+        - windows-x64
+        - linux-x64
+        - osx-x64
+        - osx-arm64
+        - other (specify below)
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest scene + steps that show the bug (code snippet, or attach a snapshot file)
+      placeholder: |
+        World2 with 2 bodies at ..., step(dt) x N times, observe ...
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead, and why (docs, analytic result, prior version)?
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happens instead — include velocities/positions, hashes, or error text
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: parity-id
+    attributes:
+      label: Parity test ID (if cross-language)
+      description: e.g. T03, B01, G02 — see tools/check_test_parity.py
+      placeholder: "none"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / hashes
+      description: Determinism hash, BRUTAL readings line, or stack trace if any
+      render: text
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I ran the hygiene gate (`cargo fmt --check`, `cargo test --workspace`) on a clean tree
+        - label: This is not a documented limitation (checked LIMITATIONS.md)
+        - label: I can reproduce on `main` (not just my branch)
