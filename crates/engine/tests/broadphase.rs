@@ -130,9 +130,13 @@ fn b01_all_2d_modes_bit_identical() {
 /// B02: every 3D backend produces a bit-identical trajectory.
 #[test]
 fn b02_all_3d_modes_bit_identical() {
-    // 3D has no spatial-hash backend, so the comparable set is
-    // brute-force vs tree.
-    for mode in [BroadphaseMode::BruteForce, BroadphaseMode::DynamicAABBTree] {
+    // All three 3D backends now exist (brute force, spatial hash, tree).
+    let mut reference: Option<Vec<(Vec3, Vec3)>> = None;
+    for mode in [
+        BroadphaseMode::BruteForce,
+        BroadphaseMode::SpatialHash,
+        BroadphaseMode::DynamicAABBTree,
+    ] {
         let mut w = scene_world3();
         w.broadphase_mode = mode;
         for _ in 0..240 {
@@ -141,20 +145,16 @@ fn b02_all_3d_modes_bit_identical() {
         let fp = fingerprint3(&w);
         assert_eq!(w.bodies.len(), 9);
         assert!(fp.iter().all(|(p, _)| p.x.is_finite() && p.y.is_finite()));
+        match &reference {
+            None => reference = Some(fp),
+            Some(r) => assert_eq!(
+                *r,
+                fp,
+                "3D backend {} diverged from the reference",
+                mode.name()
+            ),
+        }
     }
-
-    // And cross-mode equality.
-    let mut w1 = scene_world3();
-    w1.broadphase_mode = BroadphaseMode::BruteForce;
-    for _ in 0..120 {
-        w1.step(1.0 / 60.0);
-    }
-    let mut w2 = scene_world3();
-    w2.broadphase_mode = BroadphaseMode::DynamicAABBTree;
-    for _ in 0..120 {
-        w2.step(1.0 / 60.0);
-    }
-    assert_eq!(fingerprint3(&w1), fingerprint3(&w2));
 }
 
 /// Build a scene with exactly `count` bodies, all positioned identically
@@ -224,10 +224,10 @@ fn b04_default_is_spatial_hash() {
 
     let w3 = World3::new();
     assert_eq!(w3.broadphase_mode, BroadphaseMode::SpatialHash);
-    // 3D falls back to all-pairs (no 3D grid backend yet).
+    // 3D has a real grid backend now (it used to fall back to all-pairs).
     assert!(matches!(
         w3.broadphase,
-        phieng_broadphase::Broadphase3::BruteForce(_)
+        phieng_broadphase::Broadphase3::SpatialHash(_)
     ));
 }
 

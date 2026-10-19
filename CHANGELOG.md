@@ -302,6 +302,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
   `PhiEng.Broadphase.BroadphaseMode`. Mode persists via schema-v8
   `broadphase_mode` tag (conditional: default worlds stay on older
   schemas byte-identical).
+- **3D spatial-hash broadphase**: `SpatialHash3` (the 3D counterpart of
+  `SpatialHash2`) with the same contract — pooled per-cell buffers (no
+  steady-state allocation), a bounded insert cost (oversized bodies pair
+  against the whole scene instead of filling millions of cells), and
+  canonical sorted+deduped pairs. 3D `SpatialHash`/`Hybrid` used to fall
+  back to all-pairs (O(n²)); they now use the real grid. The
+  default 3D backend therefore changed from brute force to the grid —
+  a performance change only, with bit-identical trajectories pinned by
+  B02 (all three 3D backends agree).
 - **CCD tiers (Rust + managed C#)**: `CcdTier`
   (`Off` / `SweptAABB` / `FullGJK`) selects how aggressively tunneling is
   prevented — off pays nothing, swept-AABB substeps only pairs whose

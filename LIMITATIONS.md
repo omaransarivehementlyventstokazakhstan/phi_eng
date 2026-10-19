@@ -77,9 +77,12 @@ dynamic AABB tree, hybrid auto-select — B01–B06) are behavior-identical
 by construction: every backend emits the same sorted+deduped pair
 sequence, so switching mode mid-run is transparent. Known caveats:
 
-- **3D has no spatial-hash backend yet.** The 2D spatial grid has no 3D
-  counterpart, so `SpatialHash` and `Hybrid` both fall back to all-pairs
-  on 3D worlds. The fallback is exact, just O(n²).
+- **Grid backends report cell overlaps, not AABB overlaps.** A spatial
+  hash emits every pair that shares a cell, so it can report pairs whose
+  AABBs do not actually touch (the narrowphase rejects them, so the
+  simulation is unaffected — B01/B02 pin bit-identical trajectories
+  across backends). What a grid must never do is *miss* an overlapping
+  pair; that is a false negative and would drop a real contact.
 - **The dynamic tree has no incremental update.** The world rebuilds the
   whole tree every step (`clear` + `insert`), and `remove` rebuilds
   bottom-up from the surviving leaves. Remote bodies that never move
