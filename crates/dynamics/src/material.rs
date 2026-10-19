@@ -19,15 +19,21 @@ pub struct PhysicsMaterial {
     pub restitution: f32,
     /// Mass per unit area (2D) / volume (3D); derives mass and inertia.
     pub density: f32,
+    /// Specific heat capacity J/(kg·K). Default: 900.0.
+    pub specific_heat: f32,
+    /// Thermal conductivity W/(m·K). Default: 1.0.
+    pub thermal_conductivity: f32,
+    /// Surface emissivity 0..1. Default: 0.9.
+    pub emissivity: f32,
 }
 
 impl PhysicsMaterial {
-    /// Sensible defaults: moderate grip, nearly dead bounce, unit density.
     pub const DEFAULT_FRICTION: f32 = 0.4;
-    /// Default restitution.
     pub const DEFAULT_RESTITUTION: f32 = 0.1;
-    /// Default density.
     pub const DEFAULT_DENSITY: f32 = 1.0;
+    pub const DEFAULT_SPECIFIC_HEAT: f32 = 900.0;
+    pub const DEFAULT_THERMAL_CONDUCTIVITY: f32 = 1.0;
+    pub const DEFAULT_EMISSIVITY: f32 = 0.9;
 
     /// Build a material, sanitizing inputs (negative friction/density and
     /// non-finite values fall back to defaults; restitution clamps to [0, 1]).
@@ -48,6 +54,9 @@ impl PhysicsMaterial {
             } else {
                 Self::DEFAULT_DENSITY
             },
+            specific_heat: Self::DEFAULT_SPECIFIC_HEAT,
+            thermal_conductivity: Self::DEFAULT_THERMAL_CONDUCTIVITY,
+            emissivity: Self::DEFAULT_EMISSIVITY,
         }
     }
 
@@ -71,6 +80,9 @@ impl Default for PhysicsMaterial {
             friction: Self::DEFAULT_FRICTION,
             restitution: Self::DEFAULT_RESTITUTION,
             density: Self::DEFAULT_DENSITY,
+            specific_heat: Self::DEFAULT_SPECIFIC_HEAT,
+            thermal_conductivity: Self::DEFAULT_THERMAL_CONDUCTIVITY,
+            emissivity: Self::DEFAULT_EMISSIVITY,
         }
     }
 }
@@ -93,6 +105,12 @@ mod tests {
         assert_eq!(m.friction, PhysicsMaterial::DEFAULT_FRICTION);
         assert_eq!(m.restitution, 1.0);
         assert_eq!(m.density, PhysicsMaterial::DEFAULT_DENSITY);
+        assert_eq!(m.specific_heat, PhysicsMaterial::DEFAULT_SPECIFIC_HEAT);
+        assert_eq!(
+            m.thermal_conductivity,
+            PhysicsMaterial::DEFAULT_THERMAL_CONDUCTIVITY
+        );
+        assert_eq!(m.emissivity, PhysicsMaterial::DEFAULT_EMISSIVITY);
 
         let m = PhysicsMaterial::new(0.8, 0.6, 2.0);
         assert_eq!(m.friction, 0.8);

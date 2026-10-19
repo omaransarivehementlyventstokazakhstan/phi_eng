@@ -26,11 +26,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     A01-A05  ambient forces (mirrored both languages: A01 spring/SHM
              period, A02 linear-drag terminal velocity, A03 turbulence
              determinism, A04 default no-op, A05 ambient-scale immunity)
-
-This script extracts IDs from Rust test fns (crates/**/*.rs) and C# test
-methods (tests/**/*.cs) and fails (exit 1) on any drift outside the
-exemption list. Run it manually or wire it into CI; a green suite with a
-red parity check means the mirror is drifting.
+    T01-T17  thermal subsystem (mirrored both languages: conduction,
+             radiation, convection, clamping, reservoirs, no-op paths,
+             determinism; 3D conduction + determinism)
+    B01-B06  broad-phase tiers (mirrored both languages: backend parity
+             2D/3D, Hybrid auto-select, default backend, mid-run switch
+             transparency, body-id invariant, FFI round-trip)
 """
 
 import re

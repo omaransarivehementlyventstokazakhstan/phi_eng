@@ -15,6 +15,10 @@ pub const LINEAR_SLEEP_THRESHOLD: f32 = 0.05;
 pub const ANGULAR_SLEEP_THRESHOLD: f32 = 0.05;
 pub const CONTACT_MATCH_DIST_SQ: f32 = 0.04;
 pub const RESTITUTION_THRESHOLD: f32 = 1.0;
+pub const DEFAULT_TEMPERATURE: f32 = 293.15;
+pub const STEFAN_BOLTZMANN: f32 = 5.67e-8;
+pub const MIN_TEMPERATURE: f32 = 0.0;
+pub const MAX_TEMPERATURE: f32 = 5000.0;
 
 /// Scale tolerance by characteristic length (see [`EPS`]).
 ///

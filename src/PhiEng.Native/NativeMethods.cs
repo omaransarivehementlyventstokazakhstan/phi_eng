@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using PhiEng.Broadphase;
 
 namespace PhiEng.Native;
 
@@ -217,9 +218,44 @@ internal static partial class NativeMethods
         public byte PhaseCount;
         public fixed float PhaseRestDensity[4];
         public fixed float PhaseMass[4];
-        public float MaxVelocity;
-        public float ParticleRadius;
+    public float MaxVelocity;
+    public float ParticleRadius;
+    public byte Enabled;
+}
+
+/// <summary>Thermal config FFI struct (2D). Mirrors Rust <c>ThermalConfig2Ffi</c> — never reorder.
+/// Bool fields are <c>byte</c> (0/1) to match Rust's 1-byte <c>bool</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct ThermalConfig2Ffi
+{
+    public byte Enabled;
+    public float AmbientTemperature;
+    public float StefanBoltzmann;
+    public float ConvectionCoefficient;
+    public byte RadiationEnabled;
+    public byte ConductionEnabled;
+    public byte ConvectionEnabled;
+    public float MaxTemperature;
+    public float MinTemperature;
+    public float RadiationRadiusFactor;
+    public float MaxTemperatureRate;
+}
+
+/// <summary>Thermal config FFI struct (3D). Mirrors Rust <c>ThermalConfig3Ffi</c> (same field set as 2D).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct ThermalConfig3Ffi
+    {
         public byte Enabled;
+        public float AmbientTemperature;
+        public float StefanBoltzmann;
+        public float ConvectionCoefficient;
+        public byte RadiationEnabled;
+        public byte ConductionEnabled;
+        public byte ConvectionEnabled;
+        public float MaxTemperature;
+        public float MinTemperature;
+        public float RadiationRadiusFactor;
+        public float MaxTemperatureRate;
     }
 
     /// <summary>SPH fluid config FFI struct (3D). Mirrors Rust <c>FluidConfig3Ffi</c>.</summary>
@@ -283,6 +319,8 @@ internal static partial class NativeMethods
     internal struct CcdConfigFfi
     {
         public uint Enabled;
+        /// <summary>CCD tier tag (0 = Off, 1 = SweptAABB, 2 = FullGJK).</summary>
+        public uint Tier;
         public float MaxMovement;
         public uint MaxSubsteps;
     }
@@ -500,6 +538,125 @@ internal static partial class NativeMethods
     internal static unsafe partial int phieng_world_get_fluid_config(
         IntPtr world,
         FluidConfig2Ffi* @out);
+
+    // ---- Broadphase mode (mirrors the phieng_world*_broadphase_mode functions in ffi.rs) ----
+    // Tag values mirror the Rust BroadphaseMode discriminants.
+
+    /// <returns>1 on success, 0 for null world or unknown mode tag.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_broadphase_mode(
+        IntPtr world,
+        uint mode);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world_get_broadphase_mode(
+        IntPtr world,
+        uint* outMode);
+
+    /// <returns>1 on success, 0 for null world or unknown mode tag.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_broadphase_mode(
+        IntPtr world,
+        uint mode);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world3_get_broadphase_mode(
+        IntPtr world,
+        uint* outMode);
+
+    // ---- Thermal config (mirrors the phieng_world_*_thermal_config functions in ffi.rs) ----
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_thermal_config(
+        IntPtr world,
+        ThermalConfig2Ffi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_thermal_config(
+        IntPtr world,
+        ThermalConfig2Ffi* @out);
+
+    /// <returns>1 on success, 0 for null world or invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_temperature(
+        IntPtr world,
+        uint bodyId,
+        float temperature);
+
+    /// <returns>1 on success, 0 for null world/out or unknown body.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world_get_body_temperature(
+        IntPtr world,
+        uint bodyId,
+        float* outTemp);
+
+    /// <returns>1 on success, 0 for null world or invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_thermal_material(
+        IntPtr world,
+        uint bodyId,
+        float specificHeat,
+        float thermalConductivity,
+        float emissivity);
+
+    /// <returns>1 on success, 0 for null world/out or unknown body.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world_get_body_thermal_material(
+        IntPtr world,
+        uint bodyId,
+        float* outSpecificHeat,
+        float* outThermalConductivity,
+        float* outEmissivity);
+
+    // ---- 3D thermal config ----
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_thermal_config(
+        IntPtr world,
+        ThermalConfig3Ffi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_thermal_config(
+        IntPtr world,
+        ThermalConfig3Ffi* @out);
+
+    /// <returns>1 on success, 0 for null world or invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_temperature(
+        IntPtr world,
+        uint bodyId,
+        float temperature);
+
+    /// <returns>1 on success, 0 for null world/out or unknown body.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world3_get_body_temperature(
+        IntPtr world,
+        uint bodyId,
+        float* outTemp);
+
+    /// <returns>1 on success, 0 for null world or invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_thermal_material(
+        IntPtr world,
+        uint bodyId,
+        float specificHeat,
+        float thermalConductivity,
+        float emissivity);
+
+    /// <returns>1 on success, 0 for null world/out or unknown body.</returns>
+    [LibraryImport(LibraryName), SuppressGCTransition]
+    internal static unsafe partial int phieng_world3_get_body_thermal_material(
+        IntPtr world,
+        uint bodyId,
+        float* outSpecificHeat,
+        float* outThermalConductivity,
+        float* outEmissivity);
 
     /// <returns>Number of particles added, 0 on null world/positions/phases or bad input.</returns>
     [LibraryImport(LibraryName)]

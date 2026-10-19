@@ -15,6 +15,12 @@ public class PhysicsMaterial
     public const float DefaultRestitution = 0.1f;
     /// <summary>Fallback density for non-finite or non-positive input.</summary>
     public const float DefaultDensity = 1.0f;
+    /// <summary>Fallback specific heat capacity J/(kg·K).</summary>
+    public const float DefaultSpecificHeat = 900.0f;
+    /// <summary>Fallback thermal conductivity W/(m·K).</summary>
+    public const float DefaultThermalConductivity = 1.0f;
+    /// <summary>Fallback surface emissivity 0..1.</summary>
+    public const float DefaultEmissivity = 0.9f;
 
     /// <summary>Minimum sane density (guards against zero/negative mass).</summary>
     public const float MinDensity = 1e-6f;
@@ -25,6 +31,12 @@ public class PhysicsMaterial
     public float Restitution { get; set; }
     /// <summary>Mass per unit area (2D); derives mass and inertia.</summary>
     public float Density { get; set; }
+    /// <summary>Specific heat capacity J/(kg·K).</summary>
+    public float SpecificHeat { get; set; }
+    /// <summary>Thermal conductivity W/(m·K).</summary>
+    public float ThermalConductivity { get; set; }
+    /// <summary>Surface emissivity 0..1.</summary>
+    public float Emissivity { get; set; }
 
     /// <summary>Builds a default material (moderate grip, nearly dead bounce, unit density).</summary>
     public PhysicsMaterial()
@@ -38,6 +50,9 @@ public class PhysicsMaterial
         Friction = float.IsFinite(friction) && friction >= 0.0f ? friction : DefaultFriction;
         Restitution = float.IsFinite(restitution) ? MathF.Max(0.0f, MathF.Min(1.0f, restitution)) : DefaultRestitution;
         Density = float.IsFinite(density) && density > 0.0f ? density : DefaultDensity;
+        SpecificHeat = DefaultSpecificHeat;
+        ThermalConductivity = DefaultThermalConductivity;
+        Emissivity = DefaultEmissivity;
     }
 
     /// <summary>Fresh default instance (never a shared singleton).</summary>

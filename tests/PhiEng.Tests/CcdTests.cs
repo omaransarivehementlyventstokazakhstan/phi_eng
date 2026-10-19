@@ -13,7 +13,7 @@ public class CcdTests
 {
     private const float Dt = 1.0f / 60.0f;
 
-    private static CcdConfig CcdOn() => new() { Enabled = true, MaxMovement = 0.05f, MaxSubsteps = 64 };
+    private static CcdConfig CcdOn() => new() { Enabled = true, Tier = CcdTier.FullGJK, MaxMovement = 0.05f, MaxSubsteps = 64 };
 
     private static void Calm(World2 world)
     {

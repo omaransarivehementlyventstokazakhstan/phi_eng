@@ -4,6 +4,58 @@ using PhiEng.Math;
 namespace PhiEng.Broadphase;
 
 /// <summary>
+/// Broad-phase backend selection. Mirrors the Rust
+/// <c>BroadphaseMode</c> in <c>crates/broadphase/src/broadphase_mode.rs</c>;
+/// the discriminant values are part of the FFI contract and must stay in
+/// sync (see <c>phieng_world_set_broadphase_mode</c>).
+/// </summary>
+public enum BroadphaseMode
+{
+    /// <summary>All-pairs test. Fastest for tiny scenes (&lt; ~50 bodies).</summary>
+    BruteForce = 0,
+
+    /// <summary>Uniform spatial hash grid. Default; best for 50–5000 bodies.</summary>
+    SpatialHash = 1,
+
+    /// <summary>Balanced AABB tree. Best for 5000+ bodies and clustered layouts.</summary>
+    DynamicAABBTree = 2,
+
+    /// <summary>Auto-select from live body count (see <c>AutoSelect</c>).</summary>
+    Hybrid = 3,
+}
+
+/// <summary>Auto-selection thresholds for <see cref="BroadphaseMode.Hybrid"/>.</summary>
+public static class BroadphaseModeExtensions
+{
+    /// <summary>Body count below which <see cref="BroadphaseMode.Hybrid"/> picks all-pairs.</summary>
+    public const int BruteForceMaxBodies = 50;
+
+    /// <summary>Body count below which <see cref="BroadphaseMode.Hybrid"/> picks the grid.</summary>
+    public const int SpatialHashMaxBodies = 5000;
+
+    /// <summary>
+    /// Resolve a <see cref="BroadphaseMode.Hybrid"/> request to a concrete
+    /// backend from a live body count. Mirrors
+    /// <c>BroadphaseMode::auto_select</c>; never returns
+    /// <see cref="BroadphaseMode.Hybrid"/> itself.
+    /// </summary>
+    public static BroadphaseMode AutoSelect(this BroadphaseMode mode, int bodyCount)
+    {
+        if (mode != BroadphaseMode.Hybrid)
+        {
+            return mode;
+        }
+        if (bodyCount < BruteForceMaxBodies)
+        {
+            return BroadphaseMode.BruteForce;
+        }
+        return bodyCount < SpatialHashMaxBodies
+            ? BroadphaseMode.SpatialHash
+            : BroadphaseMode.DynamicAABBTree;
+    }
+}
+
+/// <summary>
 /// Spatial Hash Grid for broad phase collision detection
 /// </summary>
 public class SpatialHash2

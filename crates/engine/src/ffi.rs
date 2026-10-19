@@ -583,18 +583,41 @@ pub unsafe extern "C" fn phieng_world3_get_ambient_config(
 pub struct CcdConfigFfi {
     /// Master switch (0/1).
     pub enabled: u32,
+    /// CCD tier tag (0 = Off, 1 = SweptAABB, 2 = FullGJK).
+    pub tier: u32,
     /// Maximum travel per substep.
     pub max_movement: f32,
     /// Hard cap on substeps per world step.
     pub max_substeps: u32,
 }
 
+fn ccd_tier_from_tag(tag: u32) -> Option<phieng_dynamics::ccd::CcdTier> {
+    use phieng_dynamics::ccd::CcdTier;
+    match tag {
+        0 => Some(CcdTier::Off),
+        1 => Some(CcdTier::SweptAABB),
+        2 => Some(CcdTier::FullGJK),
+        _ => None,
+    }
+}
+
+fn ccd_tier_to_tag(t: phieng_dynamics::ccd::CcdTier) -> u32 {
+    use phieng_dynamics::ccd::CcdTier;
+    match t {
+        CcdTier::Off => 0,
+        CcdTier::SweptAABB => 1,
+        CcdTier::FullGJK => 2,
+    }
+}
+
 fn ccd_from_ffi(c: &CcdConfigFfi) -> Option<phieng_dynamics::ccd::CcdConfig> {
     if !valid(c.max_movement) || c.max_movement <= 0.0 || c.max_substeps < 1 {
         return None;
     }
+    let tier = ccd_tier_from_tag(c.tier)?;
     Some(phieng_dynamics::ccd::CcdConfig {
         enabled: c.enabled != 0,
+        tier,
         max_movement: c.max_movement,
         max_substeps: c.max_substeps,
     })
@@ -603,6 +626,7 @@ fn ccd_from_ffi(c: &CcdConfigFfi) -> Option<phieng_dynamics::ccd::CcdConfig> {
 fn ccd_to_ffi(c: &phieng_dynamics::ccd::CcdConfig) -> CcdConfigFfi {
     CcdConfigFfi {
         enabled: c.enabled as u32,
+        tier: ccd_tier_to_tag(c.tier),
         max_movement: c.max_movement,
         max_substeps: c.max_substeps,
     }
@@ -3094,6 +3118,440 @@ pub unsafe extern "C" fn phieng_world3_load(
     }
 }
 
+/// Broadphase mode tags (mirror the `BroadphaseMode` discriminants in
+/// `phieng_broadphase::broadphase_mode`).
+pub const BROADPHASE_BRUTE_FORCE: u32 = 0;
+pub const BROADPHASE_SPATIAL_HASH: u32 = 1;
+pub const BROADPHASE_DYNAMIC_AABB_TREE: u32 = 2;
+pub const BROADPHASE_HYBRID: u32 = 3;
+
+fn broadphase_mode_from_u32(v: u32) -> Option<phieng_broadphase::BroadphaseMode> {
+    use phieng_broadphase::BroadphaseMode;
+    match v {
+        BROADPHASE_BRUTE_FORCE => Some(BroadphaseMode::BruteForce),
+        BROADPHASE_SPATIAL_HASH => Some(BroadphaseMode::SpatialHash),
+        BROADPHASE_DYNAMIC_AABB_TREE => Some(BroadphaseMode::DynamicAABBTree),
+        BROADPHASE_HYBRID => Some(BroadphaseMode::Hybrid),
+        _ => None,
+    }
+}
+
+fn broadphase_mode_to_u32(m: phieng_broadphase::BroadphaseMode) -> u32 {
+    use phieng_broadphase::BroadphaseMode;
+    match m {
+        BroadphaseMode::BruteForce => BROADPHASE_BRUTE_FORCE,
+        BroadphaseMode::SpatialHash => BROADPHASE_SPATIAL_HASH,
+        BroadphaseMode::DynamicAABBTree => BROADPHASE_DYNAMIC_AABB_TREE,
+        BroadphaseMode::Hybrid => BROADPHASE_HYBRID,
+    }
+}
+
+/// Set the 2D broadphase mode. Returns 1 on success, 0 on null/unknown tag.
+/// The backend is rebuilt immediately (and again on each step while the
+/// mode is `Hybrid`), so the change takes effect on the next step.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_broadphase_mode(world: *mut World2, mode: u32) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let Some(m) = broadphase_mode_from_u32(mode) else {
+        return 0;
+    };
+    let w = &mut *world;
+    let cell = w.broadphase.cell_size();
+    w.broadphase_mode = m;
+    w.broadphase = phieng_broadphase::Broadphase2::new(m, cell);
+    1
+}
+
+/// Get the 2D broadphase mode tag. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_broadphase_mode(
+    world: *const World2,
+    out: *mut u32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = broadphase_mode_to_u32((*world).broadphase_mode);
+    1
+}
+
+/// Set the 3D broadphase mode. Returns 1 on success, 0 on null/unknown tag.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_broadphase_mode(
+    world: *mut phieng_dynamics::World3,
+    mode: u32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let Some(m) = broadphase_mode_from_u32(mode) else {
+        return 0;
+    };
+    let w = &mut *world;
+    w.broadphase_mode = m;
+    w.broadphase = phieng_broadphase::Broadphase3::new(m);
+    1
+}
+
+/// Get the 3D broadphase mode tag. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_broadphase_mode(
+    world: *const phieng_dynamics::World3,
+    out: *mut u32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = broadphase_mode_to_u32((*world).broadphase_mode);
+    1
+}
+
+/// Thermal config FFI mirror (2D).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ThermalConfig2Ffi {
+    pub enabled: bool,
+    pub ambient_temperature: f32,
+    pub stefan_boltzmann: f32,
+    pub convection_coefficient: f32,
+    pub radiation_enabled: bool,
+    pub conduction_enabled: bool,
+    pub convection_enabled: bool,
+    pub max_temperature: f32,
+    pub min_temperature: f32,
+    pub radiation_radius_factor: f32,
+    pub max_temperature_rate: f32,
+}
+
+pub type ThermalConfig3Ffi = ThermalConfig2Ffi;
+
+fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalConfig2D> {
+    use phieng_dynamics::ThermalConfig2D;
+    for v in [
+        c.ambient_temperature,
+        c.stefan_boltzmann,
+        c.convection_coefficient,
+        c.max_temperature,
+        c.min_temperature,
+        c.radiation_radius_factor,
+        c.max_temperature_rate,
+    ] {
+        if !v.is_finite() {
+            return None;
+        }
+    }
+    if c.ambient_temperature <= 0.0
+        || c.stefan_boltzmann < 0.0
+        || c.convection_coefficient < 0.0
+        || c.max_temperature <= c.min_temperature
+        || c.radiation_radius_factor <= 0.0
+        || c.max_temperature_rate <= 0.0
+    {
+        return None;
+    }
+    Some(ThermalConfig2D {
+        enabled: c.enabled,
+        ambient_temperature: c.ambient_temperature,
+        stefan_boltzmann: c.stefan_boltzmann,
+        convection_coefficient: c.convection_coefficient,
+        radiation_enabled: c.radiation_enabled,
+        conduction_enabled: c.conduction_enabled,
+        convection_enabled: c.convection_enabled,
+        max_temperature: c.max_temperature,
+        min_temperature: c.min_temperature,
+        radiation_radius_factor: c.radiation_radius_factor,
+        max_temperature_rate: c.max_temperature_rate,
+    })
+}
+
+fn thermal2_to_ffi(c: &phieng_dynamics::ThermalConfig2D) -> ThermalConfig2Ffi {
+    ThermalConfig2Ffi {
+        enabled: c.enabled,
+        ambient_temperature: c.ambient_temperature,
+        stefan_boltzmann: c.stefan_boltzmann,
+        convection_coefficient: c.convection_coefficient,
+        radiation_enabled: c.radiation_enabled,
+        conduction_enabled: c.conduction_enabled,
+        convection_enabled: c.convection_enabled,
+        max_temperature: c.max_temperature,
+        min_temperature: c.min_temperature,
+        radiation_radius_factor: c.radiation_radius_factor,
+        max_temperature_rate: c.max_temperature_rate,
+    }
+}
+
+/// Set the 2D thermal config. Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_thermal_config(
+    world: *mut World2,
+    cfg: *const ThermalConfig2Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = thermal2_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).thermal.config = parsed;
+    1
+}
+
+/// Get the 2D thermal config. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `ThermalConfig2Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_thermal_config(
+    world: *const World2,
+    out: *mut ThermalConfig2Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = thermal2_to_ffi(&(*world).thermal.config);
+    1
+}
+
+/// Set the 3D thermal config. Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_thermal_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const ThermalConfig3Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let Some(parsed) = thermal2_from_ffi(unsafe { &*cfg }) else {
+        return 0;
+    };
+    (*world).thermal.config = parsed;
+    1
+}
+
+/// Get the 3D thermal config. Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `ThermalConfig3Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_thermal_config(
+    world: *const phieng_dynamics::World3,
+    out: *mut ThermalConfig3Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = thermal2_to_ffi(&(*world).thermal.config);
+    1
+}
+
+/// Set a body's temperature (2D). Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_temperature(
+    world: *mut World2,
+    body_id: u32,
+    temperature: f32,
+) -> i32 {
+    if world.is_null() || !valid(temperature) || temperature < 0.0 {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].temperature = temperature;
+    1
+}
+
+/// Get a body's temperature (2D). Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_temperature(
+    world: *const World2,
+    body_id: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out = world_ref.bodies[index].temperature;
+    1
+}
+
+/// Set a body's temperature (3D). Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_temperature(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    temperature: f32,
+) -> i32 {
+    if world.is_null() || !valid(temperature) || temperature < 0.0 {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].temperature = temperature;
+    1
+}
+
+/// Get a body's temperature (3D). Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out` must be null or valid for one `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_temperature(
+    world: *const phieng_dynamics::World3,
+    body_id: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out = world_ref.bodies[index].temperature;
+    1
+}
+
+/// Set a body's thermal material properties (2D).
+/// Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_thermal_material(
+    world: *mut World2,
+    body_id: u32,
+    specific_heat: f32,
+    thermal_conductivity: f32,
+    emissivity: f32,
+) -> i32 {
+    if world.is_null()
+        || !valid(specific_heat)
+        || specific_heat <= 0.0
+        || !valid(thermal_conductivity)
+        || thermal_conductivity < 0.0
+        || !valid(emissivity)
+        || emissivity < 0.0
+        || emissivity > 1.0
+    {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].material.specific_heat = specific_heat;
+    world_ref.bodies[index].material.thermal_conductivity = thermal_conductivity;
+    world_ref.bodies[index].material.emissivity = emissivity;
+    1
+}
+
+/// Get a body's thermal material properties (2D).
+/// Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out_sh`/`out_k`/`out_e` must be null or valid for one `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_thermal_material(
+    world: *const World2,
+    body_id: u32,
+    out_sh: *mut f32,
+    out_k: *mut f32,
+    out_e: *mut f32,
+) -> i32 {
+    if world.is_null() || out_sh.is_null() || out_k.is_null() || out_e.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_sh = world_ref.bodies[index].material.specific_heat;
+    *out_k = world_ref.bodies[index].material.thermal_conductivity;
+    *out_e = world_ref.bodies[index].material.emissivity;
+    1
+}
+
+/// Set a body's thermal material properties (3D).
+/// Returns 1 on success, 0 on null/invalid.
+/// # Safety
+/// `world` must be a live pointer from `phieng_world3_new` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_thermal_material(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    specific_heat: f32,
+    thermal_conductivity: f32,
+    emissivity: f32,
+) -> i32 {
+    if world.is_null()
+        || !valid(specific_heat)
+        || specific_heat <= 0.0
+        || !valid(thermal_conductivity)
+        || thermal_conductivity < 0.0
+        || !valid(emissivity)
+        || emissivity < 0.0
+        || emissivity > 1.0
+    {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].material.specific_heat = specific_heat;
+    world_ref.bodies[index].material.thermal_conductivity = thermal_conductivity;
+    world_ref.bodies[index].material.emissivity = emissivity;
+    1
+}
+
+/// Get a body's thermal material properties (3D).
+/// Returns 1 on success, 0 on null/out.
+/// # Safety
+/// `world` must be live or null; `out_sh`/`out_k`/`out_e` must be null or valid for one `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_thermal_material(
+    world: *const phieng_dynamics::World3,
+    body_id: u32,
+    out_sh: *mut f32,
+    out_k: *mut f32,
+    out_e: *mut f32,
+) -> i32 {
+    if world.is_null() || out_sh.is_null() || out_k.is_null() || out_e.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_sh = world_ref.bodies[index].material.specific_heat;
+    *out_k = world_ref.bodies[index].material.thermal_conductivity;
+    *out_e = world_ref.bodies[index].material.emissivity;
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3480,6 +3938,7 @@ mod tests {
             let world = phieng_world_new();
             let cfg = CcdConfigFfi {
                 enabled: 1,
+                tier: 2, // FullGJK
                 max_movement: 0.05,
                 max_substeps: 64,
             };
@@ -3487,6 +3946,7 @@ mod tests {
             let mut out = std::mem::zeroed::<CcdConfigFfi>();
             assert_eq!(phieng_world_get_ccd_config(world, &mut out), 1);
             assert_eq!(out.enabled, 1);
+            assert_eq!(out.tier, 2);
             assert_eq!(out.max_movement, 0.05);
             assert_eq!(out.max_substeps, 64);
             // Null tolerance.
@@ -3510,6 +3970,7 @@ mod tests {
                     max_substeps: 0,
                     ..cfg
                 },
+                CcdConfigFfi { tier: 99, ..cfg },
             ] {
                 assert_eq!(phieng_world_set_ccd_config(world, &bad), 0);
             }

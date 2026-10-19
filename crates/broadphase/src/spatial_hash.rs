@@ -15,7 +15,7 @@ impl CellKey {
 }
 
 /// Spatial Hash Grid for broad phase collision detection
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpatialHash2 {
     /// Cell size for the hash grid
     pub cell_size: f32,

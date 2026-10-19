@@ -8,6 +8,11 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Tests
+- **Broad-phase tier parity block B01–B06** (mirrored Rust↔C#): every
+  backend bit-identical trajectories (2D B01, 3D B02), Hybrid matches its
+  auto-selected backend (B03), default stays the pre-tier-system grid
+  (B04), mid-run backend switch is transparent (B05), body-id invariant
+  and FFI round-trip (B06).
 - **Solver quality parity block Q01–Q05** (mirrored Rust↔C#): tier
   presets map to iteration budgets and friction/restitution switches
   (Q01), friction-off sliding preserved in 2D/3D (Q02, Q04),
@@ -214,6 +219,71 @@ This project follows [Semantic Versioning](https://semver.org/) and
   - Preserved through snapshot schema v5 (fluid config block extended,
     version-gated); the schema switches to v5 when any fluid-expansion
     field is non-default.
+
+- **Thermodynamics & radiation (Rust + managed C#)**: a new
+  `phieng_dynamics::thermal` module that adds per-body temperature
+  evolution via three heat-transfer mechanisms, run as a new phase 5c
+  of `World2/3::step_inner` after integration and before sleep check.
+  Sleeping bodies still exchange heat; thermal transfer never wakes
+  bodies.
+  - **Conduction**: contact-driven, series thermal resistance via the
+    harmonic mean of both bodies' conductivities, contact geometry from
+    narrowphase results. Off by default.
+  - **Radiation**: Stefan–Boltzmann T⁴ law, body-to-environment plus
+    body-to-body (distance-bounded, simplified view factor), effective
+    emissivity for two-gray-body exchange. Off by default.
+  - **Convection**: Newton's law of cooling to ambient temperature.
+    Off by default.
+  - Per-body `temperature` (Kelvin, default 293.15 K) and material
+    properties `specific_heat` J/(kg·K), `thermal_conductivity` W/(m·K),
+    `emissivity` 0..1 (extend `PhysicsMaterial`).
+  - `ThermalConfig2/3`: master switch, ambient temperature,
+    Stefan–Boltzmann constant, convection coefficient, per-mechanism
+    toggles, temperature clamps, radiation cutoff factor, max rate.
+- **Thermal FFI surface**: `phieng_world[_3]_set/get_thermal_config`
+  (repr(C) `ThermalConfig2Ffi`/`ThermalConfig3Ffi`),
+  `phieng_world[_3]_set/get_body_temperature`,
+  `phieng_world[_3]_set/get_body_thermal_material`.
+- **Broad-phase tiers (Rust + managed C#)**: `BroadphaseMode`
+  (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
+  `DynamicAABBTree` backend for 2D and 3D, and an explicit O(n²)
+  `BruteForce` backend — so the mode is a performance choice, never a
+  behavior change (every backend emits the same sorted+deduped pair
+  sequence; all modes agree bit-identically on B01/B02). Selection:
+  brute force below 50 bodies, spatial hash 50–5000, dynamic tree above
+  (see `BroadphaseMode::auto_select`); `Hybrid` re-resolves from the live
+  body count at the top of every step. Default stays the pre-tier-system
+  grid, so existing callers and files are unaffected. FFI
+  `phieng_world[_3]_set/get_broadphase_mode` plus managed
+  `PhiNativeWorld(3).SetBroadphaseMode/GetBroadphaseMode` and
+  `PhiEng.Broadphase.BroadphaseMode`. Mode persists via schema-v8
+  `broadphase_mode` tag (conditional: default worlds stay on older
+  schemas byte-identical).
+- **CCD tiers (Rust + managed C#)**: `CcdTier`
+  (`Off` / `SweptAABB` / `FullGJK`) selects how aggressively tunneling is
+  prevented — off pays nothing, swept-AABB substeps only pairs whose
+  swept volumes overlap during the step, full substeps every body. Tier
+  maps from `SolverQuality` (`Ultra`→Full, `High`→Swept, else Off) and
+  persists via the v6 `ccd` block's new `tier` field (conditional: files
+  without CCD stay on older schemas byte-identical). FFI
+  `CcdConfigFfi.tier` plus managed `CcdConfig.Tier`; C01–C04 and the FFI
+  round-trips pin the new field.
+- **PhysicsConfig facade (Rust)**: `PhysicsConfig` unifies
+  `solver_quality`, `collision_tier`, `broadphase_mode`, sleep
+  thresholds, `ccd`, and `thermal` under one struct with
+  `Default` (= pre-tier-system behavior exactly), `low_end()`, and
+  `high_fidelity()` presets, plus `apply_to_2d`/`apply_to_3d` to push a
+  config into a live world idempotently.
+- **Managed mirror**: `ThermalConfig.cs` in `PhiEng.Dynamics`;
+  `World2/3.Thermal` + `RigidBody2/3.Temperature`;
+  native wrappers in `PhiNativeWorld(3)`.
+- **Snapshot schema v8**: adds the thermal config block, per-body
+  temperature, and material thermal properties (conditional: default
+  worlds stay on older schemas byte-identical).
+- **Thermal parity block T01–T16** (mirrored Rust↔C#): conduction
+  equilibrium, conductivity scaling, zero-conductivity no-flow,
+  temperature clamping (max/min), static-body thermal reservoir,
+  disabled-config no-op, conduction disabled, determinism.
 
 ## [0.4.0] - 2026-10-16
 

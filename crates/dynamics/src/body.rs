@@ -40,6 +40,8 @@ pub struct RigidBody2 {
     /// coupling to spring/drag/turbulence, 0.0 = immune, negative is the
     /// caller's physics. Only finiteness is enforced; must be finite.
     pub ambient_scale: f32,
+    /// Current temperature in Kelvin (warm: thermal phase). Default 293.15 K.
+    pub temperature: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -59,6 +61,51 @@ pub enum Shape2 {
     Circle { radius: f32 },
     Box { half_extents: Vec2 },
     Polygon { vertices: Vec<Vec2> },
+}
+
+impl Shape2 {
+    /// Surface area (2D: perimeter) in meters.
+    pub fn surface_area(&self) -> f32 {
+        match self {
+            Shape2::Circle { radius } => 2.0 * std::f32::consts::PI * radius,
+            Shape2::Box { half_extents } => 4.0 * (half_extents.x + half_extents.y),
+            Shape2::Polygon { vertices } => {
+                let mut perimeter = 0.0;
+                for i in 0..vertices.len() {
+                    let j = (i + 1) % vertices.len();
+                    perimeter += (vertices[j] - vertices[i]).length();
+                }
+                perimeter
+            }
+        }
+    }
+
+    /// Characteristic length scale: sqrt(area) for 2D.
+    pub fn characteristic_length(&self) -> f32 {
+        match self {
+            Shape2::Circle { radius } => *radius,
+            Shape2::Box { half_extents } => (4.0 * half_extents.x * half_extents.y).sqrt(),
+            Shape2::Polygon { vertices } => {
+                let (area, _) = polygon_area_and_centroid(vertices);
+                area.abs().sqrt()
+            }
+        }
+    }
+
+    /// Bounding radius: max distance from centroid to any vertex.
+    pub fn bounding_radius(&self) -> f32 {
+        match self {
+            Shape2::Circle { radius } => *radius,
+            Shape2::Box { half_extents } => half_extents.length(),
+            Shape2::Polygon { vertices } => {
+                let (_, centroid) = polygon_area_and_centroid(vertices);
+                vertices
+                    .iter()
+                    .map(|v| (*v - centroid).length())
+                    .fold(0.0, f32::max)
+            }
+        }
+    }
 }
 
 /// Rejection reasons for ambiguous body/shape creation.
@@ -328,6 +375,7 @@ impl RigidBody2 {
             angular_damping: 0.01,
             gravity_scale: 1.0,
             ambient_scale: 1.0,
+            temperature: phieng_math::DEFAULT_TEMPERATURE,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -652,6 +700,8 @@ pub struct RigidBody3 {
     pub gravity_scale: f32,
     /// Ambient-force coupling multiplier (see `RigidBody2::ambient_scale`).
     pub ambient_scale: f32,
+    /// Current temperature in Kelvin (see `RigidBody2::temperature`).
+    pub temperature: f32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -687,6 +737,119 @@ pub enum Shape3 {
         vertices: Vec<Vec3>,
         indices: Vec<u32>,
     },
+}
+
+impl Shape3 {
+    /// Surface area in m².
+    pub fn surface_area(&self) -> f32 {
+        match self {
+            Shape3::Sphere { radius } => 4.0 * std::f32::consts::PI * radius * radius,
+            Shape3::Box { half_extents } => {
+                let w = 2.0 * half_extents.x;
+                let h = 2.0 * half_extents.y;
+                let d = 2.0 * half_extents.z;
+                2.0 * (w * h + w * d + h * d)
+            }
+            Shape3::Capsule {
+                radius,
+                half_length,
+            } => {
+                4.0 * std::f32::consts::PI * radius * radius
+                    + 2.0 * std::f32::consts::PI * radius * 2.0 * half_length
+            }
+            Shape3::ConvexHull { vertices } => {
+                let mut area = 0.0;
+                for i in 0..vertices.len() {
+                    for j in (i + 1)..vertices.len() {
+                        for k in (j + 1)..vertices.len() {
+                            let a = vertices[i];
+                            let b = vertices[j];
+                            let c = vertices[k];
+                            area += 0.5 * (b - a).cross(c - a).length();
+                        }
+                    }
+                }
+                area
+            }
+            Shape3::ConvexMesh { vertices, indices } => {
+                let mut area = 0.0;
+                // MSRV 1.78: chunks_exact is used instead of the newer as_chunks.
+                #[allow(clippy::chunks_exact_to_as_chunks)]
+                for tri in indices.chunks_exact(3) {
+                    let a = vertices[tri[0] as usize];
+                    let b = vertices[tri[1] as usize];
+                    let c = vertices[tri[2] as usize];
+                    area += 0.5 * (b - a).cross(c - a).length();
+                }
+                area
+            }
+        }
+    }
+
+    /// Characteristic length: cube_root(volume).
+    pub fn characteristic_length(&self) -> f32 {
+        match self {
+            Shape3::Sphere { radius } => *radius,
+            Shape3::Box { half_extents } => {
+                let vol = 8.0 * half_extents.x * half_extents.y * half_extents.z;
+                vol.cbrt()
+            }
+            Shape3::Capsule {
+                radius,
+                half_length,
+            } => {
+                let vol = std::f32::consts::PI * radius * radius * 2.0 * half_length
+                    + (4.0 / 3.0) * std::f32::consts::PI * radius.powi(3);
+                vol.cbrt()
+            }
+            Shape3::ConvexHull { vertices } => {
+                let mut vol = 0.0f64;
+                for i in 0..vertices.len() {
+                    for j in (i + 1)..vertices.len() {
+                        for k in (j + 1)..vertices.len() {
+                            let a = vertices[i];
+                            let b = vertices[j];
+                            let c = vertices[k];
+                            vol += (a.dot(b.cross(c)) / 6.0) as f64;
+                        }
+                    }
+                }
+                (vol.abs() as f32).cbrt()
+            }
+            Shape3::ConvexMesh { vertices, indices } => {
+                let vol = convex_mesh_signed_volume(vertices, indices).abs() as f32;
+                vol.cbrt()
+            }
+        }
+    }
+
+    /// Bounding radius: max distance from centroid to any vertex.
+    pub fn bounding_radius(&self) -> f32 {
+        match self {
+            Shape3::Sphere { radius } => *radius,
+            Shape3::Box { half_extents } => half_extents.length(),
+            Shape3::Capsule {
+                radius,
+                half_length,
+            } => *half_length + *radius,
+            Shape3::ConvexHull { vertices } => {
+                let centroid =
+                    vertices.iter().fold(Vec3::ZERO, |acc, v| acc + *v) / vertices.len() as f32;
+                vertices
+                    .iter()
+                    .map(|v| (*v - centroid).length())
+                    .fold(0.0, f32::max)
+            }
+            Shape3::ConvexMesh { vertices, .. } => {
+                let centroid =
+                    vertices.iter().fold(Vec3::ZERO, |acc, v| acc + *v) / vertices.len() as f32;
+                vertices
+                    .iter()
+                    .map(|v| (*v - centroid).length())
+                    .fold(0.0, f32::max)
+            }
+        }
+    }
 }
 
 /// Signed enclosed volume of a triangle mesh (positive for outward
@@ -777,6 +940,7 @@ impl RigidBody3 {
             angular_damping: 0.01,
             gravity_scale: 1.0,
             ambient_scale: 1.0,
+            temperature: phieng_math::DEFAULT_TEMPERATURE,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -1073,6 +1237,7 @@ mod tests {
             friction: 0.5,
             restitution: 0.5,
             density: 0.0,
+            ..Default::default()
         });
         assert_eq!(err, Err(ShapeError::ZeroDensity));
         // Friction/restitution keep sanitize-to-range behavior.
@@ -1080,6 +1245,7 @@ mod tests {
             friction: f32::NAN,
             restitution: 5.0,
             density: 1.0,
+            ..Default::default()
         })
         .expect("valid shape");
         assert_eq!(body.material.friction, PhysicsMaterial::DEFAULT_FRICTION);

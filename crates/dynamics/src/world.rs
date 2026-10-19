@@ -2,6 +2,7 @@ use super::body::{
     validate_density, validate_shape2, validate_shape3, RigidBody2, RigidBody3, Shape2, Shape3,
     ShapeError,
 };
+use super::ccd::{swept_aabb_overlap, swept_aabb_overlap_3, CcdTier};
 use super::fxhash::FxHashMap;
 use super::joint::{Joint2, JointError};
 use super::joint3::Joint3;
@@ -13,7 +14,7 @@ use super::validation::{
     ValidationConfig, ValidationReport,
 };
 use glam::{Vec2, Vec3};
-use phieng_broadphase::{AABBTree3D, SpatialHash2};
+use phieng_broadphase::{Broadphase2, Broadphase3, BroadphaseMode};
 use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
 
 /// Cached contact impulses from the previous frame, used for warm starting.
@@ -89,8 +90,11 @@ impl Default for ScratchBuffers2D {
 pub struct World2 {
     /// Rigid bodies
     pub bodies: Vec<RigidBody2>,
-    /// Broad phase spatial hash
-    pub broadphase: SpatialHash2,
+    /// Broad phase mode (auto-selects BruteForce / SpatialHash / DynamicAABBTree).
+    pub broadphase_mode: BroadphaseMode,
+    /// Broad phase backend. Resolved from `broadphase_mode` at construction;
+    /// `Hybrid` re-resolves each step based on live body count.
+    pub broadphase: Broadphase2,
     /// Constraint solver
     pub solver: Solver,
     /// Gravity
@@ -102,6 +106,9 @@ pub struct World2 {
     /// Ambient force fields — spring (SHM), aerodynamic drag, and
     /// turbulence (see [`crate::ambient`]). Default is a no-op.
     pub ambient: super::ambient::AmbientConfig2,
+    /// Collision-detection tier ceiling (see [`crate::collision_tier`]).
+    /// Off by default → full fidelity (Tier5).
+    pub collision_tier: super::collision_tier::CollisionTierConfig,
     /// Continuous collision detection via adaptive substepping (see
     /// [`crate::ccd`]). Default is a no-op (single legacy substep).
     pub ccd: super::ccd::CcdConfig,
@@ -143,6 +150,8 @@ pub struct World2 {
     /// SPH fluid state (see [`crate::fluid`]). Empty by default, in
     /// which case the fluid phase is a no-op.
     pub fluid: super::fluid::FluidState2,
+    /// Thermal simulation state (see [`crate::thermal`]). Disabled by default.
+    pub thermal: super::thermal::ThermalState2,
     /// Scratch buffers reused every step so the per-frame narrowphase
     /// performs no allocations in the steady state.
     scratch: ScratchBuffers2D,
@@ -152,11 +161,13 @@ impl World2 {
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),
-            broadphase: SpatialHash2::new(1.0),
+            broadphase_mode: BroadphaseMode::default(),
+            broadphase: Broadphase2::new(BroadphaseMode::default(), 1.0),
             solver: Solver::new(),
             gravity: Vec2::new(0.0, -9.81),
             gravity_config: super::gravity::GravityConfig2::default(),
             ambient: super::ambient::AmbientConfig2::default(),
+            collision_tier: super::collision_tier::CollisionTierConfig::default(),
             ccd: super::ccd::CcdConfig::default(),
             time: 0.0,
             next_body_id: 0,
@@ -171,6 +182,7 @@ impl World2 {
             joints: Vec::new(),
             next_joint_id: 0,
             fluid: super::fluid::FluidState2::new(),
+            thermal: super::thermal::ThermalState2::new(),
             scratch: ScratchBuffers2D::new(),
         }
     }
@@ -438,7 +450,17 @@ impl World2 {
         // Reset validation report once for the whole step; substeps merge.
         self.validation_report = ValidationReport::default();
         let n = if self.ccd.is_active() {
-            self.ccd.substeps(dt, self.ccd_peak_speed())
+            match self.ccd.tier {
+                CcdTier::Off => 1,
+                CcdTier::SweptAABB => {
+                    if self.ccd_needs_substepping_2d(dt, self.ccd.tier) {
+                        self.ccd.substeps(dt, self.ccd_peak_speed())
+                    } else {
+                        1
+                    }
+                }
+                CcdTier::FullGJK => self.ccd.substeps(dt, self.ccd_peak_speed()),
+            }
         } else {
             1
         };
@@ -471,7 +493,53 @@ impl World2 {
         peak
     }
 
+    /// Swept-AABB pair overlap: returns true if any broadphase pair's
+    /// swept volumes overlap during `dt`, meaning those bodies could
+    /// tunnel and should receive substepping. Bodies whose swept AABBs
+    /// never overlap pay no per-substep cost.
+    fn ccd_needs_substepping_2d(&mut self, dt: f32, tier: CcdTier) -> bool {
+        if tier != CcdTier::SweptAABB {
+            return false;
+        }
+        self.update_broadphase();
+        let mut pairs = Vec::new();
+        self.broadphase.collect_pairs(&mut pairs);
+        for &(a, b) in &pairs {
+            if a >= self.bodies.len() || b >= self.bodies.len() {
+                continue;
+            }
+            let body_a = &self.bodies[a];
+            let body_b = &self.bodies[b];
+            if body_a.is_static || body_b.is_static {
+                continue;
+            }
+            let (amin, amax) = self.get_body_aabb(body_a);
+            let (bmin, bmax) = self.get_body_aabb(body_b);
+            let a_extent = (amax - amin).length() * 0.5;
+            let b_extent = (bmax - bmin).length() * 0.5;
+            if swept_aabb_overlap(
+                body_a.transform.position,
+                body_a.velocity,
+                body_a.angular_velocity,
+                a_extent,
+                body_b.transform.position,
+                body_b.velocity,
+                body_b.angular_velocity,
+                b_extent,
+                dt,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn step_inner(&mut self, dt: f32) {
+        // 0. Resolve a Hybrid broadphase request before any broadphase
+        // work, so the backend in use for THIS step is decided by this
+        // step's body count (not last step's).
+        self.resolve_broadphase_mode();
+
         // 1. Gravity kick (see `crate::gravity`): uniform background field
         // plus Central/N-body terms per `gravity_config`, one full-step
         // kick (Euler) or the first half-kick (Verlet, with linear
@@ -514,16 +582,36 @@ impl World2 {
             if self.bodies[a].is_static && self.bodies[b].is_static {
                 continue;
             }
-            Self::test_collisions_into(
-                &self.bodies,
-                a,
-                b,
-                &mut self.scratch.constraints,
-                &mut self.scratch.verts_a,
-                &mut self.scratch.verts_b,
-                &mut self.scratch.points,
-                &mut self.scratch.clip_tmp,
-            );
+            // Narrowphase tier gate: see `World2::test_collisions_into`.
+            if self.collision_tier.is_active() {
+                let max_tier = self.collision_tier.max_tier;
+                let tier_enabled = true;
+                Self::test_collisions_into(
+                    &self.bodies,
+                    a,
+                    b,
+                    &mut self.scratch.constraints,
+                    &mut self.scratch.verts_a,
+                    &mut self.scratch.verts_b,
+                    &mut self.scratch.points,
+                    &mut self.scratch.clip_tmp,
+                    max_tier,
+                    tier_enabled,
+                );
+            } else {
+                Self::test_collisions_into(
+                    &self.bodies,
+                    a,
+                    b,
+                    &mut self.scratch.constraints,
+                    &mut self.scratch.verts_a,
+                    &mut self.scratch.verts_b,
+                    &mut self.scratch.points,
+                    &mut self.scratch.clip_tmp,
+                    super::collision_tier::CollisionTier::Tier5_GJK_EPA,
+                    false,
+                );
+            }
         }
 
         // 3b. Warm-start: seed each constraint with cached impulses from the
@@ -692,6 +780,19 @@ impl World2 {
             }
         }
 
+        // 5c. Thermal transfer: conduction, radiation, convection. Runs
+        // after integrate so it sees final positions; modifies temperature
+        // only (no velocity change), so it neither wakes nor is gated by
+        // sleep. Reads contact data from the narrowphase pass above.
+        let thermal_config = self.thermal.config;
+        super::thermal::step_thermal_2d(
+            &mut self.bodies,
+            &self.scratch.constraints,
+            &thermal_config,
+            &mut self.thermal,
+            dt,
+        );
+
         // 6+7. Validate bodies + update sleep in a single fused sweep.
         // Sleep needs slowness AND support (a current contact, tracked
         // in `contact_touch` during narrowphase): ballistic apexes and
@@ -761,7 +862,22 @@ impl World2 {
         }
     }
 
-    /// Update the broadphase with current body positions
+    /// Resolve [`BroadphaseMode::Hybrid`] to a concrete backend from the
+    /// live body count.
+    ///
+    /// Called at the top of every step so the resolved backend is in place
+    /// *before* any broadphase work happens. Doing it inside
+    /// [`Self::update_broadphase`] would leave the first step running on
+    /// whatever backend the world was constructed with, making Hybrid
+    /// subtly order-dependent (it resolved a step late).
+    fn resolve_broadphase_mode(&mut self) {
+        if self.broadphase_mode == BroadphaseMode::Hybrid {
+            let resolved = BroadphaseMode::auto_select(self.bodies.len());
+            self.broadphase = Broadphase2::new(resolved, self.broadphase.cell_size());
+        }
+    }
+
+    /// Update the broadphase with current body positions (2D)
     fn update_broadphase(&mut self) {
         self.broadphase.clear();
         for body in &self.bodies {
@@ -825,6 +941,8 @@ impl World2 {
         verts_b: &mut Vec<Vec2>,
         points: &mut Vec<Vec2>,
         clip_tmp: &mut Vec<Vec2>,
+        max_tier: super::collision_tier::CollisionTier,
+        tier_enabled: bool,
     ) {
         use phieng_collision::sat::{
             polygon_polygon_contact_points_into, sat_circle_polygon, sat_polygon_polygon,
@@ -832,6 +950,19 @@ impl World2 {
 
         let body_a = &bodies[a];
         let body_b = &bodies[b];
+
+        // Tier gate: if the required tier for this shape pair exceeds the
+        // configured ceiling, skip the pair (treated as non-colliding).
+        if tier_enabled {
+            let required = super::collision_tier::required_tier_2d(
+                body_a.shape.as_ref().unwrap(),
+                body_b.shape.as_ref().unwrap(),
+            );
+            if required > max_tier {
+                return;
+            }
+        }
+
         let friction =
             PhysicsMaterial::combine_friction(body_a.material.friction, body_b.material.friction);
         let restitution = PhysicsMaterial::combine_restitution(
@@ -1196,8 +1327,10 @@ impl World2 {
 pub struct World3 {
     /// Rigid bodies
     pub bodies: Vec<RigidBody3>,
-    /// Broad phase AABB tree
-    pub broadphase: AABBTree3D,
+    /// Broad phase mode (auto-selects BruteForce / DynamicAABBTree).
+    pub broadphase_mode: BroadphaseMode,
+    /// Broad phase backend. Resolved from `broadphase_mode` at construction.
+    pub broadphase: Broadphase3,
     /// 3D constraint solver
     pub solver: Solver3D,
     /// Gravity
@@ -1209,6 +1342,9 @@ pub struct World3 {
     /// Ambient force fields — spring (SHM), aerodynamic drag, and
     /// turbulence (see [`crate::ambient`]). Default is a no-op.
     pub ambient: super::ambient::AmbientConfig3,
+    /// Collision-detection tier ceiling (see [`crate::collision_tier`]).
+    /// Off by default → full fidelity (Tier5).
+    pub collision_tier: super::collision_tier::CollisionTierConfig,
     /// Continuous collision detection via adaptive substepping (see
     /// [`crate::ccd`]). Default is a no-op (single legacy substep).
     pub ccd: super::ccd::CcdConfig,
@@ -1236,6 +1372,8 @@ pub struct World3 {
     /// SPH fluid state (see [`crate::fluid3`]). Empty by default, in
     /// which case the fluid phase is a no-op.
     pub fluid: super::fluid3::FluidState3,
+    /// Thermal simulation state (see [`crate::thermal`]). Disabled by default.
+    pub thermal: super::thermal::ThermalState3,
     /// Runtime validation configuration
     pub validation: ValidationConfig,
     /// Last validation report
@@ -1266,11 +1404,13 @@ impl World3 {
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),
-            broadphase: AABBTree3D::new(),
+            broadphase_mode: BroadphaseMode::default(),
+            broadphase: Broadphase3::new(BroadphaseMode::default()),
             solver: Solver3D::new(),
             gravity: Vec3::new(0.0, -9.81, 0.0),
             gravity_config: super::gravity::GravityConfig3::default(),
             ambient: super::ambient::AmbientConfig3::default(),
+            collision_tier: super::collision_tier::CollisionTierConfig::default(),
             ccd: super::ccd::CcdConfig::default(),
             time: 0.0,
             next_body_id: 0,
@@ -1283,6 +1423,7 @@ impl World3 {
             joints: Vec::new(),
             next_joint_id: 0,
             fluid: super::fluid3::FluidState3::new(),
+            thermal: super::thermal::ThermalState3::new(),
             validation: ValidationConfig::default(),
             validation_report: ValidationReport::default(),
             scratch_constraints: Vec::new(),
@@ -1418,7 +1559,17 @@ impl World3 {
         // Reset validation report once for the whole step; substeps merge.
         self.validation_report = ValidationReport::default();
         let n = if self.ccd.is_active() {
-            self.ccd.substeps(dt, self.ccd_peak_speed())
+            match self.ccd.tier {
+                CcdTier::Off => 1,
+                CcdTier::SweptAABB => {
+                    if self.ccd_needs_substepping_3d(dt, self.ccd.tier) {
+                        self.ccd.substeps(dt, self.ccd_peak_speed())
+                    } else {
+                        1
+                    }
+                }
+                CcdTier::FullGJK => self.ccd.substeps(dt, self.ccd_peak_speed()),
+            }
         } else {
             1
         };
@@ -1451,11 +1602,53 @@ impl World3 {
         peak
     }
 
+    /// Swept-AABB pair overlap for 3D: returns true if any broadphase
+    /// pair's swept volumes overlap during `dt`.
+    fn ccd_needs_substepping_3d(&mut self, dt: f32, tier: CcdTier) -> bool {
+        if tier != CcdTier::SweptAABB {
+            return false;
+        }
+        self.update_broadphase();
+        let mut pairs = Vec::new();
+        self.broadphase.collect_pairs(&mut pairs);
+        for &(a, b) in &pairs {
+            if a >= self.bodies.len() || b >= self.bodies.len() {
+                continue;
+            }
+            let body_a = &self.bodies[a];
+            let body_b = &self.bodies[b];
+            if body_a.is_static || body_b.is_static {
+                continue;
+            }
+            let (amin, amax) = self.get_body_aabb(body_a);
+            let (bmin, bmax) = self.get_body_aabb(body_b);
+            let a_extent = (amax - amin).length() * 0.5;
+            let b_extent = (bmax - bmin).length() * 0.5;
+            if swept_aabb_overlap_3(
+                body_a.transform.position,
+                body_a.velocity,
+                body_a.angular_velocity.length(),
+                a_extent,
+                body_b.transform.position,
+                body_b.velocity,
+                body_b.angular_velocity.length(),
+                b_extent,
+                dt,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn step_inner(&mut self, dt: f32) {
-        // 1. Gravity kick (see `crate::gravity`): uniform background field
-        // plus Central/N-body terms per `gravity_config`, one full-step
-        // kick (Euler) or the first half-kick (Verlet, with linear
-        // damping riding as symmetric drag).
+        // 0. Resolve a Hybrid broadphase request (see World2::step_inner).
+        self.resolve_broadphase_mode();
+
+        // 1. Gravity kick (see GravityIntegration): uniform background
+        // field plus Central/N-body terms per GravityConfig, one
+        // full-step kick (Euler) or the first half-kick (Verlet, with
+        // linear damping riding as symmetric drag).
         let verlet = self.gravity_config.integrator == super::gravity::Integrator::VelocityVerlet;
         let h = if verlet { dt * 0.5 } else { dt };
         super::gravity::gravity_kick_3(
@@ -1497,15 +1690,31 @@ impl World3 {
             if self.bodies[a].is_static && self.bodies[b].is_static {
                 continue;
             }
-            Self::test_collisions_3d_into(
-                &self.bodies,
-                a,
-                b,
-                &mut constraints,
-                &mut points,
-                &mut clip_tmp,
-                &mut epa_buffers,
-            );
+            if self.collision_tier.is_active() {
+                Self::test_collisions_3d_into(
+                    &self.bodies,
+                    a,
+                    b,
+                    &mut constraints,
+                    &mut points,
+                    &mut clip_tmp,
+                    &mut epa_buffers,
+                    self.collision_tier.max_tier,
+                    true,
+                );
+            } else {
+                Self::test_collisions_3d_into(
+                    &self.bodies,
+                    a,
+                    b,
+                    &mut constraints,
+                    &mut points,
+                    &mut clip_tmp,
+                    &mut epa_buffers,
+                    super::collision_tier::CollisionTier::Tier5_GJK_EPA,
+                    false,
+                );
+            }
         }
 
         // 3b. Warm-start from cached impulses. A pair with no cache
@@ -1656,6 +1865,16 @@ impl World3 {
             }
         }
 
+        // 5c. Thermal transfer (see World2::step_inner phase 5c).
+        let thermal_config = self.thermal.config;
+        super::thermal::step_thermal_3d(
+            &mut self.bodies,
+            &constraints,
+            &thermal_config,
+            &mut self.thermal,
+            dt,
+        );
+
         // 6+7. Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; see World2).
         // Sleep needs slowness AND support (a current contact): ballistic
@@ -1690,7 +1909,16 @@ impl World3 {
         self.epa_buffers = epa_buffers;
     }
 
-    /// Update the broadphase with current body positions
+    /// Resolve [`BroadphaseMode::Hybrid`] to a concrete 3D backend from the
+    /// live body count (see [`World2::resolve_broadphase_mode`]).
+    fn resolve_broadphase_mode(&mut self) {
+        if self.broadphase_mode == BroadphaseMode::Hybrid {
+            let resolved = BroadphaseMode::auto_select(self.bodies.len());
+            self.broadphase = Broadphase3::new(resolved);
+        }
+    }
+
+    /// Update the broadphase with current body positions (3D)
     fn update_broadphase(&mut self) {
         self.broadphase.clear();
         for body in &self.bodies {
@@ -1782,6 +2010,7 @@ impl World3 {
     /// covers capsules and convex hulls. `points`/`clip_tmp` are
     /// caller-owned scratch; nothing allocates here except in the rare
     /// capsule/hull support-closure path.
+    #[allow(clippy::too_many_arguments)]
     fn test_collisions_3d_into(
         bodies: &[RigidBody3],
         a: usize,
@@ -1790,12 +2019,28 @@ impl World3 {
         points: &mut Vec<Vec3>,
         clip_tmp: &mut Vec<Vec3>,
         epa_buffers: &mut phieng_collision::epa::EpaBuffers,
+        max_tier: super::collision_tier::CollisionTier,
+        tier_enabled: bool,
     ) {
         use phieng_collision::contact3d::{box_box_contact_points_into, closest_point_on_box};
         use phieng_collision::sat3d::{sat_obb_obb, ObbContactKind};
 
         let body_a = &bodies[a];
         let body_b = &bodies[b];
+
+        if tier_enabled {
+            let Some(sa) = body_a.shape.as_ref() else {
+                return;
+            };
+            let Some(sb) = body_b.shape.as_ref() else {
+                return;
+            };
+            let required = super::collision_tier::required_tier_3d(sa, sb);
+            if required > max_tier {
+                return;
+            }
+        }
+
         let friction =
             PhysicsMaterial::combine_friction(body_a.material.friction, body_b.material.friction);
         let restitution = PhysicsMaterial::combine_restitution(

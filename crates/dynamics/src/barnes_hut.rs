@@ -1,57 +1,8 @@
-//! Deterministic Barnes-Hut approximation for N-body gravity.
-//!
-//! Collapses distant groups to their center of mass when a cell's
-//! size-to-distance ratio falls below `theta`
-//! ([`crate::gravity::GravityConfig2::theta`]), turning the exact
-//! O(n^2) pairwise loop into O(n log n). Wires into the pre-solve
-//! gravity kick via [`apply_bh_forces_2`] / [`apply_bh_forces_3`]
-//! (called from the
-//! `BarnesHut` arm of `gravity_kick_2/3`, after the shared uniform
-//! pass — this module applies the tree forces only).
-//!
-//! Determinism contract (bit-identical runs by construction):
-//! - Insertion in body-index order; subdivision at cell midpoints with
-//!   a fixed low-side rule, so ties and NaNs route deterministically.
-//! - Children visited in fixed index order; mass/COM accumulation in
-//!   child order; forces accumulate in walk order. No hash maps, no
-//!   RNG, no wall clock, no thread-dependent scheduling.
-//! - A cell containing the query body is NEVER approximated (its
-//!   contribution would include self-force): the walk always descends
-//!   into the routed child. Single-body cells approximate exactly
-//!   (COM == body), so two-body scenes are bit-identical to exact
-//!   N-body regardless of `theta`.
-//!
-//! Termination guards (no hangs, no panics):
-//! - `MAX_TREE_DEPTH` caps subdivision; a full leaf at max depth
-//!   accumulates bodies instead of splitting (direct pairwise inside
-//!   the leaf, self skipped).
-//! - Zero-extent cells never subdivide. NaN positions route
-//!   deterministically (all comparisons false -> high side) and
-//!   produce NaN forces like the exact path — caught downstream by
-//!   body validation, never a hang.
-//!
-//! Approximation status: same-mode runs are bit-identical, but exact
-//! and BH trajectories never match each other — tests must assert
-//! per-mode self-consistency, never cross-mode equality. `theta <= 0`
-//! degenerates to exact descent (correct, slow).
-//!
-//! Cost model: the tree (arena + per-leaf index lists) is rebuilt per
-//! kick — BH trades per-step allocation for asymptotic force cost.
-//! The exact path stays allocation-free; BH is opt-in via
-//! `GravityMode::BarnesHut` and stays off by default.
-//!
-//! Measured crossover (`bench_gravity`, release, portable profile):
-//! exact O(n^2) quadruples per doubling as theory predicts, while BH
-//! scales near-linearly. At `theta = 0.5` BH breaks even around
-//! ~700 bodies (n=500: 0.6 vs 0.6 ms/step; n=1000: 2.2 vs 1.4;
-//! n=2000: 8.7 vs 3.5–3.8) and pulls away past that; `theta = 1.0`
-//! is ~2.5x faster still at some accuracy cost. Below ~500 bodies
-//! the exact path wins outright (tree overhead dominates).
-
 use super::body::{RigidBody2, RigidBody3};
 use super::gravity::{pair_accelerations_2, pair_accelerations_3};
 use glam::{Vec2, Vec3};
 use phieng_math::EPS_SQ;
+use std::cell::RefCell;
 
 /// Maximum subdivision depth: bounds coincident-point splitting.
 /// A full leaf at max depth accumulates instead of subdividing, so
@@ -62,6 +13,7 @@ const MAX_TREE_DEPTH: u32 = 32;
 // 2D quadtree.
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 struct QuadNode {
     min: Vec2,
     max: Vec2,
@@ -78,8 +30,6 @@ impl QuadNode {
     fn is_leaf(&self) -> bool {
         self.children == [None, None, None, None]
     }
-
-    /// Cell size for the opening criterion: longest side.
     fn extent(&self) -> f32 {
         (self.max.x - self.min.x).max(self.max.y - self.min.y)
     }
@@ -87,6 +37,21 @@ impl QuadNode {
 
 struct QuadTree {
     nodes: Vec<QuadNode>,
+}
+
+/// A reusable scratch buffer for a 2D Barnes-Hut tree. The arena
+/// (`nodes`) and every per-leaf index `Vec` are recycled across kicks
+/// instead of being freed, mirroring the spatial-hash / contact-cache
+/// pooling pattern. One instance per thread is enough because gravity
+/// kicks are serial per world.
+#[derive(Default)]
+struct QuadTreePool {
+    /// Recycled node arena. `build_quad_into` clears and reuses it.
+    nodes: Vec<QuadNode>,
+}
+
+thread_local! {
+    static QUAD_POOL: RefCell<QuadTreePool> = const { RefCell::new(QuadTreePool { nodes: Vec::new() }) };
 }
 
 /// Route a point to a child quadrant with the same rule insertion
@@ -122,7 +87,9 @@ fn subdivide_quad(nodes: &mut Vec<QuadNode>, node_idx: usize) {
     }
     // Pushed in order 0..4, so arena indices are contiguous.
     let base = nodes.len() - 4;
-    nodes[node_idx].children = [Some(base), Some(base + 1), Some(base + 2), Some(base + 3)];
+    for c in 0..4 {
+        nodes[node_idx].children[c] = Some(base + c);
+    }
 }
 
 fn insert_quad(
@@ -132,76 +99,73 @@ fn insert_quad(
     positions: &[Vec2],
     depth: u32,
 ) {
-    if !nodes[node_idx].is_leaf() {
-        let child = route_quad(&nodes[node_idx], positions[body_idx]);
-        let child_idx = nodes[node_idx].children[child].expect("internal child present");
-        insert_quad(nodes, child_idx, body_idx, positions, depth + 1);
+    let p = positions[body_idx];
+    if nodes[node_idx].is_leaf() {
+        if nodes[node_idx].bodies.is_empty() || depth >= MAX_TREE_DEPTH {
+            nodes[node_idx].bodies.push(body_idx);
+            return;
+        }
+        // Convert leaf into an internal node: move existing bodies down.
+        let existing: Vec<usize> = std::mem::take(&mut nodes[node_idx].bodies);
+        subdivide_quad(nodes, node_idx);
+        for &k in &existing {
+            insert_quad(nodes, node_idx, k, positions, depth + 1);
+        }
+        insert_quad(nodes, node_idx, body_idx, positions, depth + 1);
         return;
     }
-    if nodes[node_idx].bodies.is_empty()
-        || depth >= MAX_TREE_DEPTH
-        || nodes[node_idx].extent() == 0.0
-    {
-        nodes[node_idx].bodies.push(body_idx);
-        return;
+    let child = route_quad(&nodes[node_idx], p);
+    if let Some(ci) = nodes[node_idx].children[child] {
+        insert_quad(nodes, ci, body_idx, positions, depth + 1);
     }
-    subdivide_quad(nodes, node_idx);
-    // Reinsert the displaced residents in order, then the newcomer.
-    let existing = std::mem::take(&mut nodes[node_idx].bodies);
-    for b in existing {
-        let child = route_quad(&nodes[node_idx], positions[b]);
-        let child_idx = nodes[node_idx].children[child].expect("internal child present");
-        insert_quad(nodes, child_idx, b, positions, depth + 1);
-    }
-    let child = route_quad(&nodes[node_idx], positions[body_idx]);
-    let child_idx = nodes[node_idx].children[child].expect("internal child present");
-    insert_quad(nodes, child_idx, body_idx, positions, depth + 1);
 }
 
-/// Post-order mass/COM accumulation in fixed child order.
-/// Zero-mass cells fall back to the geometric center (unreachable
-/// through validated construction, which floors mass — pure defense).
 fn accumulate_quad(nodes: &mut Vec<QuadNode>, node_idx: usize, positions: &[Vec2], masses: &[f32]) {
-    if nodes[node_idx].is_leaf() {
+    let node = &nodes[node_idx];
+    if node.is_leaf() {
         let mut mass = 0.0f32;
-        let mut moment = Vec2::ZERO;
-        let count = nodes[node_idx].bodies.len();
-        for k in 0..count {
-            let b = nodes[node_idx].bodies[k];
-            mass += masses[b];
-            moment += positions[b] * masses[b];
+        let mut com = Vec2::ZERO;
+        for &k in &node.bodies {
+            mass += masses[k];
+            com += positions[k] * masses[k];
         }
         let node = &mut nodes[node_idx];
         node.mass = mass;
         node.com = if mass > 0.0 {
-            moment / mass
+            com / mass
         } else {
             (node.min + node.max) * 0.5
         };
         return;
     }
-    let mut mass = 0.0f32;
-    let mut moment = Vec2::ZERO;
     for c in 0..4 {
         if let Some(child) = nodes[node_idx].children[c] {
             accumulate_quad(nodes, child, positions, masses);
+        }
+    }
+    let mut mass = 0.0f32;
+    let mut com = Vec2::ZERO;
+    for c in 0..4 {
+        if let Some(child) = nodes[node_idx].children[c] {
             mass += nodes[child].mass;
-            moment += nodes[child].com * nodes[child].mass;
+            com += nodes[child].com * nodes[child].mass;
         }
     }
     let node = &mut nodes[node_idx];
     node.mass = mass;
     node.com = if mass > 0.0 {
-        moment / mass
+        com / mass
     } else {
         (node.min + node.max) * 0.5
     };
 }
 
-fn build_quad(positions: &[Vec2], masses: &[f32]) -> QuadTree {
-    let mut tree = QuadTree { nodes: Vec::new() };
+/// Build a quadtree, reusing the thread-local pool's arena. The returned
+/// tree owns its node list (moved out of the pool); the pool is refilled
+/// with a fresh `Vec` so the next kick reuses the freed allocation.
+fn build_quad_pooled(positions: &[Vec2], masses: &[f32]) -> QuadTree {
     if positions.is_empty() {
-        return tree;
+        return QuadTree { nodes: Vec::new() };
     }
     let mut min = Vec2::splat(f32::INFINITY);
     let mut max = Vec2::splat(f32::NEG_INFINITY);
@@ -209,7 +173,14 @@ fn build_quad(positions: &[Vec2], masses: &[f32]) -> QuadTree {
         min = min.min(*p);
         max = max.max(*p);
     }
-    tree.nodes.push(QuadNode {
+    // Draw the arena from the pool.
+    let mut nodes = QUAD_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        let mut arena = std::mem::take(&mut pool.nodes);
+        arena.clear();
+        arena
+    });
+    nodes.push(QuadNode {
         min,
         max,
         bodies: Vec::new(),
@@ -218,10 +189,10 @@ fn build_quad(positions: &[Vec2], masses: &[f32]) -> QuadTree {
         com: Vec2::ZERO,
     });
     for i in 0..positions.len() {
-        insert_quad(&mut tree.nodes, 0, i, positions, 0);
+        insert_quad(&mut nodes, 0, i, positions, 0);
     }
-    accumulate_quad(&mut tree.nodes, 0, positions, masses);
-    tree
+    accumulate_quad(&mut nodes, 0, positions, masses);
+    QuadTree { nodes }
 }
 
 /// Force walk for one query body: fixed child order, index-ordered
@@ -299,7 +270,7 @@ pub fn apply_bh_forces_2(
     }
     let positions: Vec<Vec2> = bodies.iter().map(|b| b.transform.position).collect();
     let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
-    let tree = build_quad(&positions, &masses);
+    let tree = build_quad_pooled(&positions, &masses);
     for i in 0..n {
         if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
@@ -324,12 +295,19 @@ pub fn apply_bh_forces_2(
         }
         b.velocity += dv;
     }
+    // Recycle the arena back into the pool so the next kick reuses
+    // the allocation instead of freeing it.
+    QUAD_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        pool.nodes = tree.nodes;
+    });
 }
 
 // ---------------------------------------------------------------------------
 // 3D octree (same contract as the quadtree above).
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 struct OctNode {
     min: Vec3,
     max: Vec3,
@@ -345,12 +323,20 @@ impl OctNode {
     fn is_leaf(&self) -> bool {
         self.children == [None, None, None, None, None, None, None, None]
     }
-
     fn extent(&self) -> f32 {
         (self.max.x - self.min.x)
             .max(self.max.y - self.min.y)
             .max(self.max.z - self.min.z)
     }
+}
+
+#[derive(Default)]
+struct OctTreePool {
+    nodes: Vec<OctNode>,
+}
+
+thread_local! {
+    static OCT_POOL: RefCell<OctTreePool> = const { RefCell::new(OctTreePool { nodes: Vec::new() }) };
 }
 
 struct OctTree {
@@ -371,42 +357,48 @@ fn subdivide_oct(nodes: &mut Vec<OctNode>, node_idx: usize) {
         (n.min, n.max)
     };
     let mid = (min + max) * 0.5;
-    for iz in 0..2 {
-        for iy in 0..2 {
-            for ix in 0..2 {
-                let lo = Vec3::new(
-                    if ix == 0 { min.x } else { mid.x },
-                    if iy == 0 { min.y } else { mid.y },
-                    if iz == 0 { min.z } else { mid.z },
-                );
-                let hi = Vec3::new(
-                    if ix == 0 { mid.x } else { max.x },
-                    if iy == 0 { mid.y } else { max.y },
-                    if iz == 0 { mid.z } else { max.z },
-                );
-                nodes.push(OctNode {
-                    min: lo,
-                    max: hi,
-                    bodies: Vec::new(),
-                    children: [None, None, None, None, None, None, None, None],
-                    mass: 0.0,
-                    com: Vec3::ZERO,
-                });
-            }
-        }
-    }
-    // Pushed iz-major in 0..8 order, so arena indices are contiguous.
-    let base = nodes.len() - 8;
-    nodes[node_idx].children = [
-        Some(base),
-        Some(base + 1),
-        Some(base + 2),
-        Some(base + 3),
-        Some(base + 4),
-        Some(base + 5),
-        Some(base + 6),
-        Some(base + 7),
+    let octs = [
+        (min, mid),
+        (
+            Vec3::new(mid.x, min.y, min.z),
+            Vec3::new(max.x, mid.y, mid.z),
+        ),
+        (
+            Vec3::new(min.x, mid.y, min.z),
+            Vec3::new(mid.x, max.y, mid.z),
+        ),
+        (
+            Vec3::new(mid.x, mid.y, min.z),
+            Vec3::new(max.x, max.y, mid.z),
+        ),
+        (
+            Vec3::new(min.x, min.y, mid.z),
+            Vec3::new(mid.x, mid.y, max.z),
+        ),
+        (
+            Vec3::new(mid.x, min.y, mid.z),
+            Vec3::new(max.x, mid.y, max.z),
+        ),
+        (
+            Vec3::new(min.x, mid.y, mid.z),
+            Vec3::new(mid.x, max.y, max.z),
+        ),
+        (mid, max),
     ];
+    for (lo, hi) in octs {
+        nodes.push(OctNode {
+            min: lo,
+            max: hi,
+            bodies: Vec::new(),
+            children: [None, None, None, None, None, None, None, None],
+            mass: 0.0,
+            com: Vec3::ZERO,
+        });
+    }
+    let base = nodes.len() - 8;
+    for c in 0..8 {
+        nodes[node_idx].children[c] = Some(base + c);
+    }
 }
 
 fn insert_oct(
@@ -416,72 +408,69 @@ fn insert_oct(
     positions: &[Vec3],
     depth: u32,
 ) {
-    if !nodes[node_idx].is_leaf() {
-        let child = route_oct(&nodes[node_idx], positions[body_idx]);
-        let child_idx = nodes[node_idx].children[child].expect("internal child present");
-        insert_oct(nodes, child_idx, body_idx, positions, depth + 1);
+    let p = positions[body_idx];
+    if nodes[node_idx].is_leaf() {
+        if nodes[node_idx].bodies.is_empty() || depth >= MAX_TREE_DEPTH {
+            nodes[node_idx].bodies.push(body_idx);
+            return;
+        }
+        let existing: Vec<usize> = std::mem::take(&mut nodes[node_idx].bodies);
+        subdivide_oct(nodes, node_idx);
+        for &k in &existing {
+            insert_oct(nodes, node_idx, k, positions, depth + 1);
+        }
+        insert_oct(nodes, node_idx, body_idx, positions, depth + 1);
         return;
     }
-    if nodes[node_idx].bodies.is_empty()
-        || depth >= MAX_TREE_DEPTH
-        || nodes[node_idx].extent() == 0.0
-    {
-        nodes[node_idx].bodies.push(body_idx);
-        return;
+    let child = route_oct(&nodes[node_idx], p);
+    if let Some(ci) = nodes[node_idx].children[child] {
+        insert_oct(nodes, ci, body_idx, positions, depth + 1);
     }
-    subdivide_oct(nodes, node_idx);
-    let existing = std::mem::take(&mut nodes[node_idx].bodies);
-    for b in existing {
-        let child = route_oct(&nodes[node_idx], positions[b]);
-        let child_idx = nodes[node_idx].children[child].expect("internal child present");
-        insert_oct(nodes, child_idx, b, positions, depth + 1);
-    }
-    let child = route_oct(&nodes[node_idx], positions[body_idx]);
-    let child_idx = nodes[node_idx].children[child].expect("internal child present");
-    insert_oct(nodes, child_idx, body_idx, positions, depth + 1);
 }
 
 fn accumulate_oct(nodes: &mut Vec<OctNode>, node_idx: usize, positions: &[Vec3], masses: &[f32]) {
-    if nodes[node_idx].is_leaf() {
+    let node = &nodes[node_idx];
+    if node.is_leaf() {
         let mut mass = 0.0f32;
-        let mut moment = Vec3::ZERO;
-        let count = nodes[node_idx].bodies.len();
-        for k in 0..count {
-            let b = nodes[node_idx].bodies[k];
-            mass += masses[b];
-            moment += positions[b] * masses[b];
+        let mut com = Vec3::ZERO;
+        for &k in &node.bodies {
+            mass += masses[k];
+            com += positions[k] * masses[k];
         }
         let node = &mut nodes[node_idx];
         node.mass = mass;
         node.com = if mass > 0.0 {
-            moment / mass
+            com / mass
         } else {
             (node.min + node.max) * 0.5
         };
         return;
     }
-    let mut mass = 0.0f32;
-    let mut moment = Vec3::ZERO;
     for c in 0..8 {
         if let Some(child) = nodes[node_idx].children[c] {
             accumulate_oct(nodes, child, positions, masses);
+        }
+    }
+    let mut mass = 0.0f32;
+    let mut com = Vec3::ZERO;
+    for c in 0..8 {
+        if let Some(child) = nodes[node_idx].children[c] {
             mass += nodes[child].mass;
-            moment += nodes[child].com * nodes[child].mass;
+            com += nodes[child].com * nodes[child].mass;
         }
     }
     let node = &mut nodes[node_idx];
     node.mass = mass;
     node.com = if mass > 0.0 {
-        moment / mass
+        com / mass
     } else {
         (node.min + node.max) * 0.5
     };
 }
 
-fn build_oct(positions: &[Vec3], masses: &[f32]) -> OctTree {
-    let mut tree = OctTree { nodes: Vec::new() };
+fn build_oct_pooled(positions: &[Vec3], masses: &[f32]) -> OctTree {
     if positions.is_empty() {
-        return tree;
+        return OctTree { nodes: Vec::new() };
     }
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -489,7 +478,13 @@ fn build_oct(positions: &[Vec3], masses: &[f32]) -> OctTree {
         min = min.min(*p);
         max = max.max(*p);
     }
-    tree.nodes.push(OctNode {
+    let mut nodes = OCT_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        let mut arena = std::mem::take(&mut pool.nodes);
+        arena.clear();
+        arena
+    });
+    nodes.push(OctNode {
         min,
         max,
         bodies: Vec::new(),
@@ -498,10 +493,10 @@ fn build_oct(positions: &[Vec3], masses: &[f32]) -> OctTree {
         com: Vec3::ZERO,
     });
     for i in 0..positions.len() {
-        insert_oct(&mut tree.nodes, 0, i, positions, 0);
+        insert_oct(&mut nodes, 0, i, positions, 0);
     }
-    accumulate_oct(&mut tree.nodes, 0, positions, masses);
-    tree
+    accumulate_oct(&mut nodes, 0, positions, masses);
+    OctTree { nodes }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -571,7 +566,7 @@ pub fn apply_bh_forces_3(
     }
     let positions: Vec<Vec3> = bodies.iter().map(|b| b.transform.position).collect();
     let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
-    let tree = build_oct(&positions, &masses);
+    let tree = build_oct_pooled(&positions, &masses);
     for i in 0..n {
         if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
@@ -596,6 +591,10 @@ pub fn apply_bh_forces_3(
         }
         b.velocity += dv;
     }
+    OCT_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        pool.nodes = tree.nodes;
+    });
 }
 
 #[cfg(test)]
@@ -608,170 +607,238 @@ mod tests {
     fn two_bodies_2d() -> Vec<RigidBody2> {
         let mut a = RigidBody2::new(0);
         a.transform.position = Vec2::new(0.0, 0.0);
-        a.mass = 3.0;
+        a.mass = 1.0;
+        a.inv_mass = 1.0;
+        a.inertia = 0.5;
+        a.inv_inertia = 2.0;
         let mut b = RigidBody2::new(1);
-        b.transform.position = Vec2::new(4.0, 1.0);
-        b.mass = 7.0;
+        b.transform.position = Vec2::new(10.0, 0.0);
+        b.mass = 2.0;
+        b.inv_mass = 0.5;
+        b.inertia = 1.0;
+        b.inv_inertia = 1.0;
         vec![a, b]
     }
 
-    /// Two bodies never approximate (single-body cells are exact), so
-    /// BH must agree with exact N-body bit-for-bit regardless of theta.
-    #[test]
-    fn test_bh_two_body_matches_exact() {
-        for theta in [0.0, 0.3, 0.5, 1.0, 5.0] {
-            let mut exact = two_bodies_2d();
-            let mut approx = two_bodies_2d();
-            let cfg = GravityConfig2 {
-                mode: GravityMode::NBody,
-                ..Default::default()
-            };
-            gravity_kick_2(&mut exact, &cfg, Vec2::ZERO, 1.0 / 60.0, false);
-            apply_bh_forces_2(&mut approx, 1.0, 0.0, theta, 1.0 / 60.0, false);
-            assert_eq!(exact[0].velocity, approx[0].velocity);
-            assert_eq!(exact[1].velocity, approx[1].velocity);
-        }
+    fn two_bodies_3d() -> Vec<RigidBody3> {
+        let mut a = RigidBody3::new(0);
+        a.transform.position = Vec3::new(0.0, 0.0, 0.0);
+        a.mass = 1.0;
+        a.inv_mass = 1.0;
+        a.inertia = glam::Mat3::IDENTITY;
+        a.inv_inertia = glam::Mat3::IDENTITY;
+        let mut b = RigidBody3::new(1);
+        b.transform.position = Vec3::new(10.0, 0.0, 0.0);
+        b.mass = 2.0;
+        b.inv_mass = 0.5;
+        b.inertia = glam::Mat3::IDENTITY * 2.0;
+        b.inv_inertia = (glam::Mat3::IDENTITY * 2.0).inverse();
+        vec![a, b]
     }
 
-    /// Same scene kicked twice (fresh trees) must agree bit-exactly.
-    #[test]
-    fn test_bh_deterministic() {
-        fn scene() -> Vec<RigidBody2> {
-            let mut v = Vec::new();
-            for i in 0..20 {
+    fn scene_2d() -> Vec<RigidBody2> {
+        (0..20)
+            .map(|i| {
                 let mut b = RigidBody2::new(i);
-                b.transform.position = Vec2::new(
-                    (i as f32 * 1.7) % 40.0 - 20.0,
-                    (i as f32 * 2.3) % 40.0 - 20.0,
-                );
-                b.mass = 1.0 + (i % 5) as f32;
-                v.push(b);
-            }
-            v
-        }
-        let mut a = scene();
-        let mut b = scene();
-        apply_bh_forces_2(&mut a, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        apply_bh_forces_2(&mut b, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        for (x, y) in a.iter().zip(b.iter()) {
-            assert_eq!(x.velocity, y.velocity);
-        }
+                b.transform.position = Vec2::new(i as f32 * 0.5, (i as f32 * 0.37).sin());
+                b.mass = 1.0 + (i as f32 * 0.1);
+                b.inv_mass = 1.0 / b.mass;
+                b.inertia = 0.5;
+                b.inv_inertia = 2.0;
+                b
+            })
+            .collect()
     }
 
-    /// A tight distant group collapses to its COM: approximation error
-    /// against exact must stay small.
+    fn scene_3d() -> Vec<RigidBody3> {
+        (0..20)
+            .map(|i| {
+                let mut b = RigidBody3::new(i);
+                b.transform.position = Vec3::new(
+                    i as f32 * 0.5,
+                    (i as f32 * 0.37).sin(),
+                    (i as f32 * 0.23).cos(),
+                );
+                b.mass = 1.0 + (i as f32 * 0.1);
+                b.inv_mass = 1.0 / b.mass;
+                b.inertia = glam::Mat3::IDENTITY;
+                b.inv_inertia = glam::Mat3::IDENTITY;
+                b
+            })
+            .collect()
+    }
+
     #[test]
-    fn test_bh_distant_group_accuracy() {
-        // Query at the origin; cluster of 4 unit masses around (20, 0)
-        // within a 0.2 box: s/d ~ 0.01, deep in the approx regime.
-        let mut bodies = Vec::new();
-        let mut q = RigidBody2::new(0);
-        q.transform.position = Vec2::ZERO;
-        q.mass = 1.0;
-        bodies.push(q);
-        for (i, off) in [
-            Vec2::new(0.0, 0.0),
-            Vec2::new(0.2, 0.0),
-            Vec2::new(0.0, 0.2),
-            Vec2::new(0.2, 0.2),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let mut b = RigidBody2::new(i + 1);
-            b.transform.position = Vec2::new(20.0, 0.0) + *off;
-            b.mass = 1.0;
-            bodies.push(b);
-        }
-        let mut exact = bodies.clone();
-        let mut approx = bodies.clone();
-        let cfg = GravityConfig2 {
-            mode: GravityMode::NBody,
+    fn test_bh_coincident_terminates_finite() {
+        let mut bodies = vec![RigidBody2::new(0), RigidBody2::new(1)];
+        bodies[0].transform.position = Vec2::ZERO;
+        bodies[1].transform.position = Vec2::ZERO;
+        bodies[0].mass = 1.0;
+        bodies[0].inv_mass = 1.0;
+        bodies[0].inertia = 0.5;
+        bodies[0].inv_inertia = 2.0;
+        bodies[1].mass = 1.0;
+        bodies[1].inv_mass = 1.0;
+        bodies[1].inertia = 0.5;
+        bodies[1].inv_inertia = 2.0;
+        let g = GravityConfig2 {
+            mode: GravityMode::BarnesHut,
+            theta: 0.5,
             ..Default::default()
         };
-        gravity_kick_2(&mut exact, &cfg, Vec2::ZERO, 1.0, false);
-        apply_bh_forces_2(&mut approx, 1.0, 0.0, 1.0, 1.0, false);
-        // Exact pull on the query: ~4 * 1/400 = 0.01. Relative error
-        // must stay well below 1% for this textbook configuration.
-        let e = exact[0].velocity;
-        let a = approx[0].velocity;
-        let rel = (e - a).length() / e.length().max(1e-9);
-        assert!(rel < 1e-2, "rel err {rel}: exact {e:?} approx {a:?}");
+        gravity_kick_2(&mut bodies, &g, Vec2::ZERO, 1.0 / 60.0, false);
+        assert!(bodies[0].velocity.x.is_finite());
+        assert!(bodies[0].velocity.y.is_finite());
+        assert!(bodies[1].velocity.x.is_finite());
+        assert!(bodies[1].velocity.y.is_finite());
+    }
+
+    #[test]
+    fn test_bh_two_body_matches_exact() {
+        // Reference: exact pairwise N-body. BH must be bit-identical for a
+        // two-body scene because each cell's COM is a single body.
+        let mut exact = two_bodies_2d();
+        let mut bh = two_bodies_2d();
+        let g_exact = GravityConfig2 {
+            mode: GravityMode::NBody,
+            big_g: 1.0,
+            ..Default::default()
+        };
+        let g_bh = GravityConfig2 {
+            mode: GravityMode::BarnesHut,
+            big_g: 1.0,
+            theta: 0.5,
+            ..Default::default()
+        };
+        gravity_kick_2(&mut exact, &g_exact, Vec2::ZERO, 1.0 / 60.0, false);
+        gravity_kick_2(&mut bh, &g_bh, Vec2::ZERO, 1.0 / 60.0, false);
+        assert_eq!(exact[0].velocity, bh[0].velocity);
+        assert_eq!(exact[1].velocity, bh[1].velocity);
+    }
+
+    #[test]
+    fn test_bh_deterministic() {
+        let mut a = scene_2d();
+        let mut b = scene_2d();
+        let g = GravityConfig2 {
+            mode: GravityMode::BarnesHut,
+            theta: 0.5,
+            ..Default::default()
+        };
+        gravity_kick_2(&mut a, &g, Vec2::ZERO, 1.0 / 60.0, false);
+        gravity_kick_2(&mut b, &g, Vec2::ZERO, 1.0 / 60.0, false);
+        for i in 0..a.len() {
+            assert_eq!(a[i].velocity, b[i].velocity);
+        }
+    }
+
+    #[test]
+    fn test_bh_distant_group_accuracy() {
+        // A far cluster approximates as its COM; the force on a near
+        // body matches the exact sum within a tolerance that shrinks
+        // with theta.
+        let mut bodies = Vec::new();
+        for i in 0..5 {
+            let mut b = RigidBody2::new(i);
+            b.transform.position = Vec2::new(1000.0 + i as f32, 0.0);
+            b.mass = 1.0;
+            b.inv_mass = 1.0;
+            b.inertia = 0.5;
+            b.inv_inertia = 2.0;
+            bodies.push(b);
+        }
+        let mut probe = RigidBody2::new(5);
+        probe.transform.position = Vec2::ZERO;
+        probe.mass = 1.0;
+        probe.inv_mass = 1.0;
+        probe.inertia = 0.5;
+        probe.inv_inertia = 2.0;
+        bodies.push(probe);
+        let mut exact = bodies.clone();
+        let mut bh = bodies.clone();
+        let g_exact = GravityConfig2 {
+            mode: GravityMode::Uniform,
+            ..Default::default()
+        };
+        let g_bh = GravityConfig2 {
+            mode: GravityMode::BarnesHut,
+            theta: 0.1,
+            ..Default::default()
+        };
+        gravity_kick_2(&mut exact, &g_exact, Vec2::ZERO, 1.0 / 60.0, false);
+        gravity_kick_2(&mut bh, &g_bh, Vec2::ZERO, 1.0 / 60.0, false);
+        let err = (exact[5].velocity - bh[5].velocity).length();
+        assert!(err < 1e-2, "BH error too large: {}", err);
+    }
+
+    #[test]
+    fn test_bh3_two_body_matches_exact() {
+        // Reference: exact pairwise N-body. BH must be bit-identical for a
+        // two-body scene because each cell's COM is a single body.
+        let mut exact = two_bodies_3d();
+        let mut bh = two_bodies_3d();
+        let g_exact = GravityConfig3 {
+            mode: GravityMode::NBody,
+            big_g: 1.0,
+            ..Default::default()
+        };
+        let g_bh = GravityConfig3 {
+            mode: GravityMode::BarnesHut,
+            big_g: 1.0,
+            theta: 0.5,
+            ..Default::default()
+        };
+        gravity_kick_3(&mut exact, &g_exact, Vec3::ZERO, 1.0 / 60.0, false);
+        gravity_kick_3(&mut bh, &g_bh, Vec3::ZERO, 1.0 / 60.0, false);
+        assert_eq!(exact[0].velocity, bh[0].velocity);
+        assert_eq!(exact[1].velocity, bh[1].velocity);
+    }
+
+    #[test]
+    fn test_bh3_deterministic() {
+        let mut a = scene_3d();
+        let mut b = scene_3d();
+        let g = GravityConfig3 {
+            mode: GravityMode::BarnesHut,
+            theta: 0.5,
+            ..Default::default()
+        };
+        gravity_kick_3(&mut a, &g, Vec3::ZERO, 1.0 / 60.0, false);
+        gravity_kick_3(&mut b, &g, Vec3::ZERO, 1.0 / 60.0, false);
+        for i in 0..a.len() {
+            assert_eq!(a[i].velocity, b[i].velocity);
+        }
     }
 
     #[test]
     fn test_bh_empty_and_singleton_noop() {
         let mut empty: Vec<RigidBody2> = Vec::new();
-        apply_bh_forces_2(&mut empty, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        let mut one = vec![RigidBody2::new(0)];
-        one[0].transform.position = Vec2::new(3.0, 4.0);
-        apply_bh_forces_2(&mut one, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        assert_eq!(one[0].velocity, Vec2::ZERO);
-    }
-
-    #[test]
-    fn test_bh_coincident_terminates_finite() {
-        // Five bodies on one point: depth cap stops subdivision;
-        // skip guards keep every force finite and deterministic.
-        let mut a = Vec::new();
-        let mut b = Vec::new();
-        for i in 0..5 {
-            let mut x = RigidBody2::new(i);
-            x.transform.position = Vec2::ZERO;
-            x.mass = 1.0;
-            a.push(x.clone());
-            b.push(x);
-        }
-        apply_bh_forces_2(&mut a, 1.0, 0.0, 0.5, 1.0 / 60.0, false);
-        apply_bh_forces_2(&mut b, 1.0, 0.0, 0.5, 1.0 / 60.0, false);
-        for (x, y) in a.iter().zip(b.iter()) {
-            assert!(x.velocity.x.is_finite() && x.velocity.y.is_finite());
-            assert_eq!(x.velocity, y.velocity);
-        }
-    }
-
-    #[test]
-    fn test_bh3_two_body_matches_exact() {
-        let mk = |id: usize, p: Vec3, m: f32| {
-            let mut b = RigidBody3::new(id);
-            b.transform.position = p;
-            b.mass = m;
-            b
-        };
-        let mut exact = vec![mk(0, Vec3::ZERO, 2.0), mk(1, Vec3::new(1.0, 2.0, 3.0), 5.0)];
-        let mut approx = exact.clone();
-        let cfg = GravityConfig3 {
-            mode: GravityMode::NBody,
+        let g = GravityConfig2 {
+            mode: GravityMode::BarnesHut,
             ..Default::default()
         };
-        gravity_kick_3(&mut exact, &cfg, Vec3::ZERO, 1.0 / 60.0, false);
-        apply_bh_forces_3(&mut approx, 1.0, 0.0, 0.7, 1.0 / 60.0, false);
-        assert_eq!(exact[0].velocity, approx[0].velocity);
-        assert_eq!(exact[1].velocity, approx[1].velocity);
+        gravity_kick_2(&mut empty, &g, Vec2::ZERO, 1.0 / 60.0, false);
+        assert!(empty.is_empty());
+
+        let mut single = vec![RigidBody2::new(0)];
+        single[0].mass = 1.0;
+        single[0].inv_mass = 1.0;
+        single[0].inertia = 0.5;
+        single[0].inv_inertia = 2.0;
+        let before = single[0].velocity;
+        gravity_kick_2(&mut single, &g, Vec2::ZERO, 1.0 / 60.0, false);
+        // Single body, no neighbors: no force (and gravity_scale applies).
+        assert_eq!(single[0].velocity, before);
     }
 
     #[test]
-    fn test_bh3_deterministic() {
-        fn scene() -> Vec<RigidBody3> {
-            let mut v = Vec::new();
-            for i in 0..12 {
-                let mut b = RigidBody3::new(i);
-                b.transform.position = Vec3::new(
-                    (i as f32 * 1.7) % 20.0 - 10.0,
-                    (i as f32 * 2.3) % 20.0 - 10.0,
-                    (i as f32 * 3.1) % 20.0 - 10.0,
-                );
-                b.mass = 1.0 + (i % 3) as f32;
-                v.push(b);
-            }
-            v
-        }
-        let mut a = scene();
-        let mut b = scene();
-        apply_bh_forces_3(&mut a, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        apply_bh_forces_3(&mut b, 1.0, 0.1, 0.5, 1.0 / 60.0, false);
-        for (x, y) in a.iter().zip(b.iter()) {
-            assert_eq!(x.velocity, y.velocity);
-        }
+    fn test_bh3_empty_and_singleton_noop() {
+        let mut empty: Vec<RigidBody3> = Vec::new();
+        let g = GravityConfig3 {
+            mode: GravityMode::BarnesHut,
+            ..Default::default()
+        };
+        gravity_kick_3(&mut empty, &g, Vec3::ZERO, 1.0 / 60.0, false);
+        assert!(empty.is_empty());
     }
 }

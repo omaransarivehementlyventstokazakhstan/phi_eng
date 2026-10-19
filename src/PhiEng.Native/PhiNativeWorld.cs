@@ -1,4 +1,5 @@
 using System.Numerics;
+using PhiEng.Broadphase;
 
 namespace PhiEng.Native;
 
@@ -169,6 +170,7 @@ public sealed class PhiNativeWorld : IDisposable
             var ffi = new NativeMethods.CcdConfigFfi
             {
                 Enabled = config.Enabled ? 1u : 0u,
+                Tier = (uint)config.Tier,
                 MaxMovement = config.MaxMovement,
                 MaxSubsteps = (uint)config.MaxSubsteps,
             };
@@ -195,6 +197,7 @@ public sealed class PhiNativeWorld : IDisposable
             return new Dynamics.CcdConfig
             {
                 Enabled = ffi.Enabled != 0,
+                Tier = (Dynamics.CcdTier)ffi.Tier,
                 MaxMovement = ffi.MaxMovement,
                 MaxSubsteps = (int)ffi.MaxSubsteps,
             };
@@ -395,6 +398,136 @@ public sealed class PhiNativeWorld : IDisposable
             ParticleRadius = f.ParticleRadius,
             Enabled = f.Enabled != 0,
         };
+    }
+
+    /// <summary>Set the 2D thermal config (conduction, radiation, convection).</summary>
+    public unsafe void SetThermalConfig(Dynamics.ThermalConfig2 config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.ThermalConfig2Ffi
+            {
+                Enabled = config.Enabled ? (byte)1 : (byte)0,
+                AmbientTemperature = config.AmbientTemperature,
+                StefanBoltzmann = config.StefanBoltzmann,
+                ConvectionCoefficient = config.ConvectionCoefficient,
+                RadiationEnabled = config.RadiationEnabled ? (byte)1 : (byte)0,
+                ConductionEnabled = config.ConductionEnabled ? (byte)1 : (byte)0,
+                ConvectionEnabled = config.ConvectionEnabled ? (byte)1 : (byte)0,
+                MaxTemperature = config.MaxTemperature,
+                MinTemperature = config.MinTemperature,
+                RadiationRadiusFactor = config.RadiationRadiusFactor,
+                MaxTemperatureRate = config.MaxTemperatureRate,
+            };
+            int ok = NativeMethods.phieng_world_set_thermal_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected thermal config (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the 2D thermal config from the native world.</summary>
+    public unsafe Dynamics.ThermalConfig2 GetThermalConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.ThermalConfig2Ffi ffi;
+            int ok = NativeMethods.phieng_world_get_thermal_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native thermal config read failed.");
+            }
+            return new Dynamics.ThermalConfig2
+            {
+                Enabled = ffi.Enabled != 0,
+                AmbientTemperature = ffi.AmbientTemperature,
+                StefanBoltzmann = ffi.StefanBoltzmann,
+                ConvectionCoefficient = ffi.ConvectionCoefficient,
+                RadiationEnabled = ffi.RadiationEnabled != 0,
+                ConductionEnabled = ffi.ConductionEnabled != 0,
+                ConvectionEnabled = ffi.ConvectionEnabled != 0,
+                MaxTemperature = ffi.MaxTemperature,
+                MinTemperature = ffi.MinTemperature,
+                RadiationRadiusFactor = ffi.RadiationRadiusFactor,
+                MaxTemperatureRate = ffi.MaxTemperatureRate,
+            };
+        }
+    }
+
+    /// <summary>Set a body's temperature in Kelvin.</summary>
+    public void SetBodyTemperature(int bodyId, float temperature)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_body_temperature(_handle, (uint)bodyId, temperature);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId} or non-finite temperature.");
+            }
+        }
+    }
+
+    /// <summary>Read a body's temperature in Kelvin.</summary>
+    public unsafe float GetBodyTemperature(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float temp;
+            int ok = NativeMethods.phieng_world_get_body_temperature(_handle, (uint)bodyId, &temp);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+            return temp;
+        }
+    }
+
+    /// <summary>Set a body's thermal material properties.</summary>
+    public void SetBodyThermalMaterial(
+        int bodyId,
+        float specificHeat,
+        float thermalConductivity,
+        float emissivity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_body_thermal_material(
+                _handle, (uint)bodyId, specificHeat, thermalConductivity, emissivity);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId),
+                    $"Unknown native body id {bodyId} or invalid thermal material values.");
+            }
+        }
+    }
+
+    /// <summary>Read a body's thermal material properties.</summary>
+    public unsafe void GetBodyThermalMaterial(
+        int bodyId,
+        out float specificHeat,
+        out float thermalConductivity,
+        out float emissivity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float sh, k, e;
+            int ok = NativeMethods.phieng_world_get_body_thermal_material(
+                _handle, (uint)bodyId, &sh, &k, &e);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+            specificHeat = sh;
+            thermalConductivity = k;
+            emissivity = e;
+        }
     }
 
     /// <summary>Add SPH fluid particles. Returns the number added.</summary>
@@ -785,6 +918,40 @@ public sealed class PhiNativeWorld : IDisposable
             int ok = NativeMethods.phieng_world_get_body_gravity_scale(_handle, (uint)bodyId, &s);
             scale = s;
             return ok != 0;
+        }
+    }
+
+    /// <summary>
+    /// Select the broad-phase backend. <see cref="BroadphaseMode.Hybrid"/>
+    /// re-resolves to a concrete backend on every step from the live body
+    /// count; the other modes are fixed. Takes effect on the next step.
+    /// </summary>
+    public void SetBroadphaseMode(BroadphaseMode mode)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_broadphase_mode(_handle, (uint)mode);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode), $"Unknown broadphase mode tag {(uint)mode}.");
+            }
+        }
+    }
+
+    /// <summary>Read the configured broad-phase backend.</summary>
+    public unsafe BroadphaseMode GetBroadphaseMode()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint mode;
+            int ok = NativeMethods.phieng_world_get_broadphase_mode(_handle, &mode);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native broadphase mode read failed.");
+            }
+            return (BroadphaseMode)mode;
         }
     }
 

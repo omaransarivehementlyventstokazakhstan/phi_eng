@@ -49,11 +49,17 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 
 /// Snapshot schema version. Bump on ANY semantic change; loaders reject
 /// unknown versions instead of guessing.
+/// v8 adds the thermal block (conduction/radiation/convection config,
+/// per-body temperature, and material thermal properties).
 /// v7 adds the solver friction/restitution switches.
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 7;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 8;
+/// Schema that introduced the thermal block (v8). Gates below must use
+/// this (not `VERSION`), so v8 payloads keep decoding after future
+/// schemas land.
+const SNAPSHOT_SCHEMA_THERMAL: u32 = 8;
 /// Schema that introduced the ambient block (v5). Gates below must use
 /// this (not `VERSION`), so v5 payloads keep decoding after v6/v7 land.
 const SNAPSHOT_SCHEMA_AMBIENT: u32 = 5;
@@ -163,6 +169,24 @@ struct MaterialDto {
     friction: f32,
     restitution: f32,
     density: f32,
+    /// Specific heat capacity J/(kg·K) (schema v8; default 900.0, elided).
+    #[serde(
+        default = "default_specific_heat",
+        skip_serializing_if = "is_default_specific_heat"
+    )]
+    specific_heat: f32,
+    /// Thermal conductivity W/(m·K) (schema v8; default 1.0, elided).
+    #[serde(
+        default = "default_thermal_conductivity",
+        skip_serializing_if = "is_default_thermal_conductivity"
+    )]
+    thermal_conductivity: f32,
+    /// Surface emissivity 0..1 (schema v8; default 0.9, elided).
+    #[serde(
+        default = "default_emissivity",
+        skip_serializing_if = "is_default_emissivity"
+    )]
+    emissivity: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +241,12 @@ struct Body2Dto {
     /// is omitted when 1.0 so pre-ambient output stays byte-identical).
     #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
     ambient_scale: f32,
+    /// Temperature in Kelvin (schema v8; default 293.15, elided).
+    #[serde(
+        default = "default_temperature",
+        skip_serializing_if = "is_default_temperature"
+    )]
+    temperature: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +268,12 @@ struct Body3Dto {
     /// See `Body2Dto::ambient_scale`.
     #[serde(default = "default_gravity_scale", skip_serializing_if = "is_one")]
     ambient_scale: f32,
+    /// See `Body2Dto::temperature`.
+    #[serde(
+        default = "default_temperature",
+        skip_serializing_if = "is_default_temperature"
+    )]
+    temperature: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +731,7 @@ impl GravityConfig3Dto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CcdConfigDto {
     enabled: bool,
+    tier: u32,
     max_movement: f32,
     max_substeps: u32,
 }
@@ -704,6 +741,7 @@ impl Default for CcdConfigDto {
         let c = super::ccd::CcdConfig::default();
         Self {
             enabled: c.enabled,
+            tier: c.tier as u32,
             max_movement: c.max_movement,
             max_substeps: c.max_substeps,
         }
@@ -714,6 +752,7 @@ impl CcdConfigDto {
     fn is_default(&self) -> bool {
         let d = Self::default();
         self.enabled == d.enabled
+            && self.tier == d.tier
             && self.max_movement == d.max_movement
             && self.max_substeps == d.max_substeps
     }
@@ -722,17 +761,256 @@ impl CcdConfigDto {
 fn ccd_config_dto(c: &super::ccd::CcdConfig) -> CcdConfigDto {
     CcdConfigDto {
         enabled: c.enabled,
+        tier: c.tier as u32,
         max_movement: c.max_movement,
         max_substeps: c.max_substeps,
     }
 }
 
+use super::ccd::CcdTier;
+
 fn ccd_config_from_dto(c: &CcdConfigDto) -> super::ccd::CcdConfig {
     super::ccd::CcdConfig {
         enabled: c.enabled,
+        tier: match c.tier {
+            0 => CcdTier::Off,
+            1 => CcdTier::SweptAABB,
+            2 => CcdTier::FullGJK,
+            _ => CcdTier::Off,
+        },
         max_movement: c.max_movement,
         max_substeps: c.max_substeps,
     }
+}
+
+// ---- Thermal config DTO (schema v8) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ThermalConfigDto {
+    /// Master switch for thermal stepping.
+    #[serde(default, skip_serializing_if = "is_false")]
+    enabled: bool,
+    /// Ambient/environment temperature in Kelvin.
+    #[serde(
+        default = "default_temperature",
+        skip_serializing_if = "is_default_temperature"
+    )]
+    ambient_temperature: f32,
+    /// Stefan–Boltzmann constant σ in W/(m²·K⁴).
+    #[serde(
+        default = "default_stefan_boltzmann",
+        skip_serializing_if = "is_default_stefan_boltzmann"
+    )]
+    stefan_boltzmann: f32,
+    /// Convection coefficient h in W/(m²·K).
+    #[serde(
+        default = "default_convection_coefficient",
+        skip_serializing_if = "is_default_convection_coefficient"
+    )]
+    convection_coefficient: f32,
+    /// Enable body-to-body + body-to-environment radiation.
+    #[serde(default, skip_serializing_if = "is_true")]
+    radiation_enabled: bool,
+    /// Enable contact-driven conduction.
+    #[serde(default, skip_serializing_if = "is_true")]
+    conduction_enabled: bool,
+    /// Enable ambient convection.
+    #[serde(default, skip_serializing_if = "is_true")]
+    convection_enabled: bool,
+    /// Safety cap on temperature in Kelvin.
+    #[serde(
+        default = "default_max_temperature",
+        skip_serializing_if = "is_default_max_temperature"
+    )]
+    max_temperature: f32,
+    /// Safety floor in Kelvin (absolute zero).
+    #[serde(
+        default = "default_min_temperature",
+        skip_serializing_if = "is_default_min_temperature"
+    )]
+    min_temperature: f32,
+    /// Radiation cutoff as multiplier of combined bounding radii.
+    #[serde(
+        default = "default_radiation_radius_factor",
+        skip_serializing_if = "is_default_radiation_radius_factor"
+    )]
+    radiation_radius_factor: f32,
+    /// Maximum temperature change per step in Kelvin.
+    #[serde(
+        default = "default_max_temperature_rate",
+        skip_serializing_if = "is_default_max_temperature_rate"
+    )]
+    max_temperature_rate: f32,
+}
+
+impl ThermalConfigDto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.ambient_temperature == d.ambient_temperature
+            && self.stefan_boltzmann == d.stefan_boltzmann
+            && self.convection_coefficient == d.convection_coefficient
+            && self.radiation_enabled == d.radiation_enabled
+            && self.conduction_enabled == d.conduction_enabled
+            && self.convection_enabled == d.convection_enabled
+            && self.max_temperature == d.max_temperature
+            && self.min_temperature == d.min_temperature
+            && self.radiation_radius_factor == d.radiation_radius_factor
+            && self.max_temperature_rate == d.max_temperature_rate
+    }
+}
+
+fn thermal_config_dto(c: &super::thermal::ThermalConfig2D) -> ThermalConfigDto {
+    ThermalConfigDto {
+        enabled: c.enabled,
+        ambient_temperature: c.ambient_temperature,
+        stefan_boltzmann: c.stefan_boltzmann,
+        convection_coefficient: c.convection_coefficient,
+        radiation_enabled: c.radiation_enabled,
+        conduction_enabled: c.conduction_enabled,
+        convection_enabled: c.convection_enabled,
+        max_temperature: c.max_temperature,
+        min_temperature: c.min_temperature,
+        radiation_radius_factor: c.radiation_radius_factor,
+        max_temperature_rate: c.max_temperature_rate,
+    }
+}
+
+fn thermal_config_from_dto(c: &ThermalConfigDto) -> super::thermal::ThermalConfig2D {
+    super::thermal::ThermalConfig2D {
+        enabled: c.enabled,
+        ambient_temperature: c.ambient_temperature,
+        stefan_boltzmann: c.stefan_boltzmann,
+        convection_coefficient: c.convection_coefficient,
+        radiation_enabled: c.radiation_enabled,
+        conduction_enabled: c.conduction_enabled,
+        convection_enabled: c.convection_enabled,
+        max_temperature: c.max_temperature,
+        min_temperature: c.min_temperature,
+        radiation_radius_factor: c.radiation_radius_factor,
+        max_temperature_rate: c.max_temperature_rate,
+    }
+}
+
+/// Broad-phase backend tag used by schema-everything worlds (the default
+/// grid). Tag values are part of the schema: 0 brute force, 1 spatial
+/// hash, 2 dynamic tree, 3 hybrid — matching
+/// [`phieng_broadphase::BroadphaseMode`] discriminants *by value*.
+fn default_broadphase_mode_tag() -> u32 {
+    1
+}
+
+/// `skip_serializing_if` companion: the grid tag is elided so default
+/// worlds stay byte-identical to pre-tier-system files.
+fn is_spatial_hash_tag(v: &u32) -> bool {
+    *v == 1
+}
+
+fn broadphase_mode_discriminant(m: &phieng_broadphase::BroadphaseMode) -> u32 {
+    use phieng_broadphase::BroadphaseMode as M;
+    match m {
+        M::BruteForce => 0,
+        M::SpatialHash => 1,
+        M::DynamicAABBTree => 2,
+        M::Hybrid => 3,
+    }
+}
+
+/// Validate a stored backend tag. Unknown tags are `Corrupt`, never a
+/// silent default (the serde `Default` only fills fields *absent* from
+/// older files, which are the default grid by construction).
+fn broadphase_mode_from_tag(tag: u32) -> Result<phieng_broadphase::BroadphaseMode, SnapshotError> {
+    use phieng_broadphase::BroadphaseMode as M;
+    match tag {
+        0 => Ok(M::BruteForce),
+        1 => Ok(M::SpatialHash),
+        2 => Ok(M::DynamicAABBTree),
+        3 => Ok(M::Hybrid),
+        _ => corrupt(format!("unknown broadphase mode tag {}", tag)),
+    }
+}
+
+/// Default specific heat capacity J/(kg·K) for pre-v8 files.
+fn default_specific_heat() -> f32 {
+    super::material::PhysicsMaterial::DEFAULT_SPECIFIC_HEAT
+}
+/// Default thermal conductivity W/(m·K) for pre-v8 files.
+fn default_thermal_conductivity() -> f32 {
+    super::material::PhysicsMaterial::DEFAULT_THERMAL_CONDUCTIVITY
+}
+/// Default surface emissivity 0..1 for pre-v8 files.
+fn default_emissivity() -> f32 {
+    super::material::PhysicsMaterial::DEFAULT_EMISSIVITY
+}
+
+/// Default temperature in Kelvin for pre-v8 files.
+fn default_temperature() -> f32 {
+    phieng_math::DEFAULT_TEMPERATURE
+}
+/// Default Stefan–Boltzmann constant for pre-v8 files.
+fn default_stefan_boltzmann() -> f32 {
+    phieng_math::STEFAN_BOLTZMANN
+}
+/// Default convection coefficient for pre-v8 files.
+fn default_convection_coefficient() -> f32 {
+    10.0
+}
+/// Default max temperature for pre-v8 files.
+fn default_max_temperature() -> f32 {
+    phieng_math::MAX_TEMPERATURE
+}
+/// Default min temperature for pre-v8 files.
+fn default_min_temperature() -> f32 {
+    phieng_math::MIN_TEMPERATURE
+}
+/// Default radiation radius factor for pre-v8 files.
+fn default_radiation_radius_factor() -> f32 {
+    5.0
+}
+/// Default max temperature rate for pre-v8 files.
+fn default_max_temperature_rate() -> f32 {
+    100.0
+}
+
+/// `skip_serializing_if` companion for specific heat (900.0).
+fn is_default_specific_heat(v: &f32) -> bool {
+    *v == super::material::PhysicsMaterial::DEFAULT_SPECIFIC_HEAT
+}
+/// `skip_serializing_if` companion for thermal conductivity (1.0).
+fn is_default_thermal_conductivity(v: &f32) -> bool {
+    *v == super::material::PhysicsMaterial::DEFAULT_THERMAL_CONDUCTIVITY
+}
+/// `skip_serializing_if` companion for emissivity (0.9).
+fn is_default_emissivity(v: &f32) -> bool {
+    *v == super::material::PhysicsMaterial::DEFAULT_EMISSIVITY
+}
+/// `skip_serializing_if` companion for temperature (293.15 K).
+fn is_default_temperature(v: &f32) -> bool {
+    *v == phieng_math::DEFAULT_TEMPERATURE
+}
+/// `skip_serializing_if` companion for Stefan–Boltzmann constant.
+fn is_default_stefan_boltzmann(v: &f32) -> bool {
+    *v == phieng_math::STEFAN_BOLTZMANN
+}
+/// `skip_serializing_if` companion for convection coefficient (10.0).
+fn is_default_convection_coefficient(v: &f32) -> bool {
+    *v == 10.0
+}
+/// `skip_serializing_if` companion for max temperature (5000.0).
+fn is_default_max_temperature(v: &f32) -> bool {
+    *v == phieng_math::MAX_TEMPERATURE
+}
+/// `skip_serializing_if` companion for min temperature (0.0).
+fn is_default_min_temperature(v: &f32) -> bool {
+    *v == phieng_math::MIN_TEMPERATURE
+}
+/// `skip_serializing_if` companion for radiation radius factor (5.0).
+fn is_default_radiation_radius_factor(v: &f32) -> bool {
+    *v == 5.0
+}
+/// `skip_serializing_if` companion for max temperature rate (100.0).
+fn is_default_max_temperature_rate(v: &f32) -> bool {
+    *v == 100.0
 }
 
 // ---- Ambient force DTOs (schema v5) ----
@@ -1004,6 +1282,18 @@ struct World2Dto {
     /// so v3/v4/v5 output stays byte-identical.
     #[serde(default, skip_serializing_if = "CcdConfigDto::is_default")]
     ccd: CcdConfigDto,
+    /// Schema v8; thermal config. Omitted (and defaulted) for
+    /// pre-thermal worlds so default output stays byte-identical.
+    #[serde(default, skip_serializing_if = "ThermalConfigDto::is_default")]
+    thermal: ThermalConfigDto,
+    /// Schema v8; broad-phase backend tag (0 brute force, 1 spatial hash,
+    /// 2 dynamic tree, 3 hybrid). Omitted when the default grid is in use
+    /// so pre-tier-system output stays byte-identical.
+    #[serde(
+        default = "default_broadphase_mode_tag",
+        skip_serializing_if = "is_spatial_hash_tag"
+    )]
+    broadphase_mode: u32,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1089,6 +1379,16 @@ struct World3Dto {
     /// Schema v6; CCD config. Omitted (and defaulted) for pre-CCD files.
     #[serde(default, skip_serializing_if = "CcdConfigDto::is_default")]
     ccd: CcdConfigDto,
+    /// Schema v8; thermal config. Omitted (and defaulted) for
+    /// pre-thermal worlds so default output stays byte-identical.
+    #[serde(default, skip_serializing_if = "ThermalConfigDto::is_default")]
+    thermal: ThermalConfigDto,
+    /// Schema v8; broad-phase backend tag (see `World2Dto::broadphase_mode`).
+    #[serde(
+        default = "default_broadphase_mode_tag",
+        skip_serializing_if = "is_spatial_hash_tag"
+    )]
+    broadphase_mode: u32,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1129,6 +1429,9 @@ fn mat_dto(m: PhysicsMaterial) -> MaterialDto {
         friction: m.friction,
         restitution: m.restitution,
         density: m.density,
+        specific_heat: m.specific_heat,
+        thermal_conductivity: m.thermal_conductivity,
+        emissivity: m.emissivity,
     }
 }
 
@@ -1609,6 +1912,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         angular_velocity: b.angular_velocity,
         gravity_scale: b.gravity_scale,
         ambient_scale: b.ambient_scale,
+        temperature: b.temperature,
     }
 }
 
@@ -1628,6 +1932,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         angular_velocity: v3(b.angular_velocity),
         gravity_scale: b.gravity_scale,
         ambient_scale: b.ambient_scale,
+        temperature: b.temperature,
     }
 }
 
@@ -1762,9 +2067,8 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // Conditional schema: default worlds stay v3 (byte-identical to
     // pre-gravity files); gravity-feature worlds use v4; anything using
     // ambient features (or a non-unit ambient scale) uses v5; anything
-    // with a non-default CCD config uses v6. The clock is only persisted
-    // at v5+ (it is irrelevant without ambient fields), keeping v3/v4
-    // output byte-identical.
+    // with a non-default CCD config uses v6; anything with non-default
+    // solver flags uses v7; anything with thermal active uses v8.
     let has_ambient = w.ambient.is_active()
         || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
         || w.fluid.config.gamma != 1.0
@@ -1780,8 +2084,12 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     let has_solver_flags = !w.solver.enable_friction || !w.solver.enable_restitution;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_solver_flags {
+    let has_thermal = w.thermal.config.is_active();
+    let has_broadphase_mode = w.broadphase_mode != phieng_broadphase::BroadphaseMode::SpatialHash;
+    let schema = if has_thermal || has_broadphase_mode {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_solver_flags {
+        SNAPSHOT_SCHEMA_VERSION - 1
     } else if has_ccd {
         SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
@@ -1799,6 +2107,8 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         ambient: ambient_config_dto_2(&w.ambient),
         time: if has_ambient { w.time } else { 0.0 },
         ccd: ccd_config_dto(&w.ccd),
+        thermal: thermal_config_dto(&w.thermal.config),
+        broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -1806,7 +2116,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         validation: validation_dto(w.validation),
         next_body_id: w.next_body_id as u32,
         next_joint_id: w.next_joint_id as u32,
-        cell_size: w.broadphase.cell_size,
+        cell_size: w.broadphase.cell_size(),
         bodies: w.bodies.iter().map(body2_dto).collect(),
         joints,
         contacts,
@@ -1971,8 +2281,12 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     let has_solver_flags = !w.solver.enable_friction || !w.solver.enable_restitution;
     let has_gravity =
         !w.gravity_config.is_default() || w.bodies.iter().any(|b| b.gravity_scale != 1.0);
-    let schema = if has_solver_flags {
+    let has_thermal = w.thermal.config.is_active();
+    let has_broadphase_mode = w.broadphase_mode != phieng_broadphase::BroadphaseMode::SpatialHash;
+    let schema = if has_thermal || has_broadphase_mode {
         SNAPSHOT_SCHEMA_VERSION
+    } else if has_solver_flags {
+        SNAPSHOT_SCHEMA_VERSION - 1
     } else if has_ccd {
         SNAPSHOT_SCHEMA_CCD
     } else if has_ambient {
@@ -1990,6 +2304,8 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         ambient: ambient_config_dto_3(&w.ambient),
         time: if has_ambient { w.time } else { 0.0 },
         ccd: ccd_config_dto(&w.ccd),
+        thermal: thermal_config_dto(&w.thermal.config),
+        broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         dt: w.dt,
         linear_sleep_threshold: w.linear_sleep_threshold,
         angular_sleep_threshold: w.angular_sleep_threshold,
@@ -2020,8 +2336,16 @@ fn material_from(m: &MaterialDto) -> Result<PhysicsMaterial, SnapshotError> {
     finite(m.friction, "material.friction")?;
     finite(m.restitution, "material.restitution")?;
     finite(m.density, "material.density")?;
-    // Reuse the sanitizing constructor so load matches creation policy.
-    Ok(PhysicsMaterial::new(m.friction, m.restitution, m.density))
+    finite(m.specific_heat, "material.specific_heat")?;
+    finite(m.thermal_conductivity, "material.thermal_conductivity")?;
+    finite(m.emissivity, "material.emissivity")?;
+    // Reuse the sanitizing constructor so load matches creation policy,
+    // then apply thermal properties (defaults for pre-v8 files).
+    let mut m_out = PhysicsMaterial::new(m.friction, m.restitution, m.density);
+    m_out.specific_heat = m.specific_heat;
+    m_out.thermal_conductivity = m.thermal_conductivity;
+    m_out.emissivity = m.emissivity;
+    Ok(m_out)
 }
 
 fn shape2_from(s: &Shape2Dto) -> Result<Shape2, SnapshotError> {
@@ -2366,6 +2690,7 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     body.angular_damping = b.angular_damping;
     body.gravity_scale = b.gravity_scale;
     body.ambient_scale = b.ambient_scale;
+    body.temperature = b.temperature;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -2426,6 +2751,7 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     body.angular_damping = b.angular_damping;
     body.gravity_scale = b.gravity_scale;
     body.ambient_scale = b.ambient_scale;
+    body.temperature = b.temperature;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -2922,7 +3248,11 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
     apply_solver_2(&mut w, &dto.solver)?;
     apply_validation(&mut w.validation, &dto.validation)?;
-    w.broadphase = phieng_broadphase::SpatialHash2::new(dto.cell_size);
+    // Schema v8: broad-phase backend tag. Older payloads omit the field
+    // (serde default = grid tag) and always load the grid backend.
+    let broadphase_mode = broadphase_mode_from_tag(dto.broadphase_mode)?;
+    w.broadphase_mode = broadphase_mode;
+    w.broadphase = phieng_broadphase::Broadphase2::new(broadphase_mode, dto.cell_size);
 
     for b in &dto.bodies {
         load_body2(&mut w, b)?;
@@ -2940,6 +3270,10 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
         load_contact2(&mut w, c, mode)?;
     }
     apply_fluid2(&mut w, &dto.fluid)?;
+    // Thermal config: v8+ carries the block; older payloads use defaults.
+    if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
+        w.thermal.config = thermal_config_from_dto(&dto.thermal);
+    }
     Ok(w)
 }
 
@@ -2974,6 +3308,10 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     w.angular_sleep_threshold = dto.angular_sleep_threshold;
     apply_solver_3(&mut w, &dto.solver)?;
     apply_validation(&mut w.validation, &dto.validation)?;
+    // Schema v8: broad-phase backend tag (see `world2_from_dto`).
+    let broadphase_mode = broadphase_mode_from_tag(dto.broadphase_mode)?;
+    w.broadphase_mode = broadphase_mode;
+    w.broadphase = phieng_broadphase::Broadphase3::new(broadphase_mode);
 
     for b in &dto.bodies {
         load_body3(&mut w, b)?;
@@ -2991,6 +3329,10 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
         load_contact3(&mut w, c, mode)?;
     }
     apply_fluid3(&mut w, &dto.fluid)?;
+    // Thermal config: v8+ carries the block; older payloads use defaults.
+    if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
+        w.thermal.config = thermal_config_from_dto(&dto.thermal);
+    }
     Ok(w)
 }
 
@@ -3096,8 +3438,8 @@ fn encode_solver(out: &mut Vec<u8>, s: &SolverDto, version: u32) {
     write_f32(out, s.slop);
     write_f32(out, s.baumgarte);
     write_f32(out, s.early_exit_tolerance);
-    // Schema v7: friction/restitution switches.
-    if version >= SNAPSHOT_SCHEMA_VERSION {
+    // Schema v7+: friction/restitution switches.
+    if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
         write_u8(out, s.friction as u8);
         write_u8(out, s.restitution as u8);
     }
@@ -3287,12 +3629,13 @@ fn decode_solver(r: &mut Reader, version: u32) -> Result<SolverDto, SnapshotErro
         slop: r.read_f32()?,
         baumgarte: r.read_f32()?,
         early_exit_tolerance: r.read_f32()?,
-        friction: if version >= SNAPSHOT_SCHEMA_VERSION {
+        // Schema v7+: friction/restitution switches.
+        friction: if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
             r.read_u8()? != 0
         } else {
             true
         },
-        restitution: if version >= SNAPSHOT_SCHEMA_VERSION {
+        restitution: if version >= SNAPSHOT_SCHEMA_VERSION - 1 {
             r.read_u8()? != 0
         } else {
             true
@@ -3517,8 +3860,28 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
     // Schema v6: CCD config block.
     if dto.schema >= SNAPSHOT_SCHEMA_CCD {
         write_u8(&mut p, dto.ccd.enabled as u8);
+        write_u8(&mut p, dto.ccd.tier as u8);
         write_f32(&mut p, dto.ccd.max_movement);
         write_u32(&mut p, dto.ccd.max_substeps);
+    }
+    // Schema v8: thermal config block.
+    let thermal_v8 = dto.schema >= SNAPSHOT_SCHEMA_THERMAL;
+    if thermal_v8 {
+        write_u8(&mut p, dto.thermal.enabled as u8);
+        write_f32(&mut p, dto.thermal.ambient_temperature);
+        write_f32(&mut p, dto.thermal.stefan_boltzmann);
+        write_f32(&mut p, dto.thermal.convection_coefficient);
+        write_u8(&mut p, dto.thermal.radiation_enabled as u8);
+        write_u8(&mut p, dto.thermal.conduction_enabled as u8);
+        write_u8(&mut p, dto.thermal.convection_enabled as u8);
+        write_f32(&mut p, dto.thermal.max_temperature);
+        write_f32(&mut p, dto.thermal.min_temperature);
+        write_f32(&mut p, dto.thermal.radiation_radius_factor);
+        write_f32(&mut p, dto.thermal.max_temperature_rate);
+        // Schema v8: broad-phase backend tag. Older payloads have neither
+        // this nor the thermal block; strictness is free because the whole
+        // block is version-gated.
+        write_u32(&mut p, dto.broadphase_mode);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -3532,6 +3895,12 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, b.material.friction);
         write_f32(&mut p, b.material.restitution);
         write_f32(&mut p, b.material.density);
+        // Schema v8: material thermal properties.
+        if thermal_v8 {
+            write_f32(&mut p, b.material.specific_heat);
+            write_f32(&mut p, b.material.thermal_conductivity);
+            write_f32(&mut p, b.material.emissivity);
+        }
         match &b.shape {
             None => write_u8(&mut p, 255),
             Some(s) => encode_shape2(&mut p, s),
@@ -3549,6 +3918,10 @@ pub fn world2_to_binary(world: &World2, mode: LoadMode) -> Result<Vec<u8>, Snaps
         }
         if ambient_v5 {
             write_f32(&mut p, b.ambient_scale);
+        }
+        // Schema v8: per-body temperature.
+        if thermal_v8 {
+            write_f32(&mut p, b.temperature);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -3647,6 +4020,7 @@ fn decode_opt_ccd(r: &mut Reader, version: u32) -> Result<CcdConfigDto, Snapshot
     if version >= SNAPSHOT_SCHEMA_CCD {
         Ok(CcdConfigDto {
             enabled: r.read_u8()? != 0,
+            tier: r.read_u8()?.into(),
             max_movement: r.read_f32()?,
             max_substeps: r.read_u32()?,
         })
@@ -4546,6 +4920,31 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         ambient: decode_opt_ambient_2(&mut r, version)?,
         time: decode_opt_time(&mut r, version)?,
         ccd: decode_opt_ccd(&mut r, version)?,
+        // Schema v8: thermal config block.
+        thermal: if version >= SNAPSHOT_SCHEMA_THERMAL {
+            ThermalConfigDto {
+                enabled: r.read_u8()? != 0,
+                ambient_temperature: r.read_f32()?,
+                stefan_boltzmann: r.read_f32()?,
+                convection_coefficient: r.read_f32()?,
+                radiation_enabled: r.read_u8()? != 0,
+                conduction_enabled: r.read_u8()? != 0,
+                convection_enabled: r.read_u8()? != 0,
+                max_temperature: r.read_f32()?,
+                min_temperature: r.read_f32()?,
+                radiation_radius_factor: r.read_f32()?,
+                max_temperature_rate: r.read_f32()?,
+            }
+        } else {
+            ThermalConfigDto::default()
+        },
+        // Schema v8: broad-phase backend tag (shares the thermal block's
+        // version gate, so older payloads stay untouched).
+        broadphase_mode: if version >= SNAPSHOT_SCHEMA_THERMAL {
+            r.read_u32()?
+        } else {
+            default_broadphase_mode_tag()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -4571,6 +4970,22 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                         friction: r.read_f32()?,
                         restitution: r.read_f32()?,
                         density: r.read_f32()?,
+                        // Schema v8: material thermal properties.
+                        specific_heat: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_specific_heat()
+                        },
+                        thermal_conductivity: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_thermal_conductivity()
+                        },
+                        emissivity: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_emissivity()
+                        },
                     },
                     shape: decode_shape2(&mut r)?,
                     position: Vec2Dto {
@@ -4585,6 +5000,12 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                     angular_velocity: r.read_f32()?,
                     gravity_scale: decode_opt_scale(&mut r, version)?,
                     ambient_scale: decode_opt_ambient_scale(&mut r, version)?,
+                    // Schema v8: per-body temperature.
+                    temperature: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                        r.read_f32()?
+                    } else {
+                        default_temperature()
+                    },
                 };
                 v.push(body);
             }
@@ -4677,8 +5098,26 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
     // Schema v6: CCD config block.
     if dto.schema >= SNAPSHOT_SCHEMA_CCD {
         write_u8(&mut p, dto.ccd.enabled as u8);
+        write_u8(&mut p, dto.ccd.tier as u8);
         write_f32(&mut p, dto.ccd.max_movement);
         write_u32(&mut p, dto.ccd.max_substeps);
+    }
+    // Schema v8: thermal config block.
+    let thermal_v8 = dto.schema >= SNAPSHOT_SCHEMA_THERMAL;
+    if thermal_v8 {
+        write_u8(&mut p, dto.thermal.enabled as u8);
+        write_f32(&mut p, dto.thermal.ambient_temperature);
+        write_f32(&mut p, dto.thermal.stefan_boltzmann);
+        write_f32(&mut p, dto.thermal.convection_coefficient);
+        write_u8(&mut p, dto.thermal.radiation_enabled as u8);
+        write_u8(&mut p, dto.thermal.conduction_enabled as u8);
+        write_u8(&mut p, dto.thermal.convection_enabled as u8);
+        write_f32(&mut p, dto.thermal.max_temperature);
+        write_f32(&mut p, dto.thermal.min_temperature);
+        write_f32(&mut p, dto.thermal.radiation_radius_factor);
+        write_f32(&mut p, dto.thermal.max_temperature_rate);
+        // Schema v8: broad-phase backend tag (see `world2_to_binary`).
+        write_u32(&mut p, dto.broadphase_mode);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -4691,6 +5130,12 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         write_f32(&mut p, b.material.friction);
         write_f32(&mut p, b.material.restitution);
         write_f32(&mut p, b.material.density);
+        // Schema v8: material thermal properties.
+        if thermal_v8 {
+            write_f32(&mut p, b.material.specific_heat);
+            write_f32(&mut p, b.material.thermal_conductivity);
+            write_f32(&mut p, b.material.emissivity);
+        }
         match &b.shape {
             None => write_u8(&mut p, 255),
             Some(s) => encode_shape3(&mut p, s),
@@ -4712,6 +5157,10 @@ pub fn world3_to_binary(world: &World3, mode: LoadMode) -> Result<Vec<u8>, Snaps
         }
         if ambient_v5 {
             write_f32(&mut p, b.ambient_scale);
+        }
+        // Schema v8: per-body temperature.
+        if thermal_v8 {
+            write_f32(&mut p, b.temperature);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -4762,6 +5211,30 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         ambient: decode_opt_ambient_3(&mut r, version)?,
         time: decode_opt_time(&mut r, version)?,
         ccd: decode_opt_ccd(&mut r, version)?,
+        // Schema v8: thermal config block.
+        thermal: if version >= SNAPSHOT_SCHEMA_THERMAL {
+            ThermalConfigDto {
+                enabled: r.read_u8()? != 0,
+                ambient_temperature: r.read_f32()?,
+                stefan_boltzmann: r.read_f32()?,
+                convection_coefficient: r.read_f32()?,
+                radiation_enabled: r.read_u8()? != 0,
+                conduction_enabled: r.read_u8()? != 0,
+                convection_enabled: r.read_u8()? != 0,
+                max_temperature: r.read_f32()?,
+                min_temperature: r.read_f32()?,
+                radiation_radius_factor: r.read_f32()?,
+                max_temperature_rate: r.read_f32()?,
+            }
+        } else {
+            ThermalConfigDto::default()
+        },
+        // Schema v8: broad-phase backend tag (see `world2_from_binary`).
+        broadphase_mode: if version >= SNAPSHOT_SCHEMA_THERMAL {
+            r.read_u32()?
+        } else {
+            default_broadphase_mode_tag()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {
@@ -4786,6 +5259,22 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         friction: r.read_f32()?,
                         restitution: r.read_f32()?,
                         density: r.read_f32()?,
+                        // Schema v8: material thermal properties.
+                        specific_heat: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_specific_heat()
+                        },
+                        thermal_conductivity: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_thermal_conductivity()
+                        },
+                        emissivity: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                            r.read_f32()?
+                        } else {
+                            default_emissivity()
+                        },
                     },
                     shape: decode_shape3(&mut r)?,
                     position: Vec3Dto {
@@ -4806,6 +5295,12 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                     },
                     gravity_scale: decode_opt_scale(&mut r, version)?,
                     ambient_scale: decode_opt_ambient_scale(&mut r, version)?,
+                    // Schema v8: per-body temperature.
+                    temperature: if version >= SNAPSHOT_SCHEMA_THERMAL {
+                        r.read_f32()?
+                    } else {
+                        default_temperature()
+                    },
                 });
             }
             v
@@ -5519,6 +6014,105 @@ mod tests {
         assert!(matches!(
             decode_fluid3(&mut r, SNAPSHOT_SCHEMA_GRAVITY),
             Err(SnapshotError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn test_snapshot_broadphase_mode_roundtrip_2d() {
+        for mode in [
+            phieng_broadphase::BroadphaseMode::BruteForce,
+            phieng_broadphase::BroadphaseMode::SpatialHash,
+            phieng_broadphase::BroadphaseMode::DynamicAABBTree,
+            phieng_broadphase::BroadphaseMode::Hybrid,
+        ] {
+            let mut w = scene2();
+            w.broadphase_mode = mode;
+            w.broadphase = phieng_broadphase::Broadphase2::new(mode, 1.0);
+
+            for fmt in [LoadMode::Exact, LoadMode::Fresh] {
+                let text = world2_to_json(&w, fmt).expect("serializes");
+                let back = world2_from_json(&text, fmt).expect("deserializes");
+                assert_eq!(
+                    back.broadphase_mode, mode,
+                    "JSON must preserve mode {:?}",
+                    mode
+                );
+
+                let bytes = world2_to_binary(&w, fmt).expect("serializes");
+                let back = world2_from_binary(&bytes, fmt).expect("deserializes");
+                assert_eq!(
+                    back.broadphase_mode, mode,
+                    "binary must preserve mode {:?}",
+                    mode
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_snapshot_broadphase_mode_roundtrip_3d() {
+        for mode in [
+            phieng_broadphase::BroadphaseMode::BruteForce,
+            phieng_broadphase::BroadphaseMode::DynamicAABBTree,
+            phieng_broadphase::BroadphaseMode::Hybrid,
+        ] {
+            let mut w = World3::new();
+            w.broadphase_mode = mode;
+            w.broadphase = phieng_broadphase::Broadphase3::new(mode);
+
+            for fmt in [LoadMode::Exact, LoadMode::Fresh] {
+                let text = world3_to_json(&w, fmt).expect("serializes");
+                let back = world3_from_json(&text, fmt).expect("deserializes");
+                assert_eq!(
+                    back.broadphase_mode, mode,
+                    "JSON must preserve 3D mode {:?}",
+                    mode
+                );
+
+                let bytes = world3_to_binary(&w, fmt).expect("serializes");
+                let back = world3_from_binary(&bytes, fmt).expect("deserializes");
+                assert_eq!(
+                    back.broadphase_mode, mode,
+                    "binary must preserve 3D mode {:?}",
+                    mode
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_snapshot_default_world_omits_mode_key() {
+        // Default worlds keep their old schema and carry no mode key.
+        let w = scene2();
+        let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
+        assert!(text.contains("\"schema\": 3"), "default scene stays v3");
+        assert!(
+            !text.contains("broadphase_mode"),
+            "default worlds must not carry a mode key"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_rejects_unknown_mode_tag() {
+        // Unknown mode tags are Corrupt, never a silent default. JSON and
+        // binary both funnel through `world2_from_dto`, so the JSON path
+        // pins the validation for both.
+        assert!(matches!(
+            broadphase_mode_from_tag(99),
+            Err(SnapshotError::Corrupt(_))
+        ));
+
+        let hacked: World2Dto = {
+            let dto = world2_dto(&scene2(), LoadMode::Exact);
+            World2Dto {
+                broadphase_mode: 99,
+                ..dto
+            }
+        };
+        let hacked_text = serde_json::to_string(&hacked).expect("serializes");
+        assert!(matches!(
+            world2_from_json(&hacked_text, LoadMode::Exact),
+            Err(SnapshotError::Corrupt(_))
         ));
     }
 }

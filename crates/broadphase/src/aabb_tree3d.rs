@@ -4,6 +4,11 @@ use phieng_math::AABB3;
 /// Flat 3D broadphase over stored AABBs. (Named "tree" for API parity;
 /// the current implementation is a brute-force list, which is cache-
 /// friendly and exact for the body counts this engine targets.)
+///
+/// Legacy surface: prefer [`Broadphase3`](super::Broadphase3), which
+/// exposes this same all-pairs backend as its `BruteForce` mode alongside
+/// the real [`DynamicAABBTree3`](super::DynamicAABBTree3). Kept so existing
+/// callers do not break.
 #[derive(Debug)]
 pub struct AABBTree3D {
     body_aabbs: Vec<(usize, AABB3)>,
@@ -44,7 +49,9 @@ impl AABBTree3D {
 
     /// Append potential collision pairs to `out` without allocating.
     /// Contract: `out` must be empty (the world passes cleared scratch).
-    /// Pairs are emitted in index order (deterministic).
+    /// Pairs are sorted and deduped so every backend hands the narrowphase
+    /// the same pair sequence (the sequential solver accumulates in pair
+    /// order, so ordering must not vary between backends).
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for i in 0..self.body_aabbs.len() {
@@ -59,6 +66,8 @@ impl AABBTree3D {
                 }
             }
         }
+        out.sort_unstable();
+        out.dedup();
     }
 
     pub fn len(&self) -> usize {

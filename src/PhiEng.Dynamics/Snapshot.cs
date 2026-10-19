@@ -479,10 +479,11 @@ public static class Snapshot
     private sealed class CcdConfigDto
     {
         [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("tier")] public int Tier { get; set; }
         [JsonPropertyName("max_movement")] public float MaxMovement { get; set; } = 0.1f;
         [JsonPropertyName("max_substeps")] public int MaxSubsteps { get; set; } = 8;
 
-        public bool IsDefault() => !Enabled && MaxMovement == 0.1f && MaxSubsteps == 8;
+        public bool IsDefault() => !Enabled && Tier == 0 && MaxMovement == 0.1f && MaxSubsteps == 8;
     }
 
     /// <summary>Spring / SHM config DTO (schema v5, 3D).</summary>
@@ -712,6 +713,7 @@ public static class Snapshot
                 Ccd = new CcdConfigDto
                 {
                     Enabled = w.Ccd.Enabled,
+                    Tier = (int)w.Ccd.Tier,
                     MaxMovement = w.Ccd.MaxMovement,
                     MaxSubsteps = w.Ccd.MaxSubsteps,
                 },
@@ -994,6 +996,7 @@ public static class Snapshot
                 Ccd = new CcdConfigDto
                 {
                     Enabled = w.Ccd.Enabled,
+                    Tier = (int)w.Ccd.Tier,
                     MaxMovement = w.Ccd.MaxMovement,
                     MaxSubsteps = w.Ccd.MaxSubsteps,
                 },
@@ -1369,9 +1372,12 @@ public static class Snapshot
             throw new ArgumentException("CCD max_movement must be positive.");
         if (c.MaxSubsteps < 1)
             throw new ArgumentException("CCD max_substeps must be >= 1.");
+        if (c.Tier < 0 || c.Tier > 2)
+            throw new ArgumentException("CCD tier tag must be 0-2.");
         return new CcdConfig
         {
             Enabled = c.Enabled,
+            Tier = (CcdTier)c.Tier,
             MaxMovement = Fin(c.MaxMovement, "ccd.max_movement"),
             MaxSubsteps = c.MaxSubsteps,
         };
@@ -2104,6 +2110,7 @@ public static class Snapshot
         if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
+            w.Write(dto.Ccd.Tier);
             w.Write(dto.Ccd.MaxMovement);
             w.Write(dto.Ccd.MaxSubsteps);
         }
@@ -2354,6 +2361,7 @@ public static class Snapshot
             Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
+                Tier = r.ReadInt32(),
                 MaxMovement = r.ReadSingle(),
                 MaxSubsteps = r.ReadInt32(),
             } : new CcdConfigDto(),
@@ -2615,6 +2623,7 @@ public static class Snapshot
         if (dto.Schema >= CcdSchemaVersion)
         {
             w.Write(dto.Ccd.Enabled);
+            w.Write(dto.Ccd.Tier);
             w.Write(dto.Ccd.MaxMovement);
             w.Write(dto.Ccd.MaxSubsteps);
         }
@@ -2677,6 +2686,7 @@ public static class Snapshot
             Ccd = version >= CcdSchemaVersion ? new CcdConfigDto
             {
                 Enabled = r.ReadBoolean(),
+                Tier = r.ReadInt32(),
                 MaxMovement = r.ReadSingle(),
                 MaxSubsteps = r.ReadInt32(),
             } : new CcdConfigDto(),

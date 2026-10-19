@@ -56,13 +56,38 @@ fast or thin bodies tunnel; behavior in tunneling regimes is bounded
 no body travels more than `max_movement` per substep (default 0.1,
 capped by `max_substeps`, default 8) — a thin wall thinner than that
 budget still tunnels, by design. Off (default) is bit-identical to
-legacy stepping. Two related notes: EPA normals are verified in
+legacy stepping. The `tier` field (`CcdTier`: Off / SweptAABB / FullGJK)
+selects *which bodies* substep: `SweptAABB` only substeps when some
+broadphase pair's swept volumes overlap (sparse scenes pay nothing),
+`FullGJK` keeps the legacy peak-speed behavior. Note "FullGJK" names
+the substepping thoroughness, not a true time-of-impact solve — there
+is still no TOI root-finding or swept-shape narrowphase in this engine.
+Two related notes: EPA normals are verified in
 the shallow/moderate-penetration regime the solver maintains — deeply
 interpenetrated pairs (past any range the solver would let persist) can
 report flipped axes, which is another reason penetration must be
 arrested early rather than resolved late.
 
-## No raycasts, triggers — joints are 2D-only, snapshots are versioned v5
+## No raycasts, triggers — broadphase tiers, joints are 2D-only, snapshots are versioned v8
+
+Broad-phase backends (`BroadphaseMode`: brute force, spatial hash,
+dynamic AABB tree, hybrid auto-select — B01–B06) are behavior-identical
+by construction: every backend emits the same sorted+deduped pair
+sequence, so switching mode mid-run is transparent. Known caveats:
+
+- **3D has no spatial-hash backend yet.** The 2D spatial grid has no 3D
+  counterpart, so `SpatialHash` and `Hybrid` both fall back to all-pairs
+  on 3D worlds. The fallback is exact, just O(n²).
+- **The dynamic tree has no incremental update.** The world rebuilds the
+  whole tree every step (`clear` + `insert`), and `remove` rebuilds
+  bottom-up from the surviving leaves. Remote bodies that never move
+  still pay full insert cost each step — the win over brute force comes
+  from pair pruning, not from amortization.
+- **Monotone insertion degenerates the tree.** The SAH descent alone
+  turns a sorted-insert stream into a linked list; a height-triggered
+  bottom-up rebuild (past 2×log₂) restores balance. The threshold is
+  conservative, so adversarial orderings pay one O(n log n) rebuild
+  before settling.
 
 2D joints exist (distance, hinge with angle limits, prismatic with travel
 limits, fixed weld — rigid only, see `crates/dynamics/src/joint.rs` and
@@ -228,6 +253,40 @@ limitation rather than faking it:
   heavy/light interface is a density gradient, not a surface-energy
   boundary. For true immiscible multiphase flow, surface tension between
   phases is still missing.
+
+
+## Thermodynamics & radiation (T01–T17)
+
+The thermal subsystem adds per-body temperature evolution via conduction,
+radiation, and convection. Documented gaps:
+
+- **No thermal expansion.** A body's dimensions, mass, and inertia are
+  independent of temperature — heating a body never changes its shape,
+  collision geometry, or mass properties. Thermal expansion (and the
+  resulting solver coupling) is deferred to a future phase.
+- **No phase change.** Bodies carry fixed material properties; there is
+  no melting/solidification or latent heat. A body's specific heat,
+  conductivity, and emissivity never change with temperature.
+- **Radiation is unoccluded.** Body-to-body radiation does not account
+  for intermediate bodies blocking the line of sight. Every pair within
+  `radiation_radius_factor` × combined bounding radii exchanges
+  radiation, regardless of what lies between them.
+- **Constant convection coefficient.** `h` is fixed per-world; there is
+  no velocity-dependent forced convection (`h ∝ |v|`) and no natural
+  convection model (Rayleigh–Bénard, etc.). Opt-in per-world.
+- **Static bodies are thermal reservoirs.** A static body's temperature
+  never changes (infinite heat capacity); it can supply or absorb
+  unlimited heat without temperature drift. This is intentional for
+  performance and simplicity.
+- **2D conduction uses simplified geometry.** Contacts in 2D are points;
+  the effective contact width is derived from the smaller body's
+  characteristic length, not the actual contact area. Conductance is
+  scaled by `CONDUCTION_SCALE = 500` for game-timescale dynamics rather
+  than strict SI units.
+- **Cross-language parity is tolerance-based.** Rust and C# thermal
+  trajectories agree on statistical/energy/amplitude bounds but are not
+  bit-equal (same rule as ambient turbulence and gravity). T01–T16 pin
+  per-backend determinism, not cross-language bit-equality.
 
 
 

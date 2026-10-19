@@ -60,7 +60,7 @@ pub enum CollisionTier {
 
 ## Priority 2: Medium-Impact Optimizations (Week 3-4)
 
-### 2.1 Broadphase Tier System
+### 2.1 Broadphase Tier System — ✅ DONE (0.5.x)
 ```rust
 pub enum BroadphaseMode {
     BruteForce,     // < 50 bodies
@@ -69,6 +69,13 @@ pub enum BroadphaseMode {
     Hybrid,         // Auto-select
 }
 ```
+- **Shipped**: `BroadphaseMode` with `BruteForce` (explicit all-pairs),
+  `SpatialHash` (existing grid), `DynamicAABBTree` (new balanced tree
+  for 2D and 3D, bottom-up rebuild past the 2×log₂ threshold), and
+  `Hybrid` (auto-select from live body count each step). Modes are
+  behavior-identical (canonical sorted+deduped pairs); default stays the
+  grid; mode persists in snapshot schema v8. FFI + managed C# mirror
+  included. Pinned by B01–B06 (Rust↔C# parity).
 
 ### 2.2 SIMD Math Paths (Rust)
 - Use `packed_simd` or `std::simd` for Vec2/Vec3/Mat2/Mat3
@@ -93,10 +100,17 @@ pub enum BroadphaseMode {
 - Narrowphase SAT on GPU
 - Requires `wgpu`/`vulkano` feature
 
-### 3.2 Continuous Collision Detection (CCD) Tiers
+### 3.2 Continuous Collision Detection (CCD) Tiers — ✅ DONE (0.5.x)
 - Off by default on low-end
 - Swept AABB for fast movers only
 - Full GJK-raycast only on High/Ultra quality
+- **Shipped**: `CcdTier` (`Off` / `SweptAABB` / `FullGJK`) with
+  `ccd_tier_from_quality` mapping (`Ultra`→Full, `High`→Swept, else
+  Off). `SweptAABB` checks swept-volume overlap per broadphase pair and
+  skips substepping entirely when nothing fast is near anything;
+  `FullGJK` keeps the legacy peak-speed substepping. Default is `Off`,
+  so existing trajectories are bit-identical. Tier persists in the v6
+  `ccd` block and crosses the FFI + managed C# mirror.
 
 ### 3.3 Scene Graph / Instancing
 - Shared shapes across bodies
@@ -104,7 +118,14 @@ pub enum BroadphaseMode {
 
 ---
 
-## Configuration API
+## Configuration API — ✅ DONE (0.5.x, Rust core)
+
+`PhysicsConfig` unifies `solver_quality`, `collision_tier`,
+`broadphase_mode`, sleep thresholds, `ccd`, and `thermal` with
+`Default` (= pre-tier-system behavior), `low_end()`, and
+`high_fidelity()` presets plus `apply_to_2d`/`apply_to_3d`.
+(`max_bodies`/`max_contacts` caps, `fixed_point`, and `simd` remain
+future work — see §§2.2–2.3.)
 
 ```rust
 pub struct PhysicsConfig {

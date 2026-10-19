@@ -36,6 +36,7 @@ fn clean_3d(w: &mut World3) {
 fn ccd_on() -> CcdConfig {
     CcdConfig {
         enabled: true,
+        tier: phieng_dynamics::ccd::CcdTier::FullGJK,
         max_movement: 0.05,
         max_substeps: 64,
     }
@@ -173,6 +174,7 @@ fn c03_default_off_bit_identical() {
     // every step takes exactly one substep.
     on.ccd = CcdConfig {
         enabled: true,
+        tier: phieng_dynamics::ccd::CcdTier::FullGJK,
         max_movement: 10.0,
         max_substeps: 8,
     };

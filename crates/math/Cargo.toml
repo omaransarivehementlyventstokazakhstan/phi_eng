@@ -16,3 +16,7 @@ glam = { workspace = true }
 
 [features]
 default = []
+# SIMD-accelerated math paths. Off by default for MSRV compatibility
+# (std::simd is still unstable; this feature uses std::arch intrinsics
+# on x86_64/x86 and a scalar fallback everywhere else).
+simd = []

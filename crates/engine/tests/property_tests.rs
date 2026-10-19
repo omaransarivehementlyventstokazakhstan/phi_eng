@@ -331,4 +331,143 @@ proptest! {
         let new_id = world.add_dynamic_body(Vec2::new(20.0, 0.0), shape.clone(), density).unwrap();
         prop_assert_eq!(new_id, 9);
     }
+
+    /// Thermal equilibrium: two bodies with different temperatures in contact
+    /// transfer heat from hot toward cold (skips equal-temperature case).
+    #[test]
+    fn thermal_equilibrium_contact(
+        t1 in (200.0f32..500.0f32),
+        t2 in (200.0f32..500.0f32),
+    ) {
+        prop_assume!(t1 != t2);
+
+        let mut world = World2::new();
+        world.gravity = Vec2::ZERO;
+        world.linear_sleep_threshold = 0.0;
+
+        // Enable thermal conduction only
+        world.thermal.config.enabled = true;
+        world.thermal.config.conduction_enabled = true;
+        world.thermal.config.radiation_enabled = false;
+        world.thermal.config.convection_enabled = false;
+        world.thermal.config.ambient_temperature = 300.0;
+        world.thermal.config.max_temperature_rate = 10000.0;
+
+        // Dynamic hot body, static cold body (keeps contact persistent on first step)
+        let (hot_pos, cold_pos) = if t1 > t2 {
+            (Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0))
+        } else {
+            (Vec2::new(0.5, 0.0), Vec2::new(-0.5, 0.0))
+        };
+        let (hot_id, cold_id) = if t1 > t2 {
+            (
+                world
+                    .add_dynamic_body(hot_pos, Shape2::Circle { radius: 1.0 }, 1.0)
+                    .unwrap(),
+                world
+                    .add_static_body(cold_pos, Shape2::Circle { radius: 1.0 })
+                    .unwrap(),
+            )
+        } else {
+            (
+                world
+                    .add_dynamic_body(cold_pos, Shape2::Circle { radius: 1.0 }, 1.0)
+                    .unwrap(),
+                world
+                    .add_static_body(hot_pos, Shape2::Circle { radius: 1.0 })
+                    .unwrap(),
+            )
+        };
+        world.bodies[hot_id].temperature = t1.max(t2);
+        world.bodies[cold_id].temperature = t1.min(t2);
+        world.bodies[hot_id].material.thermal_conductivity = 10.0;
+        world.bodies[cold_id].material.thermal_conductivity = 10.0;
+
+        for _ in 0..500 {
+            world.step(DT);
+        }
+
+        // Heat must have flowed from hotter toward colder on first contact.
+        // Static body acts as an infinite heat reservoir at fixed temperature.
+        let hot_final = world.bodies[hot_id].temperature;
+        let hot_init = t1.max(t2);
+        prop_assert!(
+            hot_final < hot_init,
+            "hot body should cool on contact: {} → {}",
+            hot_init, hot_final
+        );
+    }
+
+    /// Thermal boundedness: temperatures stay within a sane range with ambient coupling.
+    #[test]
+    fn thermal_boundedness(
+        t_init in (50.0f32..800.0f32),
+        t_amb in (200.0f32..400.0f32),
+    ) {
+        let mut world = World2::new();
+        world.gravity = Vec2::ZERO;
+        world.linear_sleep_threshold = 0.0;
+
+        world.thermal.config.enabled = true;
+        world.thermal.config.radiation_enabled = true;
+        world.thermal.config.convection_enabled = true;
+        world.thermal.config.conduction_enabled = false;
+        world.thermal.config.ambient_temperature = t_amb;
+        world.thermal.config.max_temperature_rate = 1000.0;
+
+        let id = world
+            .add_dynamic_body(Vec2::ZERO, Shape2::Circle { radius: 1.0 }, 1.0)
+            .unwrap();
+        world.bodies[id].temperature = t_init;
+        world.bodies[id].material.emissivity = 0.9;
+        world.bodies[id].material.specific_heat = 900.0;
+
+        for _ in 0..100 {
+            world.step(DT);
+            let t = world.bodies[id].temperature;
+            prop_assert!(
+                t.is_finite() && t > 0.0 && t < 2000.0,
+                "temperature {} not in sane range (init={}, amb={})",
+                t,
+                t_init,
+                t_amb
+            );
+        }
+    }
+
+    /// Thermal determinism: same initial state → bit-identical temperatures.
+    #[test]
+    fn thermal_determinism(
+        t1 in (200.0f32..500.0f32),
+        t2 in (200.0f32..500.0f32),
+    ) {
+        let run = |t1: f32, t2: f32| -> f32 {
+            let mut world = World2::new();
+            world.gravity = Vec2::ZERO;
+            world.linear_sleep_threshold = 0.0;
+            world.thermal.config.enabled = true;
+            world.thermal.config.conduction_enabled = true;
+            world.thermal.config.radiation_enabled = true;
+            world.thermal.config.convection_enabled = true;
+            world.thermal.config.ambient_temperature = 300.0;
+            world.thermal.config.max_temperature_rate = 10000.0;
+
+            let id1 = world
+                .add_dynamic_body(Vec2::new(-0.5, 0.0), Shape2::Circle { radius: 1.0 }, 1.0)
+                .unwrap();
+            let id2 = world
+                .add_dynamic_body(Vec2::new(0.5, 0.0), Shape2::Circle { radius: 1.0 }, 1.0)
+                .unwrap();
+            world.bodies[id1].temperature = t1;
+            world.bodies[id2].temperature = t2;
+
+            for _ in 0..100 {
+                world.step(DT);
+            }
+
+            world.bodies[id1].temperature
+        };
+
+        prop_assert_eq!(run(t1, t2), run(t1, t2));
+    }
 }
