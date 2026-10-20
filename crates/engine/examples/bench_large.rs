@@ -89,6 +89,33 @@ fn median_ms<F: FnMut()>(frames: usize, mut step_fn: F) -> f64 {
     samples[2]
 }
 
+/// Pinned trajectory hash of the 2D pile scene.
+///
+/// The physics is expected to be bit-identical across builds and
+/// platforms; this constant is the anchor that proves it. Re-pinning is
+/// a deliberate act: if it changes, the physics moved. If the change
+/// was intended, update it here AND in README.md, and say so in the
+/// CHANGELOG. Never silence it by loosening the comparison.
+const HASH_PILE_2D: u64 = 0x8619b41d69ad35ee;
+
+/// Pinned trajectory hash of the 8-stack island scene (serial solve).
+const HASH_ISLANDS: u64 = 0xdb0f2a0fff8b7820;
+
+/// Pinned trajectory hash of the 3D pile scene.
+const HASH_PILE_3D: u64 = 0x66ae94fb463de60;
+
+/// Fail with a message that says what to do about it.
+fn check_hash(label: &str, got: u64, expected: u64) {
+    if got != expected {
+        panic!(
+            "{label} trajectory hash changed: got {got:#x}, expected {expected:#x}.\n\
+             The physics moved. If that was intended, re-pin the constant in \
+             bench_large.rs AND in README.md, and note it in the CHANGELOG; \
+             otherwise this is a regression."
+        );
+    }
+}
+
 fn main() {
     const BODIES: usize = 1500;
     const FRAMES: usize = 300;
@@ -172,11 +199,13 @@ fn main() {
     let allocs = ALLOC_COUNT.load(Ordering::Relaxed);
     let bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
 
+    let pile_hash = final_hash(&world);
+    check_hash("pile 2D", pile_hash, HASH_PILE_2D);
+
     println!("bodies: {}", world.bodies.len());
     println!("frames: {FRAMES}");
     println!(
-        "final hash: {:#x} (early-exit {})",
-        final_hash(&world),
+        "final hash: {pile_hash:#x} (early-exit {})",
         if no_exit { "OFF" } else { "ON" }
     );
     println!("avg pairs/step: {:.0}", pair_total as f64 / FRAMES as f64);
@@ -383,6 +412,9 @@ fn main() {
     }
     let big_serial_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
 
+    check_hash("islands (serial)", serial_hash, HASH_ISLANDS);
+    check_hash("islands (parallel)", parallel_hash, HASH_ISLANDS);
+
     println!(
         "[islands] serial={serial_ms:.4} ms/step parallel={parallel_ms:.4} ms/step \
          speedup={:.2}x identical={} serial={serial_hash:#x} parallel={parallel_hash:#x} \
@@ -493,8 +525,11 @@ fn main() {
             contact3_total += list.len();
         }
     }
+    let pile3_hash = final_hash3(&pile3);
+    check_hash("pile 3D", pile3_hash, HASH_PILE_3D);
+
     println!("bodies3d: {}", pile3.bodies.len());
-    println!("final hash3d: {:#x}", final_hash3(&pile3));
+    println!("final hash3d: {pile3_hash:#x}");
     println!(
         "avg pairs3d/step: {:.0}",
         pair3_total as f64 / FRAMES as f64

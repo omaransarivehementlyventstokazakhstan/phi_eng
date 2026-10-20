@@ -153,23 +153,23 @@ pub enum BroadphaseMode {
 future work — see §§2.2–2.3.)
 
 ```rust
+// Shipped today (crates/dynamics/src/physics_config.rs):
 pub struct PhysicsConfig {
     pub solver_quality: SolverQuality,
     pub collision_tier: CollisionTier,
     pub broadphase_mode: BroadphaseMode,
-    pub max_bodies: usize,
-    pub max_contacts_per_step: usize,
     pub enable_sleep: bool,
-    pub enable_ccd: bool,
-    pub fixed_point: bool,
-    pub simd: bool,
+    pub linear_sleep_threshold: f32,
+    pub angular_sleep_threshold: f32,
+    pub ccd: CcdConfig,
+    pub thermal: ThermalConfig2D,
 }
 
-impl Default for PhysicsConfig {
-    fn default() -> Self {
-        // Auto-detect or sensible defaults
-    }
-}
+// Still on the table (see §§2.2–2.3):
+//   pub max_bodies: usize,
+//   pub max_contacts_per_step: usize,
+//   pub fixed_point: bool,
+//   pub simd: bool,
 ```
 
 ---

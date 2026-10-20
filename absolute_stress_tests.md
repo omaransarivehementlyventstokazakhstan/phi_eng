@@ -140,7 +140,7 @@ The broadphase grid (`SpatialHash2`) and contact cache
 buffers through internal pools; vacated entries are still dropped every
 frame (so `contact_cache.len()` stays exact) and compaction every 256
 steps bounds the cell map for roaming worlds. All determinism hashes
-(pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`, pile3d
+(pile 2D `0x8619b41d69ad35ee`, islands `0xdb0f2a0fff8b7820`, pile3d
 `0x3c0815ebe61347f4`) are **unchanged** — the optimization is
 memory-only.
 

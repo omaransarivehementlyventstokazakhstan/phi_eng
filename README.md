@@ -159,7 +159,11 @@ Rules for the native profile:
   reorder reductions at the ulp level, so cross-profile bit-parity is
   not promised; within one profile, determinism still holds bit-exact.
 - CI's `bench-native` job is informational only (runner noise forbids
-  timing gates); `bench-smoke` gates the portable hash + alloc census.
+  timing gates); `bench-smoke` gates the portable hash + alloc census —
+  the benchmark now *asserts* the pinned trajectory hashes and fails the
+  job if the physics moved. The cheap canonical scenes are pinned in
+  `crates/engine/tests/determinism_hash.rs`, which runs in the normal
+  test suite on every platform.
 
 ## Narrowphase dispatch (3D)
 
@@ -338,7 +342,9 @@ contact for that frame rather than a guessed depth.
   (off by default for MSRV compatibility) enables batched primitives
   (`add4`/`sub4`/`mul4`/`dot4`, `dot2_batch`, `add_vec2_batch`) using
   x86_64/x86 SSE intrinsics with scalar fallbacks everywhere else.
-  Bit-exact vs scalar (pinned by tests); default builds are untouched.
+  The element-wise ops are bit-exact vs their scalar fallback; `dot4`
+  is not (the SSE horizontal add reassociates the sum), so its test
+  compares with a tolerance. Default builds are untouched.
 - **PhysicsConfig facade (Rust):** `PhysicsConfig` unifies
   `solver_quality`, `collision_tier`, `broadphase_mode`, sleep
   thresholds, `ccd`, and `thermal` with `Default` (= pre-tier-system
@@ -421,8 +427,8 @@ noise-sensitive (±40%); hashes are the determinism gate.
 | pile 3D pairs/contacts | 592 / 904 | — | 561–579 / 891–913 | — |
 | pile 3D allocs | 0.0/step | — | gc0 0.000/step | — |
 
-Hashes: pile 2D `0xe767a92fb630ba4b`, islands `0xfe0d182ff4321dad`
-(serial == parallel), pile3d `0x3c0815ebe61347f4`. Hashes moved in
+Hashes: pile 2D `0x8619b41d69ad35ee`, islands `0xdb0f2a0fff8b7820`
+(serial == parallel), pile3d `0x66ae94fb463de60`. Hashes moved in
 0.4.0 (3D friction cone is now a true cone clamp, default sleep
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
 seed-margin scaling). C# hashes are run-local (worlds keep evolving

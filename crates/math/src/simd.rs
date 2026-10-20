@@ -5,11 +5,22 @@
 //! x86_64/x86, with a scalar fallback on every other target so the crate
 //! always compiles.
 //!
-//! The SIMD paths are **opt-in and behavior-identical**: every function
-//! here has a scalar reference implementation and the tests in this module
-//! assert bit-exact agreement. The physics engine does not switch to these
-//! paths automatically — callers opt in by feature flag and by calling the
-//! batched functions explicitly, keeping default trajectories bit-identical.
+//! The SIMD paths are **opt-in**, and the physics engine does not switch
+//! to them automatically — callers opt in by feature flag and by calling
+//! the batched functions explicitly, keeping default trajectories
+//! bit-identical.
+//!
+//! **Not every function is bit-exact against its scalar fallback.**
+//! The element-wise operations (`add4`, `sub4`, `mul4`, `add_vec2_batch`)
+//! and `dot2_batch` compute the same values in the same order, so they
+//! agree bit-for-bit. `dot4` does **not**: the scalar fallback sums
+//! left-associatively (`((p0+p1)+p2)+p3`) while the SSE path's
+//! horizontal add computes `(p0+p2)+(p1+p3)`. Floating-point addition
+//! is not associative, so the two can differ in the last bit. The tests
+//! in this module therefore compare with a tolerance, not bit-equality.
+//! Any engine code that must preserve a pinned trajectory has to use a
+//! bit-identical formulation (a two-term dot keeps its order) rather
+//! than `dot4`.
 
 /// Process 4 floats at once: element-wise addition.
 #[inline]

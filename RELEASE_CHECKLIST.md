@@ -53,7 +53,8 @@ any new additions):
 - `crates/math/src/simd.rs` — `std::arch` SSE intrinsics (`_mm_loadu_ps`
   / `_mm_storeu_ps` family) behind the opt-in `simd` feature flag.
   Sound iff every pointer is valid for 4 `f32` reads/writes and every
-  test in `simd::tests` (bit-exact vs scalar on fixed inputs) passes;
+  test in `simd::tests` (tolerance-compared vs the scalar fallback; the
+  element-wise ops are bit-exact, `dot4` reassociates the sum) passes;
   non-x86 targets compile the scalar fallback with no `unsafe` at all.
 
 Rules for new `unsafe`: debug assertion or test proving the contract,
