@@ -7,7 +7,43 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Fixed
+- **Rigid-body trajectories are now platform-independent.** The rotation
+  integration used the platform math library, and `sinf`/`cosf`/`atan2f`
+  disagree between glibc (Linux) and the Microsoft CRT (Windows) in the
+  last ULP — a difference the compiler can also introduce or remove by
+  rewriting an inlined call. That single ULP was enough to send the
+  canonical 2D scene in two different directions: one body's rotation
+  matrix diverged at step 45, and the contact solver amplified it into a
+  different final state by step 240. The same code, with the same
+  inputs, produced different pinned hashes on Linux and Windows.
+
+  The rigid-body core now uses its own trigonometry
+  (`phieng-math`'s `trig` module, mirrored in C# as
+  `PhiEng.Math.DeterministicTrig`), built only from operations IEEE-754
+  specifies exactly, so it returns bit-identical results on every
+  platform — and the same results in Rust and in the managed C# mirror.
+  This covers the 2D and 3D rotation integration, the rotation-angle
+  getters, and the joint twist/angle extraction.
+
+  The pinned trajectory hashes are therefore the same constants on every
+  platform, and the 2D ones moved (re-pinned below) because the
+  arithmetic changed:
+  - determinism scene 2D: `0xcaebbed0a86ca012` → `0xc3f59dbc6e87256a`
+  - bench pile 2D: `0x8619b41d69ad35ee` → `0xc509c18cd50043b4`
+  - bench islands: `0xdb0f2a0fff8b7820` → `0xd4a3a56f185c13b2`
+  - determinism scene 3D and bench pile 3D are unchanged.
+
+  The fluid and ambient subsystems still use the platform math library
+  for their particle placement, so their trajectories remain
+  platform-dependent; `LIMITATIONS.md` records the gap.
+
 ### Tests
+- **Deterministic-trigonometry parity block R01–R03** (mirrored
+  Rust↔C#): pinned cosine/sine bit patterns (R01), pinned `atan2` bit
+  patterns (R02), and the engine's own 2D rotation integration pinned to
+  exact bits (R03) — the property that makes rigid-body trajectories
+  platform-independent and Rust/C#-identical.
 - **Broad-phase tier parity block B01–B06** (mirrored Rust↔C#): every
   backend bit-identical trajectories (2D B01, 3D B02), Hybrid matches its
   auto-selected backend (B03), default stays the pre-tier-system grid

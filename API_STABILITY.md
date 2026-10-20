@@ -26,9 +26,15 @@
 
 - Determinism: same build + same inputs + same steps = bit-identical
   state, within one backend (Rust) and across backends where the
-  equivalence tests (`F28`, `F36`, `P31–P34`) pin it. The parallel
+  equivalence tests (`F28`, `F36`, `P31`–`P34`) pin it. The parallel
   island solver produces the *same* state as the serial path, and
   fails loudly (never hangs) if its islands ever desynchronize.
+- The rigid-body core is additionally **platform-independent**: the same
+  inputs and steps give the same bits on Linux, Windows and macOS, and
+  the same bits in Rust and in the managed C# mirror. The rotation
+  integration uses `phieng-math`'s deterministic trigonometry rather than
+  the platform math library (see `crates/math/src/trig.rs`). The fluid
+  and ambient subsystems are excluded — see `LIMITATIONS.md`.
 - MSRV for Rust library code: **1.78** (verified by the `msrv` CI job
   building `--workspace --lib`). Examples and benches may use newer sugar.
 - Snapshot loaders never guess: unknown versions, tags, or trailing

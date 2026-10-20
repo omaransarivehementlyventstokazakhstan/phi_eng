@@ -11,7 +11,30 @@ V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
 snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
 Q01–Q05 solver quality, T01–T24 thermal, B01–B06 broadphase tiers,
 K31–K44 3D joints,
-H01–H05 collision tiers).
+H01–H05 collision tiers, R01–R03 deterministic trigonometry).
+
+## Cross-platform determinism: the rigid core only (R01–R03)
+
+The **rigid-body** core is platform-independent: the same inputs and
+the same number of steps give the same bits on Linux, Windows and macOS,
+and the same bits in Rust and in the managed C# mirror. The rotation
+integration uses the engine's own trigonometry
+(`phieng-math`'s `trig` module / `PhiEng.Math.DeterministicTrig`), which
+is built only from operations IEEE-754 specifies exactly. Without it,
+`sinf`/`cosf`/`atan2f` disagree between glibc and the Microsoft CRT in
+the last ULP, and the compiler can introduce or remove that difference
+by rewriting an inlined call — one ULP, and a 240-step trajectory
+diverges completely.
+
+The **fluid and ambient** subsystems are the exception: their particle
+placement still calls the platform math library (`MathF.Cos`/`MathF.Sin`
+in `FluidSolver`/`FluidSolver3`, and the turbulence field in
+`ambient.rs`). Their trajectories are therefore reproducible *within* one
+platform but not across platforms, and Rust↔C# agreement there stays
+statistical rather than bit-exact. Moving them onto the deterministic
+helpers is mechanical and is the natural next step; it was left out
+because those subsystems have no pinned trajectory hash today, so
+re-pinning them is a separate, deliberate act.
 
 ## Sleep is full but support-gated (S01, S02)
 

@@ -191,6 +191,20 @@ contact for that frame rather than a guessed depth.
   (HashSet iteration order was removed from the broadphase for exactly this
   reason). Rust↔C# bit-parity is *not* claimed (different float libraries);
   behavior parity is.
+- **Platform-independent rigid-body trajectories.** The rigid-body core
+  never calls the platform math library: the rotation integration uses
+  `phieng-math`'s deterministic `atan2`/`sin`/`cos`, which are built from
+  IEEE-exact operations only and therefore return bit-identical results on
+  every OS and CPU. This matters because `sinf`/`cosf`/`atan2f` disagree
+  between glibc and the Microsoft CRT in the last ULP, and one ULP is
+  enough to send a 240-step trajectory in two different directions — the
+  canonical 2D scene used to hash differently on Linux and Windows. The
+  pinned trajectory hashes (`determinism_hash.rs`, `bench_large.rs`) are
+  therefore the same constants on every platform, and the rotation
+  integration is bit-identical across Rust and C# as well (R03). The
+  fluid and ambient subsystems still use the platform math library for
+  their particle placement, so *their* trajectories remain
+  platform-dependent; see `LIMITATIONS.md`.
 - **Never guess a contact.** A guessed depth injects energy through
   Baumgarte stabilization and destabilizes stacks. Degenerate simplexes,
   grazing touches, and sliver overlaps skip the frame and self-heal as
@@ -427,7 +441,7 @@ noise-sensitive (±40%); hashes are the determinism gate.
 | pile 3D pairs/contacts | 592 / 904 | — | 561–579 / 891–913 | — |
 | pile 3D allocs | 0.0/step | — | gc0 0.000/step | — |
 
-Hashes: pile 2D `0x8619b41d69ad35ee`, islands `0xdb0f2a0fff8b7820`
+Hashes: pile 2D `0xc509c18cd50043b4`, islands `0xd4a3a56f185c13b2`
 (serial == parallel), pile3d `0x66ae94fb463de60`. Hashes moved in
 0.4.0 (3D friction cone is now a true cone clamp, default sleep
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
@@ -435,6 +449,11 @@ seed-margin scaling). C# hashes are run-local (worlds keep evolving
 across windows); the gate is serial == parallel within a run.
 The 0.4.x broadphase/contact-cache buffer pools are memory-only and left
 every hash above unchanged.
+
+The 2D hashes moved again when the rotation integration was made
+platform-independent (see *Determinism* below): the old pins were the
+glibc values, and the same code produced a different trajectory on
+Windows. The current pins are the same on every platform.
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead

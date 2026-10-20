@@ -66,6 +66,12 @@ Additional gates CI runs: `rust-soak` (`cargo test --workspace --release`),
   (tolerance), never bit-exact — different float libraries. Never
   "fix" a test by loosening a hash or tolerance without understanding
   why it moved; a moved hash is a behavior change until proven otherwise.
+  The **rigid-body core** goes further: it must stay platform-independent
+  (Linux, Windows and macOS agree bit-for-bit, and so do Rust and the
+  managed C# mirror). That means no platform math library in the rigid
+  path — use `phieng_math::trig` / `PhiEng.Math.DeterministicTrig` for
+  sine, cosine and `atan2`. The fluid and ambient subsystems are exempt
+  (see `LIMITATIONS.md`).
 - **Never guess.** Ambiguous inputs are rejected at creation
   (`ShapeError`, `JointError`, `ArgumentException`), never silently
   clamped — except friction/restitution, which keep clamp-to-range.
