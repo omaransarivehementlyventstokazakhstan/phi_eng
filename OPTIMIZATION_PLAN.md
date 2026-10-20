@@ -102,19 +102,53 @@ pub enum BroadphaseMode {
 - Feature flag: `simd` (disabled by default for compatibility)
 - **Shipped**: `phieng-math` has a `simd` feature with `std::arch`
   batched primitives (f32x4/f32x8) behind it, off by default.
-- **Remaining**: the solver / broadphase / narrowphase hot paths still
-  use the scalar code; the batched primitives are not called from them
-  yet, so the feature currently changes no trajectory.
+- **Measured, not shipped (narrowphase)**: the 2D narrowphase projection
+  (`crates/collision/src/sat.rs`, `project_polygon`) was the best
+  candidate - it is a two-term dot per vertex, so a batched form can be
+  made *bit-identical* (the SSE horizontal add preserves the
+  `ax*vx + ay*vy` order per lane). Measured on the reference
+  micro-benchmark it is **slower than the scalar loop it would
+  replace**: 0.83x at 4 vertices, 0.97x at 8, 0.59x at 16, 0.47x at 32.
+  The scalar `axis.dot(v)` loop is already efficient, and the
+  horizontal add plus the per-chunk overhead cost more than they save.
+  So no feature flag, no `unsafe` pointer cast, and no code change -
+  the finding is recorded here so it is not re-attempted blind.
+- **Remaining**: the real opportunity is an **SoA-backed** hot path
+  (the engine is AoS today: `RigidBody2` interleaves `velocity` with
+  20+ other fields, so 4 consecutive bodies' velocities are ~152
+  bytes apart and there is no contiguous `[f32; 8]` to load). The
+  experimental SoA prototype is present but disabled
+  (`crates/dynamics/src/lib.rs`). The solver itself cannot be batched
+  at all: it is strict Gauss-Seidel (each constraint observes the
+  previous one's impulse writes), so batching there would change the
+  trajectory. **SoA data layout is the remaining work, not SIMD
+  intrinsics.**
 
 ### 2.3 Fixed-Point Math Option
 - `FixedPoint` feature flag
 - `i32`/`i64` based with 16.16 or 32.32 format
 - For ARM Cortex-M, RISC-V without FPU
 
-### 2.4 Temporal Coherence / Warm-Starting
+### 2.4 Temporal Coherence / Warm-Starting — 🟡 PARTIAL
 - Persist contact points across frames (already done)
 - Persist joint impulses (already done)
-- Add **constraint graph caching** for static scenes
+- Add **constraint graph caching** for static scenes — **measured, and the
+  obvious version of it does not pay**
+  - Moving the existing "static-static pairs cannot produce an impulse"
+    check from the narrowphase loop to the broadphase output is
+    bit-identical (the surviving pairs keep their relative order) and
+    looks like a clear win for static-heavy scenes. Measured on the new
+    dense static benchmark (400 overlapping static boxes + 20 dynamic
+    bodies, ~1.1 ms/step): **1.106 → 1.106 ms/step — no change.**
+  - The reason: the narrowphase *already* skipped those pairs, so the
+    only cost left is the broadphase *generating* them, and pruning
+    after the fact cannot avoid that. A real win needs the broadphase
+    itself not to emit them, which is a wider change (the broadphase is
+    shared with the managed C# mirror and the B-tier tests).
+  - The benchmark scene is kept: the repo had no static-heavy scenario
+    to measure, and the next attempt needs one.
+- **Remaining**: an actual persistent static constraint graph, or
+  static-awareness in the broadphase.
 
 ---
 

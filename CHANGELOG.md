@@ -132,6 +132,33 @@ This project follows [Semantic Versioning](https://semver.org/) and
   (`boundary_regens` / `FluidState.BoundaryRegenCount`) proves the skip.
   Managed C# solver mirrors the same scheme.
 
+### Changed
+- **Narrowphase SIMD was measured and not shipped.** The 2D projection
+  (`project_polygon`) was the best candidate: it is a two-term dot per
+  vertex, so a batched SSE form can be made *bit-identical* (the
+  horizontal add preserves the `ax*vx + ay*vy` order per lane). It
+  measured **slower** than the scalar loop it would replace - 0.83x at 4
+  vertices, 0.97x at 8, 0.59x at 16, 0.47x at 32 - because the scalar
+  `axis.dot(v)` loop is already efficient and the horizontal add plus
+  the per-chunk overhead cost more than they save. No feature flag, no
+  `unsafe` pointer cast and no code change; the measurement is recorded
+  in `OPTIMIZATION_PLAN.md` §2.2 so it is not re-attempted blind. The
+  real opportunity is an SoA-backed hot path (the engine is AoS today).
+- **Static-static pair pruning was measured and not shipped.** Moving the
+  existing "static-static pairs cannot produce an impulse" check from the
+  narrowphase loop to the broadphase output looked like an obvious win
+  for static-heavy scenes - it is bit-identical, because the surviving
+  pairs keep their relative order. It was measured on a new dense
+  static-scene benchmark (400 overlapping static boxes + 20 dynamic
+  bodies, ~1.1 ms/step): **1.106 → 1.106 ms/step, i.e. no change at
+  all.** The reason is that the narrowphase *already* skipped those
+  pairs, so the only remaining cost is the broadphase *generating* them -
+  and pruning after the fact cannot avoid that. A real win would need the
+  broadphase itself not to emit them, which is a wider API change
+  (the broadphase is shared with the managed C# mirror). The benchmark
+  scene is kept, because the repo had no static-heavy scenario to
+  measure.
+
 ### Added
 - **Pooled Barnes-Hut tree buffers (Rust)**: the tree arena, the per-leaf
   index buffers and the `positions`/`masses` scratch are pooled in the
