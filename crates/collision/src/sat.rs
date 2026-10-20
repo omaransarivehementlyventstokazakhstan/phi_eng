@@ -133,6 +133,35 @@ pub fn sat_circle_polygon(center: Vec2, radius: f32, polygon: &[Vec2]) -> Option
         }
     }
 
+    // Closest-vertex axis: a circle sitting past a polygon corner can
+    // overlap every face-normal projection while being separated from
+    // the polygon (the face axes alone cannot see the corner gap). The
+    // axis from the closest vertex to the center separates exactly in
+    // that case. This test can only turn a contact into a separation,
+    // never the reverse: overlapping shapes overlap on every axis.
+    {
+        let mut closest = polygon[0];
+        let mut best_dist_sq = (center - closest).length_squared();
+        for &v in &polygon[1..] {
+            let d = (center - v).length_squared();
+            if d < best_dist_sq {
+                best_dist_sq = d;
+                closest = v;
+            }
+        }
+        let axis = center - closest;
+        if axis.length_squared() >= EPS_SQ {
+            let axis = axis.normalize_or_zero();
+            if axis != Vec2::ZERO {
+                let (min_poly, max_poly) = project_polygon(polygon, axis);
+                let center_proj = axis.dot(center);
+                if max_poly < center_proj - radius || center_proj + radius < min_poly {
+                    return None; // Separated past a corner.
+                }
+            }
+        }
+    }
+
     // Circle center inside polygon: push out along the CLOSEST edge
     // (least penetration). `dist` below is negative for interior points
     // (it measures against the inward edge normal), so the closest face is
@@ -495,6 +524,95 @@ mod tests {
     fn test_circle_polygon_separated() {
         let b = make_square(2.0);
         assert!(sat_circle_polygon(Vec2::new(5.0, 0.0), 0.5, &b).is_none());
+    }
+
+    #[test]
+    fn test_circle_polygon_corner_grazing_separates() {
+        // Regression test: a circle sitting past a box corner, close
+        // enough to overlap every face-normal projection yet separated
+        // along the corner axis, must report no contact. The face-only
+        // loop used to report min face overlap (0.058 here) as a
+        // penetration. Geometry taken from determinism scene step 52.
+        let center = Vec2::new(-5.874491, 1.321865);
+        let x_axis = Vec2::new(0.84011143, -0.54241383);
+        let y_axis = Vec2::new(0.54241383, 0.84011143);
+        let he = 0.3f32;
+        let local = [
+            Vec2::new(-he, -he),
+            Vec2::new(he, -he),
+            Vec2::new(he, he),
+            Vec2::new(-he, he),
+        ];
+        let world_verts: Vec<Vec2> = local
+            .iter()
+            .map(|v| {
+                Vec2::new(
+                    x_axis.x * v.x + y_axis.x * v.y + center.x,
+                    x_axis.y * v.x + y_axis.y * v.y + center.y,
+                )
+            })
+            .collect();
+        let circle = Vec2::new(-5.15, 1.4447408);
+        // Sanity: closest approach really is a gap, not a touch.
+        let mut best = f32::MAX;
+        for v in &world_verts {
+            best = best.min((*v - circle).length());
+        }
+        assert!(
+            best > 0.3,
+            "test geometry must be separated, gap is {}",
+            best - 0.3
+        );
+        assert!(
+            sat_circle_polygon(circle, 0.3, &world_verts).is_none(),
+            "corner-grazing circle must not report a contact"
+        );
+    }
+
+    #[test]
+    fn test_circle_polygon_true_corner_overlap_detected() {
+        // Positive control for the corner-axis test above: push the same
+        // circle 0.05 toward the box so it genuinely overlaps, and the
+        // contact must be reported.
+        let center = Vec2::new(-5.874491, 1.321865);
+        let x_axis = Vec2::new(0.84011143, -0.54241383);
+        let y_axis = Vec2::new(0.54241383, 0.84011143);
+        let he = 0.3f32;
+        let local = [
+            Vec2::new(-he, -he),
+            Vec2::new(he, -he),
+            Vec2::new(he, he),
+            Vec2::new(-he, he),
+        ];
+        let world_verts: Vec<Vec2> = local
+            .iter()
+            .map(|v| {
+                Vec2::new(
+                    x_axis.x * v.x + y_axis.x * v.y + center.x,
+                    x_axis.y * v.x + y_axis.y * v.y + center.y,
+                )
+            })
+            .collect();
+        let circle = Vec2::new(-5.15, 1.4447408);
+        // Direction from the nearest corner to the circle center.
+        let mut nearest = world_verts[0];
+        let mut best = (nearest - circle).length_squared();
+        for &v in &world_verts[1..] {
+            let d = (v - circle).length_squared();
+            if d < best {
+                best = d;
+                nearest = v;
+            }
+        }
+        let dir = (circle - nearest).normalize_or_zero();
+        assert!(dir != Vec2::ZERO);
+        // Close the 0.0116 gap plus 0.05 into genuine overlap.
+        let moved = circle - dir * 0.0616;
+        let res = sat_circle_polygon(moved, 0.3, &world_verts);
+        assert!(
+            res.is_some(),
+            "genuinely overlapping corner circle must report a contact"
+        );
     }
 
     #[test]

@@ -188,6 +188,86 @@ public class PhiTests
     }
 
     [Fact]
+    public void CirclePolygonCornerGrazing_Separates()
+    {
+        // Regression test (mirrors the Rust corner-grazing case): a
+        // circle sitting past a box corner, close enough to overlap
+        // every face-normal projection yet separated along the corner
+        // axis, must report no contact.
+        var center = new Vector2(-5.874491f, 1.321865f);
+        var xAxis = new Vector2(0.84011143f, -0.54241383f);
+        var yAxis = new Vector2(0.54241383f, 0.84011143f);
+        float he = 0.3f;
+        var local = new[]
+        {
+            new Vector2(-he, -he),
+            new Vector2(he, -he),
+            new Vector2(he, he),
+            new Vector2(-he, he),
+        };
+        var worldVerts = new List<Vector2>();
+        foreach (var v in local)
+        {
+            worldVerts.Add(new Vector2(
+                xAxis.X * v.X + yAxis.X * v.Y + center.X,
+                xAxis.Y * v.X + yAxis.Y * v.Y + center.Y));
+        }
+        var circle = new Vector2(-5.15f, 1.4447408f);
+        float best = float.MaxValue;
+        foreach (var v in worldVerts)
+        {
+            best = MathF.Min(best, (v - circle).Length());
+        }
+        Assert.True(best > 0.3f, $"test geometry must be separated, gap is {best - 0.3f}");
+        var hit = SAT.CirclePolygon(circle, 0.3f, worldVerts);
+        Assert.Null(hit);
+    }
+
+    [Fact]
+    public void CirclePolygonTrueCornerOverlap_Detected()
+    {
+        // Positive control: push the same circle into genuine overlap
+        // and the contact must be reported.
+        var center = new Vector2(-5.874491f, 1.321865f);
+        var xAxis = new Vector2(0.84011143f, -0.54241383f);
+        var yAxis = new Vector2(0.54241383f, 0.84011143f);
+        float he = 0.3f;
+        var local = new[]
+        {
+            new Vector2(-he, -he),
+            new Vector2(he, -he),
+            new Vector2(he, he),
+            new Vector2(-he, he),
+        };
+        var worldVerts = new List<Vector2>();
+        foreach (var v in local)
+        {
+            worldVerts.Add(new Vector2(
+                xAxis.X * v.X + yAxis.X * v.Y + center.X,
+                xAxis.Y * v.X + yAxis.Y * v.Y + center.Y));
+        }
+        var circle = new Vector2(-5.15f, 1.4447408f);
+        Vector2 nearest = worldVerts[0];
+        float best = (nearest - circle).LengthSquared();
+        for (int i = 1; i < worldVerts.Count; i++)
+        {
+            float d = (worldVerts[i] - circle).LengthSquared();
+            if (d < best)
+            {
+                best = d;
+                nearest = worldVerts[i];
+            }
+        }
+        Vector2 dir = circle - nearest;
+        float len = dir.Length();
+        Assert.True(len > 1e-6f);
+        dir /= len;
+        var moved = circle - dir * 0.0616f;
+        var hit = SAT.CirclePolygon(moved, 0.3f, worldVerts);
+        Assert.NotNull(hit);
+    }
+
+    [Fact]
     public void Rotation_IntegratesWithoutPingPong()
     {
         var body = new RigidBody2(0);

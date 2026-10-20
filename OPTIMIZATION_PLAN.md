@@ -149,6 +149,18 @@ pub enum BroadphaseMode {
     to measure, and the next attempt needs one.
 - **Remaining**: an actual persistent static constraint graph, or
   static-awareness in the broadphase.
+- **Fixed (narrowphase correctness)**: `sat_circle_polygon` (Rust) and
+  `SAT.CirclePolygon` (C#) tested only polygon face normals, so a
+  circle grazing a polygon corner reported a phantom contact (face
+  projections overlap while the corner axis separates). Both now also
+  test the closest-vertex axis, separation-only: it can only turn a
+  contact into a separation, never the reverse, and true contacts keep
+  their exact normal and penetration. This moved the 2D pins
+  deliberately (`0xc3f59dbc6e87256a` → `0xb12fcb9a19506312`,
+  `0xc509c18cd50043b4` → `0x4acb6694f3a9917`); box-only and 3D scenes
+  are unchanged. The pair filter above depends on this fix: without it
+  the filter would drop pairs the old narrowphase turned into
+  (phantom) contacts.
 
 ---
 

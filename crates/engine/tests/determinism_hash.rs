@@ -43,7 +43,7 @@ const BODIES_3D: usize = 60;
 /// changed. Either the change is intended (then update this constant
 /// and say so in the CHANGELOG) or it is a regression (then fix the
 /// physics). Never silence it by loosening the comparison.
-const HASH_2D: u64 = 0xc3f59dbc6e87256a;
+const HASH_2D: u64 = 0xb12fcb9a19506312;
 
 const HASH_3D: u64 = 0xd057471127ba77ab;
 

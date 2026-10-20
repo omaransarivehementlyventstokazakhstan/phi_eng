@@ -2,13 +2,15 @@
 
 ## Non-negotiables
 1. **Bit-identical only.** The five pinned hashes must not move:
-   - pile 2D `0xc509c18cd50043b4` (`crates/engine/examples/bench_large.rs`)
+   - pile 2D `0x4acb6694f3a9917` (`crates/engine/examples/bench_large.rs`)
    - islands `0xd4a3a56f185c13b2` (serial *and* parallel)
    - pile 3D `0x66ae94fb463de60`
-   - determinism 2D `0xc3f59dbc6e87256a`, 3D `0xd057471127ba77ab`
+   - determinism 2D `0xb12fcb9a19506312`, 3D `0xd057471127ba77ab`
      (`crates/engine/tests/determinism_hash.rs`)
    - the R01–R07 bit-pattern pins (`crates/engine/tests/determinism_trig.rs`)
-   No re-pinning, no MAJOR version bump.
+   No re-pinning, no MAJOR version bump. (The 2D pins moved once,
+   deliberately, when the circle-vs-polygon SAT gained its missing
+   corner-axis test and stopped reporting phantom contacts.)
 2. **Rust core first.** The managed C# mirror is a later pass.
 3. **Layout work is in scope.**
 4. MSRV 1.78 for library code; no public API removals;

@@ -164,7 +164,8 @@ public static class SAT
 
     /// <summary>
     /// SAT for circle vs polygon collision. Projects both shapes onto each
-    /// polygon edge normal (parity with the Rust implementation).
+    /// polygon edge normal plus the closest-vertex axis (parity with the
+    /// Rust implementation).
     /// Normal orientation is undefined — orient A-&gt;B with <see cref="OrientNormal"/>.
     /// </summary>
     public static (Vector2 Normal, float Penetration)? CirclePolygon(Vector2 center, float radius, List<Vector2> polygon)
@@ -206,6 +207,40 @@ public static class SAT
             {
                 bestOverlap = overlap;
                 bestAxis = normal;
+            }
+        }
+
+        // Closest-vertex axis: a circle sitting past a polygon corner can
+        // overlap every face-normal projection while being separated from
+        // the polygon (the face axes alone cannot see the corner gap). The
+        // axis from the closest vertex to the center separates exactly in
+        // that case. This test can only turn a contact into a separation,
+        // never the reverse: overlapping shapes overlap on every axis.
+        {
+            Vector2 closest = polygon[0];
+            float bestDistSq = Vector2.Dot(center - closest, center - closest);
+            for (int i = 1; i < polygon.Count; i++)
+            {
+                Vector2 d = center - polygon[i];
+                float distSq = Vector2.Dot(d, d);
+                if (distSq < bestDistSq)
+                {
+                    bestDistSq = distSq;
+                    closest = polygon[i];
+                }
+            }
+            Vector2 toCenter = center - closest;
+            float lenSq = Vector2.Dot(toCenter, toCenter);
+            if (lenSq >= 1e-12f)
+            {
+                float invLen = 1.0f / MathF.Sqrt(lenSq);
+                Vector2 axis = new Vector2(toCenter.X * invLen, toCenter.Y * invLen);
+                var (minPoly, maxPoly) = ProjectPolygon(polygon, axis);
+                float centerProj = Vector2.Dot(axis, center);
+                if (maxPoly < centerProj - radius || centerProj + radius < minPoly)
+                {
+                    return null; // Separated past a corner.
+                }
             }
         }
 

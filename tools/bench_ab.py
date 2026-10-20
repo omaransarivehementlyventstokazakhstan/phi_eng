@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # table in sync with it — a mismatch here is a failed gate, never a
 # silently updated constant.
 PINNED = {
-    "pile2d": ("0xc509c18cd50043b4", "pile 2D"),
+    "pile2d": ("0x4acb6694f3a9917", "pile 2D"),
     "islands": ("0xd4a3a56f185c13b2", "islands"),
     "pile3d": ("0x66ae94fb463de60", "pile 3D"),
 }

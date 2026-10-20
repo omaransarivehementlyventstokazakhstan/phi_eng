@@ -479,7 +479,7 @@ noise-sensitive (±40%); hashes are the determinism gate.
 | pile 3D pairs/contacts | 592 / 904 | — | 561–579 / 891–913 | — |
 | pile 3D allocs | 0.0/step | — | gc0 0.000/step | — |
 
-Hashes: pile 2D `0xc509c18cd50043b4`, islands `0xd4a3a56f185c13b2`
+Hashes: pile 2D `0x4acb6694f3a9917`, islands `0xd4a3a56f185c13b2`
 (serial == parallel), pile3d `0x66ae94fb463de60`. Hashes moved in
 0.4.0 (3D friction cone is now a true cone clamp, default sleep
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
@@ -492,6 +492,12 @@ The 2D hashes moved again when the rotation integration was made
 platform-independent (see *Determinism* below): the old pins were the
 glibc values, and the same code produced a different trajectory on
 Windows. The current pins are the same on every platform.
+
+The 2D hashes moved once more when the circle-vs-polygon SAT gained its
+missing corner-axis test: the old code reported phantom contacts for
+circles grazing polygon corners (face-normal projections can all
+overlap while the shapes are separated). Scenes without
+circle-vs-polygon corner grazing (islands, pile 3D) are unchanged.
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead

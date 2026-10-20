@@ -7,6 +7,27 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Fixed
+- **Circle-vs-polygon narrowphase no longer reports phantom contacts.**
+  `sat_circle_polygon` (Rust) and `SAT.CirclePolygon` (C#) tested only
+  the polygon's face normals, so a circle sitting past a polygon corner
+  — close enough to overlap every face-normal projection yet separated
+  along the corner axis — was reported as a contact with a bogus
+  penetration (the minimum face overlap). Both implementations now also
+  test the axis from the closest polygon vertex to the circle center,
+  which separates exactly in that case. The test only ever turns a
+  contact into a separation, never the reverse: genuinely overlapping
+  shapes overlap on every axis. True corner contacts keep their
+  previous normal and penetration (the vertex axis is used for
+  separation only, not for the minimum-overlap computation).
+
+  The pinned trajectory hashes moved because the old pins contained
+  phantom-contact motion (re-pinned below); scenes without
+  circle-vs-polygon corner grazing are unchanged:
+  - determinism scene 2D: `0xc3f59dbc6e87256a` → `0xb12fcb9a19506312`
+  - bench pile 2D: `0xc509c18cd50043b4` → `0x4acb6694f3a9917`
+  - bench islands, determinism scene 3D and bench pile 3D are unchanged.
+
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,
   nuclear, snapshot-loader and tier systems had no absolute-stress

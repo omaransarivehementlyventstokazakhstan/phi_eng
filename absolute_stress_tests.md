@@ -163,8 +163,10 @@ frame (so `contact_cache.len()` stays exact) and compaction every 256
 steps bounds the cell map for roaming worlds. All determinism hashes
 (pile 2D `0xc509c18cd50043b4`, islands `0xd4a3a56f185c13b2`, pile3d
 `0x66ae94fb463de60`) are **unchanged** — the optimization is
-memory-only. (Those are the current pins; the rotation integration was
-later made platform-independent, which re-pinned the 2D hashes.)
+memory-only. (Those were the pins at the time; the rotation integration
+was later made platform-independent, which re-pinned the 2D hashes, and
+the circle-vs-polygon SAT corner-axis fix re-pinned them again: pile 2D
+is now `0x4acb6694f3a9917`, determinism 2D `0xb12fcb9a19506312`.)
 
 ## SHM & SPH benchmark suite (2026-10-17)
 

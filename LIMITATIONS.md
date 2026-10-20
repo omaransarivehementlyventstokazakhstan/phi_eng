@@ -146,11 +146,15 @@ by construction: every backend emits the same sorted+deduped pair
 sequence, so switching mode mid-run is transparent. Known caveats:
 
 - **Grid backends report cell overlaps, not AABB overlaps.** A spatial
-  hash emits every pair that shares a cell, so it can report pairs whose
-  AABBs do not actually touch (the narrowphase rejects them, so the
-  simulation is unaffected — B01/B02 pin bit-identical trajectories
-  across backends). What a grid must never do is *miss* an overlapping
-  pair; that is a false negative and would drop a real contact.
+  hash's `collect_pairs` emits every pair that shares a cell, so it can
+  report pairs whose AABBs do not actually touch (the narrowphase
+  rejects them, so the simulation is unaffected — B01/B02 pin
+  bit-identical trajectories across backends). What a grid must never
+  do is *miss* an overlapping pair; that is a false negative and would
+  drop a real contact. The step pipeline itself consumes the narrower
+  `collect_overlapping_pairs` instead (same sequence minus the
+  AABB-disjoint pairs, which can never produce contacts); the CCD swept
+  test keeps the unfiltered sequence on purpose.
 - **The dynamic tree has no incremental update.** The world rebuilds the
   whole tree every step (`clear` + `insert`), and `remove` rebuilds
   bottom-up from the surviving leaves. Remote bodies that never move
