@@ -133,6 +133,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **Pooled Barnes-Hut tree buffers (Rust)**: the tree arena, the per-leaf
+  index buffers and the `positions`/`masses` scratch are pooled in the
+  thread-local tree pool, and the "move the bodies down" step reads the
+  leaf's list in place (an internal node's list is never read again)
+  instead of taking and freeing it. Measured on the 1500-body pile with
+  Barnes-Hut gravity: **2473 → 17 allocations per kick**. The tree
+  structure and the per-leaf ordering are unchanged, so the gravity
+  trajectories (and their determinism hashes) are identical.
 - **Pooled parallel-island partition + fixed worker pool (Rust)**: the
   island partition is rebuilt every step (bodies are added, removed and
   reindexed), so its buffers are now pooled in a new

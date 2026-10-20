@@ -35,9 +35,14 @@ Current baseline: ~2ms/step for 1500 bodies (2D) on desktop. Target: <16ms/step 
   allocation floor, and `serial_hash == parallel_hash` still holds.
   Below 256 island constraints the serial path is used (same result,
   no thread overhead).
-- **Remaining**: the Barnes-Hut tree arena is pooled, but its per-kick
-  `positions`/`masses` scratch vectors and the per-leaf index buffers
-  still allocate per kick.
+- **Shipped (Barnes-Hut)**: the tree arena, the per-leaf index buffers
+  and the `positions`/`masses` scratch are all pooled in the thread-local
+  tree pool, and the "move the bodies down" step now reads the leaf's
+  list *in place* (an internal node's list is never read again) instead
+  of taking and freeing it. Measured on the 1500-body pile with
+  Barnes-Hut gravity: **2473 → 17 allocations per kick**. The tree
+  structure and the per-leaf ordering are unchanged, so the gravity
+  trajectories (and their determinism hashes) are identical.
 
 ### 1.2 Configurable Solver Quality Tiers
 ```rust

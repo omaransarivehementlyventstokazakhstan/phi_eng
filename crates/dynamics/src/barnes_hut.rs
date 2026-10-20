@@ -48,10 +48,30 @@ struct QuadTree {
 struct QuadTreePool {
     /// Recycled node arena. `build_quad_into` clears and reuses it.
     nodes: Vec<QuadNode>,
+    /// Recycled per-leaf index buffers. The arena is cleared between
+    /// builds, which would otherwise free every leaf's `Vec`.
+    spare: Vec<Vec<usize>>,
+    /// Recycled scratch: the positions and masses the tree is built from.
+    positions: Vec<Vec2>,
+    masses: Vec<f32>,
 }
 
 thread_local! {
-    static QUAD_POOL: RefCell<QuadTreePool> = const { RefCell::new(QuadTreePool { nodes: Vec::new() }) };
+    static QUAD_POOL: RefCell<QuadTreePool> = const {
+        RefCell::new(QuadTreePool {
+            nodes: Vec::new(),
+            spare: Vec::new(),
+            positions: Vec::new(),
+            masses: Vec::new(),
+        })
+    };
+}
+
+/// Take a recycled per-leaf index buffer (cleared, capacity kept).
+fn take_spare(spare: &mut Vec<Vec<usize>>) -> Vec<usize> {
+    let mut v = spare.pop().unwrap_or_default();
+    v.clear();
+    v
 }
 
 /// Route a point to a child quadrant with the same rule insertion
@@ -63,7 +83,7 @@ fn route_quad(node: &QuadNode, p: Vec2) -> usize {
     iy * 2 + ix
 }
 
-fn subdivide_quad(nodes: &mut Vec<QuadNode>, node_idx: usize) {
+fn subdivide_quad(nodes: &mut Vec<QuadNode>, node_idx: usize, spare: &mut Vec<Vec<usize>>) {
     let (min, max) = {
         let n = &nodes[node_idx];
         (n.min, n.max)
@@ -79,7 +99,7 @@ fn subdivide_quad(nodes: &mut Vec<QuadNode>, node_idx: usize) {
         nodes.push(QuadNode {
             min: lo,
             max: hi,
-            bodies: Vec::new(),
+            bodies: take_spare(spare),
             children: [None, None, None, None],
             mass: 0.0,
             com: Vec2::ZERO,
@@ -98,6 +118,7 @@ fn insert_quad(
     body_idx: usize,
     positions: &[Vec2],
     depth: u32,
+    spare: &mut Vec<Vec<usize>>,
 ) {
     let p = positions[body_idx];
     if nodes[node_idx].is_leaf() {
@@ -106,17 +127,24 @@ fn insert_quad(
             return;
         }
         // Convert leaf into an internal node: move existing bodies down.
-        let existing: Vec<usize> = std::mem::take(&mut nodes[node_idx].bodies);
-        subdivide_quad(nodes, node_idx);
-        for &k in &existing {
-            insert_quad(nodes, node_idx, k, positions, depth + 1);
+        //
+        // The leaf's list is read *in place* and cleared afterwards: the
+        // node is internal from here on, and neither `accumulate_quad`
+        // nor `walk_quad` reads an internal node's list, so the buffer
+        // can be kept (and reused) instead of being freed and reallocated.
+        let existing_len = nodes[node_idx].bodies.len();
+        subdivide_quad(nodes, node_idx, spare);
+        for i in 0..existing_len {
+            let k = nodes[node_idx].bodies[i];
+            insert_quad(nodes, node_idx, k, positions, depth + 1, spare);
         }
-        insert_quad(nodes, node_idx, body_idx, positions, depth + 1);
+        nodes[node_idx].bodies.clear();
+        insert_quad(nodes, node_idx, body_idx, positions, depth + 1, spare);
         return;
     }
     let child = route_quad(&nodes[node_idx], p);
     if let Some(ci) = nodes[node_idx].children[child] {
-        insert_quad(nodes, ci, body_idx, positions, depth + 1);
+        insert_quad(nodes, ci, body_idx, positions, depth + 1, spare);
     }
 }
 
@@ -163,7 +191,12 @@ fn accumulate_quad(nodes: &mut Vec<QuadNode>, node_idx: usize, positions: &[Vec2
 /// Build a quadtree, reusing the thread-local pool's arena. The returned
 /// tree owns its node list (moved out of the pool); the pool is refilled
 /// with a fresh `Vec` so the next kick reuses the freed allocation.
-fn build_quad_pooled(positions: &[Vec2], masses: &[f32]) -> QuadTree {
+fn build_quad_pooled(
+    positions: &[Vec2],
+    masses: &[f32],
+    nodes: &mut Vec<QuadNode>,
+    spare: &mut Vec<Vec<usize>>,
+) -> QuadTree {
     if positions.is_empty() {
         return QuadTree { nodes: Vec::new() };
     }
@@ -173,26 +206,29 @@ fn build_quad_pooled(positions: &[Vec2], masses: &[f32]) -> QuadTree {
         min = min.min(*p);
         max = max.max(*p);
     }
-    // Draw the arena from the pool.
-    let mut nodes = QUAD_POOL.with(|p| {
-        let mut pool = p.borrow_mut();
-        let mut arena = std::mem::take(&mut pool.nodes);
-        arena.clear();
-        arena
-    });
+    // Harvest the per-leaf index buffers of the previous tree so they can
+    // be reused instead of freed.
+    for node in nodes.iter_mut() {
+        let mut v = std::mem::take(&mut node.bodies);
+        v.clear();
+        spare.push(v);
+    }
+    nodes.clear();
     nodes.push(QuadNode {
         min,
         max,
-        bodies: Vec::new(),
+        bodies: take_spare(spare),
         children: [None, None, None, None],
         mass: 0.0,
         com: Vec2::ZERO,
     });
     for i in 0..positions.len() {
-        insert_quad(&mut nodes, 0, i, positions, 0);
+        insert_quad(nodes, 0, i, positions, 0, spare);
     }
-    accumulate_quad(&mut nodes, 0, positions, masses);
-    QuadTree { nodes }
+    accumulate_quad(nodes, 0, positions, masses);
+    QuadTree {
+        nodes: std::mem::take(nodes),
+    }
 }
 
 /// Force walk for one query body: fixed child order, index-ordered
@@ -268,9 +304,27 @@ pub fn apply_bh_forces_2(
     if n == 0 {
         return;
     }
-    let positions: Vec<Vec2> = bodies.iter().map(|b| b.transform.position).collect();
-    let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
-    let tree = build_quad_pooled(&positions, &masses);
+    // The scratch vectors are pooled: they are rebuilt every kick, so
+    // allocating them per kick was pure waste.
+    let (mut positions, mut masses) = QUAD_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        (
+            std::mem::take(&mut pool.positions),
+            std::mem::take(&mut pool.masses),
+        )
+    });
+    positions.clear();
+    positions.extend(bodies.iter().map(|b| b.transform.position));
+    masses.clear();
+    masses.extend(bodies.iter().map(|b| b.mass));
+    let (mut nodes, mut spare) = QUAD_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        (
+            std::mem::take(&mut pool.nodes),
+            std::mem::take(&mut pool.spare),
+        )
+    });
+    let tree = build_quad_pooled(&positions, &masses, &mut nodes, &mut spare);
     for i in 0..n {
         if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
@@ -295,11 +349,15 @@ pub fn apply_bh_forces_2(
         }
         b.velocity += dv;
     }
-    // Recycle the arena back into the pool so the next kick reuses
-    // the allocation instead of freeing it.
+    // Recycle the arena, the spare index buffers and the scratch back
+    // into the pool so the next kick reuses the allocations instead of
+    // freeing them.
     QUAD_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         pool.nodes = tree.nodes;
+        pool.spare = spare;
+        pool.positions = positions;
+        pool.masses = masses;
     });
 }
 
@@ -332,11 +390,24 @@ impl OctNode {
 
 #[derive(Default)]
 struct OctTreePool {
+    /// Recycled node arena.
     nodes: Vec<OctNode>,
+    /// Recycled per-leaf index buffers.
+    spare: Vec<Vec<usize>>,
+    /// Recycled scratch: the positions and masses the tree is built from.
+    positions: Vec<Vec3>,
+    masses: Vec<f32>,
 }
 
 thread_local! {
-    static OCT_POOL: RefCell<OctTreePool> = const { RefCell::new(OctTreePool { nodes: Vec::new() }) };
+    static OCT_POOL: RefCell<OctTreePool> = const {
+        RefCell::new(OctTreePool {
+            nodes: Vec::new(),
+            spare: Vec::new(),
+            positions: Vec::new(),
+            masses: Vec::new(),
+        })
+    };
 }
 
 struct OctTree {
@@ -351,7 +422,7 @@ fn route_oct(node: &OctNode, p: Vec3) -> usize {
     iz * 4 + iy * 2 + ix
 }
 
-fn subdivide_oct(nodes: &mut Vec<OctNode>, node_idx: usize) {
+fn subdivide_oct(nodes: &mut Vec<OctNode>, node_idx: usize, spare: &mut Vec<Vec<usize>>) {
     let (min, max) = {
         let n = &nodes[node_idx];
         (n.min, n.max)
@@ -389,7 +460,7 @@ fn subdivide_oct(nodes: &mut Vec<OctNode>, node_idx: usize) {
         nodes.push(OctNode {
             min: lo,
             max: hi,
-            bodies: Vec::new(),
+            bodies: take_spare(spare),
             children: [None, None, None, None, None, None, None, None],
             mass: 0.0,
             com: Vec3::ZERO,
@@ -407,6 +478,7 @@ fn insert_oct(
     body_idx: usize,
     positions: &[Vec3],
     depth: u32,
+    spare: &mut Vec<Vec<usize>>,
 ) {
     let p = positions[body_idx];
     if nodes[node_idx].is_leaf() {
@@ -414,17 +486,22 @@ fn insert_oct(
             nodes[node_idx].bodies.push(body_idx);
             return;
         }
-        let existing: Vec<usize> = std::mem::take(&mut nodes[node_idx].bodies);
-        subdivide_oct(nodes, node_idx);
-        for &k in &existing {
-            insert_oct(nodes, node_idx, k, positions, depth + 1);
+        // The leaf's list is read in place and cleared afterwards (see
+        // `insert_quad`): the node is internal from here on, so the
+        // buffer is kept rather than freed.
+        let existing_len = nodes[node_idx].bodies.len();
+        subdivide_oct(nodes, node_idx, spare);
+        for i in 0..existing_len {
+            let k = nodes[node_idx].bodies[i];
+            insert_oct(nodes, node_idx, k, positions, depth + 1, spare);
         }
-        insert_oct(nodes, node_idx, body_idx, positions, depth + 1);
+        nodes[node_idx].bodies.clear();
+        insert_oct(nodes, node_idx, body_idx, positions, depth + 1, spare);
         return;
     }
     let child = route_oct(&nodes[node_idx], p);
     if let Some(ci) = nodes[node_idx].children[child] {
-        insert_oct(nodes, ci, body_idx, positions, depth + 1);
+        insert_oct(nodes, ci, body_idx, positions, depth + 1, spare);
     }
 }
 
@@ -468,7 +545,12 @@ fn accumulate_oct(nodes: &mut Vec<OctNode>, node_idx: usize, positions: &[Vec3],
     };
 }
 
-fn build_oct_pooled(positions: &[Vec3], masses: &[f32]) -> OctTree {
+fn build_oct_pooled(
+    positions: &[Vec3],
+    masses: &[f32],
+    nodes: &mut Vec<OctNode>,
+    spare: &mut Vec<Vec<usize>>,
+) -> OctTree {
     if positions.is_empty() {
         return OctTree { nodes: Vec::new() };
     }
@@ -478,25 +560,29 @@ fn build_oct_pooled(positions: &[Vec3], masses: &[f32]) -> OctTree {
         min = min.min(*p);
         max = max.max(*p);
     }
-    let mut nodes = OCT_POOL.with(|p| {
-        let mut pool = p.borrow_mut();
-        let mut arena = std::mem::take(&mut pool.nodes);
-        arena.clear();
-        arena
-    });
+    // Harvest the per-leaf index buffers of the previous tree so they can
+    // be reused instead of freed.
+    for node in nodes.iter_mut() {
+        let mut v = std::mem::take(&mut node.bodies);
+        v.clear();
+        spare.push(v);
+    }
+    nodes.clear();
     nodes.push(OctNode {
         min,
         max,
-        bodies: Vec::new(),
+        bodies: take_spare(spare),
         children: [None, None, None, None, None, None, None, None],
         mass: 0.0,
         com: Vec3::ZERO,
     });
     for i in 0..positions.len() {
-        insert_oct(&mut nodes, 0, i, positions, 0);
+        insert_oct(nodes, 0, i, positions, 0, spare);
     }
-    accumulate_oct(&mut nodes, 0, positions, masses);
-    OctTree { nodes }
+    accumulate_oct(nodes, 0, positions, masses);
+    OctTree {
+        nodes: std::mem::take(nodes),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -564,9 +650,27 @@ pub fn apply_bh_forces_3(
     if n == 0 {
         return;
     }
-    let positions: Vec<Vec3> = bodies.iter().map(|b| b.transform.position).collect();
-    let masses: Vec<f32> = bodies.iter().map(|b| b.mass).collect();
-    let tree = build_oct_pooled(&positions, &masses);
+    // The scratch vectors are pooled: they are rebuilt every kick, so
+    // allocating them per kick was pure waste.
+    let (mut positions, mut masses) = OCT_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        (
+            std::mem::take(&mut pool.positions),
+            std::mem::take(&mut pool.masses),
+        )
+    });
+    positions.clear();
+    positions.extend(bodies.iter().map(|b| b.transform.position));
+    masses.clear();
+    masses.extend(bodies.iter().map(|b| b.mass));
+    let (mut nodes, mut spare) = OCT_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        (
+            std::mem::take(&mut pool.nodes),
+            std::mem::take(&mut pool.spare),
+        )
+    });
+    let tree = build_oct_pooled(&positions, &masses, &mut nodes, &mut spare);
     for i in 0..n {
         if bodies[i].is_static || bodies[i].is_sleeping {
             continue;
@@ -594,6 +698,9 @@ pub fn apply_bh_forces_3(
     OCT_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         pool.nodes = tree.nodes;
+        pool.spare = spare;
+        pool.positions = positions;
+        pool.masses = masses;
     });
 }
 

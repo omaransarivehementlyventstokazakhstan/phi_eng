@@ -424,6 +424,25 @@ fn main() {
         );
     }
 
+    // Barnes-Hut gravity: the tree is rebuilt every kick, so its arena,
+    // per-leaf index buffers and scratch must all be recycled.
+    {
+        let mut bh = build_pile(1500);
+        bh.gravity_config.mode = phieng_dynamics::gravity::GravityMode::BarnesHut;
+        for _ in 0..60 {
+            bh.step(dt);
+        }
+        reset_counters();
+        for _ in 0..FRAMES {
+            bh.step(dt);
+        }
+        let bh_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
+        println!(
+            "[barnes-hut] allocs/step={:.1}",
+            bh_allocs as f64 / FRAMES as f64
+        );
+    }
+
     // 3D pile: 400 bodies (20 x 10 x 2 grid of boxes/spheres) over a
     // static floor. 3D was never benched at scale; this is the control
     // column for any future RigidBody3/Solver3D layout work.
