@@ -118,4 +118,116 @@ public class DeterministicTrigTests
                 BitConverter.SingleToUInt32Bits(rot.M22)
             ));
     }
+
+    /// <summary>
+    /// R04: the deterministic exponential, pinned to exact bit patterns.
+    /// </summary>
+    [Fact]
+    public void R04_DeterministicExpIsPortable()
+    {
+        (float X, uint Bits)[] cases =
+        {
+            (0.0f, 0x3f800000),
+            (0.5f, 0x3fd3094c),
+            (1.0f, 0x402df854),
+            (-1.0f, 0x3ebc5ab2),
+            (2.5f, 0x4142eb7f),
+            (-10.0f, 0x383e6bce),
+            (20.0f, 0x4de75844),
+            (0.001f, 0x3f8020c9),
+            (100.0f, 0x7f800000), // overflows to infinity
+        };
+        foreach (var (x, bits) in cases)
+        {
+            Assert.Equal(bits, BitConverter.SingleToUInt32Bits(DeterministicScalar.Exp(x)));
+        }
+    }
+
+    /// <summary>
+    /// R05: the deterministic logarithm, pinned to exact bit patterns.
+    /// </summary>
+    [Fact]
+    public void R05_DeterministicLnIsPortable()
+    {
+        (float X, uint Bits)[] cases =
+        {
+            (1.0f, 0x00000000),
+            (2.0f, 0x3f317218),
+            (0.5f, 0xbf317218),
+            (10.0f, 0x40135d8e),
+            (0.001f, 0xc0dd0c55),
+            (1e-6f, 0xc15d0c55),
+            (3.5f, 0x3fa05a89),
+            (100.0f, 0x40935d8e),
+        };
+        foreach (var (x, bits) in cases)
+        {
+            Assert.Equal(bits, BitConverter.SingleToUInt32Bits(DeterministicScalar.Ln(x)));
+        }
+    }
+
+    /// <summary>
+    /// R06: the deterministic helpers track the platform math library.
+    /// </summary>
+    /// <remarks>
+    /// The tolerance is in ULPs of the result and is far looser than the
+    /// actual agreement (which is ~0.5 ULP, i.e. correctly rounded). The
+    /// point is not the accuracy - it is that the deterministic version
+    /// is <i>close enough</i> that replacing the platform call does not
+    /// change the character of the physics.
+    /// </remarks>
+    [Fact]
+    public void R06_ExponentialMatchesPlatformLibm()
+    {
+        static double UlpDiff(float a, float b)
+        {
+            if (a == b)
+            {
+                return 0.0;
+            }
+            double ad = a;
+            double bd = b;
+            double scale = System.Math.Max(System.Math.Max(System.Math.Abs(ad), System.Math.Abs(bd)), 1.17549435e-38);
+            // 1.1920929e-7 is the f32 machine epsilon (2^-23), matching
+            // Rust's f32::EPSILON. C#'s float.Epsilon is the smallest
+            // *subnormal*, not the machine epsilon.
+            return System.Math.Abs(ad - bd) / (scale * 1.1920929e-7);
+        }
+
+        double worstExp = 0.0;
+        double worstLn = 0.0;
+        for (int i = -60000; i <= 60000; i++)
+        {
+            float x = i * 0.001f;
+            worstExp = System.Math.Max(worstExp, UlpDiff(DeterministicScalar.Exp(x), MathF.Exp(x)));
+        }
+        for (int i = 1; i < 20000; i++)
+        {
+            float x = i * 1e-3f;
+            worstLn = System.Math.Max(worstLn, UlpDiff(DeterministicScalar.Ln(x), MathF.Log(x)));
+        }
+        Assert.True(worstExp <= 2.0, $"exp deviates by {worstExp} ULP from the platform libm");
+        Assert.True(worstLn <= 2.0, $"ln deviates by {worstLn} ULP from the platform libm");
+    }
+
+    /// <summary>
+    /// R07: <c>exp</c> and <c>ln</c> are mutual inverses.
+    /// </summary>
+    /// <remarks>
+    /// The nuclear subsystem turns a half-life into a decay constant and
+    /// decays an activity with it; this is the property that makes the
+    /// round trip meaningful.
+    /// </remarks>
+    [Fact]
+    public void R07_ExponentialAndLogarithmAreMutualInverses()
+    {
+        for (int i = -2000; i <= 2000; i++)
+        {
+            float x = i * 0.01f;
+            float back = DeterministicScalar.Ln(DeterministicScalar.Exp(x));
+            Assert.True(
+                MathF.Abs(back - x) <= MathF.Abs(x) * 1e-5f + 1e-6f,
+                $"ln(exp({x})) = {back}");
+        }
+    }
 }

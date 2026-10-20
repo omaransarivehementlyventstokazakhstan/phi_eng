@@ -44,11 +44,14 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              default-off bit-identical, snapshot round-trip)
     K31-K44  3D joint constraints (mirrored both languages: distance,
               hinge, prismatic, fixed)
-    R01-R03  deterministic trigonometry (mirrored both languages: pinned
-              cos/sin bit patterns, pinned atan2 bit patterns, and the
-              engine's own 2D rotation integration pinned to exact bits
-              - the property that makes rigid-body trajectories
-              platform-independent and Rust/C#-identical)
+    R01-R07  deterministic scalar functions (mirrored both languages:
+              pinned cos/sin bit patterns, pinned atan2 bit patterns,
+              the engine's own 2D rotation integration pinned to exact
+              bits, pinned exp bit patterns, pinned ln bit patterns,
+              agreement with the platform libm within a tolerance, and
+              exp/ln as mutual inverses - the properties that make
+              rigid-body trajectories platform-independent and
+              Rust/C#-identical)
 """
 
 import re

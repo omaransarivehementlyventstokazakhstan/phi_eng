@@ -121,3 +121,103 @@ fn r03_body_rotation_integration_is_portable() {
         "the 2D rotation integration is not portable"
     );
 }
+
+/// R04: the deterministic exponential, pinned to exact bit patterns.
+#[test]
+fn r04_deterministic_exp_is_portable() {
+    use phieng_math::exponential::exp;
+
+    let cases: [(f32, u32); 9] = [
+        (0.0, 0x3f800000),
+        (0.5, 0x3fd3094c),
+        (1.0, 0x402df854),
+        (-1.0, 0x3ebc5ab2),
+        (2.5, 0x4142eb7f),
+        (-10.0, 0x383e6bce),
+        (20.0, 0x4de75844),
+        (0.001, 0x3f8020c9),
+        (100.0, 0x7f800000), // overflows to infinity
+    ];
+    for (x, bits) in cases {
+        assert_eq!(exp(x).to_bits(), bits, "exp({x}) is not portable");
+    }
+}
+
+/// R05: the deterministic logarithm, pinned to exact bit patterns.
+#[test]
+fn r05_deterministic_ln_is_portable() {
+    use phieng_math::exponential::ln;
+
+    let cases: [(f32, u32); 8] = [
+        (1.0, 0x00000000),
+        (2.0, 0x3f317218),
+        (0.5, 0xbf317218),
+        (10.0, 0x40135d8e),
+        (0.001, 0xc0dd0c55),
+        (1e-6, 0xc15d0c55),
+        (3.5, 0x3fa05a89),
+        (100.0, 0x40935d8e),
+    ];
+    for (x, bits) in cases {
+        assert_eq!(ln(x).to_bits(), bits, "ln({x}) is not portable");
+    }
+}
+
+/// R06: the deterministic helpers track the platform math library.
+///
+/// The tolerance is in ULPs of the result and is far looser than the
+/// actual agreement (which is ~0.5 ULP, i.e. correctly rounded). The
+/// point is not the accuracy — it is that the deterministic version is
+/// *close enough* that replacing the platform call does not change the
+/// character of the physics.
+#[test]
+fn r06_exponential_matches_platform_libm() {
+    use phieng_math::exponential::{exp, ln};
+
+    fn ulp_diff(a: f32, b: f32) -> f64 {
+        if a == b {
+            return 0.0;
+        }
+        let (a, b) = (a as f64, b as f64);
+        let scale = a.abs().max(b.abs()).max(f32::MIN_POSITIVE as f64);
+        (a - b).abs() / (scale * f32::EPSILON as f64)
+    }
+
+    let mut worst_exp = 0.0f64;
+    let mut worst_ln = 0.0f64;
+    for i in -60000..=60000 {
+        let x = (i as f32) * 0.001;
+        worst_exp = worst_exp.max(ulp_diff(exp(x), (x as f64).exp() as f32));
+    }
+    for i in 1..20000 {
+        let x = (i as f32) * 1e-3;
+        worst_ln = worst_ln.max(ulp_diff(ln(x), (x as f64).ln() as f32));
+    }
+    assert!(
+        worst_exp <= 2.0,
+        "exp deviates by {worst_exp} ULP from the platform libm"
+    );
+    assert!(
+        worst_ln <= 2.0,
+        "ln deviates by {worst_ln} ULP from the platform libm"
+    );
+}
+
+/// R07: `exp` and `ln` are mutual inverses.
+///
+/// The nuclear subsystem turns a half-life into a decay constant and
+/// decays an activity with it; this is the property that makes the
+/// round trip meaningful.
+#[test]
+fn r07_exponential_and_logarithm_are_mutual_inverses() {
+    use phieng_math::exponential::{exp, ln};
+
+    for i in -2000..=2000 {
+        let x = (i as f32) * 0.01;
+        let back = ln(exp(x));
+        assert!(
+            (back - x).abs() <= x.abs() * 1e-5 + 1e-6,
+            "ln(exp({x})) = {back}"
+        );
+    }
+}
