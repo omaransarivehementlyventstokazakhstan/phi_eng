@@ -24,6 +24,12 @@ section, each with its own run command and readings:
 The *physics* readings are exact and machine-independent; the wall times
 are not comparable across the two machines.)
 
+All four new suites were also run on Linux x64 (glibc 2.43, rustc 1.99.0)
+and compared line by line: every physics reading — every temperature,
+every activity, every contact count, every drift, the tier state hash —
+is **byte-identical** to the Windows x64 (MSVC CRT) run. Only the
+wall-clock timings differ, so the tables below describe both platforms.
+
 ## Readings (release, Windows x64, 2026-10-15)
 
 | Test                      | Bodies | Steps | Wall ms | ms/step                         | Peak speed | Reading                                                                                                          |
