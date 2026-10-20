@@ -49,7 +49,7 @@ public static class Snapshot
     /// Rust writer's, so a file written by either engine loads in the
     /// other.
     /// </summary>
-    public const uint SchemaVersion = 11;
+    public const uint SchemaVersion = 12;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -97,6 +97,13 @@ public static class Snapshot
     /// every older payload.
     /// </remarks>
     public const uint RadiationExtrasSchemaVersion = 11;
+
+    /// <summary>
+    /// Schema version that introduced the nuclear block (the
+    /// configuration, the nuclide table and the per-body nuclear state).
+    /// Must match Rust <c>SNAPSHOT_SCHEMA_NUCLEAR</c>.
+    /// </summary>
+    public const uint NuclearSchemaVersion = 12;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -363,6 +370,78 @@ public static class Snapshot
         }
     }
 
+    /// <summary>
+    /// Schema v12 nuclear DTOs. The nuclide table and the per-body
+    /// nuclear state live in their own block so that every earlier
+    /// payload still decodes.
+    /// </summary>
+    private sealed class NuclearIsotopeDto
+    {
+        [JsonPropertyName("half_life")] public float HalfLife { get; set; }
+
+        [JsonPropertyName("decay_energy")] public float DecayEnergy { get; set; }
+
+        [JsonPropertyName("ionization_fraction")] public float IonizationFraction { get; set; }
+
+        [JsonPropertyName("daughter")] public ushort Daughter { get; set; }
+
+        [JsonPropertyName("absorption_cross_section")] public float AbsorptionCrossSection { get; set; }
+
+        [JsonPropertyName("fission_cross_section")] public float FissionCrossSection { get; set; }
+
+        [JsonPropertyName("neutron_yield")] public float NeutronYield { get; set; }
+
+        [JsonPropertyName("is_fissile")] public bool IsFissile { get; set; }
+    }
+
+    /// <summary>Schema v12 nuclear configuration DTO.</summary>
+    private sealed class NuclearConfigDto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+
+        [JsonPropertyName("time_scale")] public float TimeScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("fission_energy")] public float FissionEnergy { get; set; } = 3.204e-11f;
+
+        [JsonPropertyName("ambient_flux")] public float AmbientFlux { get; set; }
+
+        [JsonPropertyName("fission_rate")] public float FissionRate { get; set; } = 1.0f;
+
+        [JsonPropertyName("fuel_per_fission")] public float FuelPerFission { get; set; } = 1e-6f;
+
+        [JsonPropertyName("neutron_range")] public float NeutronRange { get; set; } = 1.0f;
+
+        [JsonPropertyName("dose_range")] public float DoseRange { get; set; } = 1.0f;
+
+        [JsonPropertyName("delayed_neutron_fraction")] public float DelayedNeutronFraction { get; set; } = 0.006f;
+
+        [JsonPropertyName("delayed_neutron_delay")] public float DelayedNeutronDelay { get; set; } = 0.5f;
+
+        [JsonPropertyName("max_activity")] public float MaxActivity { get; set; } = 1e30f;
+
+        [JsonPropertyName("dose_per_joule")] public float DosePerJoule { get; set; } = 1.0f;
+
+        [JsonPropertyName("max_dose")] public float MaxDose { get; set; } = 1e30f;
+
+        [JsonPropertyName("isotopes")] public List<NuclearIsotopeDto> Isotopes { get; set; } = new();
+    }
+
+    /// <summary>Schema v12 per-body nuclear state DTO.</summary>
+    private sealed class NuclearBodyDto
+    {
+        [JsonPropertyName("isotope")] public ushort Isotope { get; set; }
+
+        [JsonPropertyName("activity")] public float Activity { get; set; }
+
+        [JsonPropertyName("fuel")] public float Fuel { get; set; }
+
+        [JsonPropertyName("neutrons")] public float Neutrons { get; set; }
+
+        [JsonPropertyName("delayed_neutrons")] public float DelayedNeutrons { get; set; }
+
+        [JsonPropertyName("dose")] public float Dose { get; set; }
+    }
+
     private sealed class ThermalExtrasDto
     {
         [JsonPropertyName("radiation_occlusion")] public bool RadiationOcclusion { get; set; }
@@ -412,6 +491,8 @@ public static class Snapshot
         [JsonPropertyName("temperature")] public float Temperature { get; set; } = 293.15f;
         /// <summary>Applied thermal-expansion factor (schema v10; default 1.0).</summary>
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
     }
 
     private sealed class Body3Dto
@@ -435,6 +516,8 @@ public static class Snapshot
         [JsonPropertyName("temperature")] public float Temperature { get; set; } = 293.15f;
         /// <summary>See <c>Body2Dto.ExpansionScale</c>.</summary>
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
     }
 
     private sealed class Joint2Dto
@@ -771,6 +854,8 @@ public static class Snapshot
         [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
 
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
+
+        [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -824,7 +909,12 @@ public static class Snapshot
                 || w.Thermal.SkyTemperature != 0.0f
                 || w.Thermal.GroundTemperature != 0.0f
                 || w.Thermal.OccluderTransmittance != 0.0f;
-            uint schema = hasThermal || hasRadiationExtras ? RadiationExtrasSchemaVersion
+            // Schema v12: the nuclear configuration, the nuclide table
+            // and the per-body nuclear state need the v12 block, or they
+            // would be silently dropped on save.
+            bool hasNuclear = !w.Nuclear.Config.IsDefault()
+                || w.Bodies.Any(b => !b.Nuclear.IsDefault());
+            uint schema = hasThermal || hasRadiationExtras || hasNuclear ? NuclearSchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -903,6 +993,33 @@ public static class Snapshot
                 GroundTemperature = w.Thermal.GroundTemperature,
                 OccluderTransmittance = w.Thermal.OccluderTransmittance,
             },
+                Nuclear = new NuclearConfigDto
+                {
+                    Enabled = w.Nuclear.Config.Enabled,
+                    TimeScale = w.Nuclear.Config.TimeScale,
+                    FissionEnergy = w.Nuclear.Config.FissionEnergy,
+                    AmbientFlux = w.Nuclear.Config.AmbientFlux,
+                    FissionRate = w.Nuclear.Config.FissionRate,
+                    FuelPerFission = w.Nuclear.Config.FuelPerFission,
+                    NeutronRange = w.Nuclear.Config.NeutronRange,
+                    DoseRange = w.Nuclear.Config.DoseRange,
+                    DelayedNeutronFraction = w.Nuclear.Config.DelayedNeutronFraction,
+                    DelayedNeutronDelay = w.Nuclear.Config.DelayedNeutronDelay,
+                    MaxActivity = w.Nuclear.Config.MaxActivity,
+                    DosePerJoule = w.Nuclear.Config.DosePerJoule,
+                    MaxDose = w.Nuclear.Config.MaxDose,
+                    Isotopes = w.Nuclear.Config.Isotopes.Select(iso => new NuclearIsotopeDto
+                    {
+                        HalfLife = iso.HalfLife,
+                        DecayEnergy = iso.DecayEnergy,
+                        IonizationFraction = iso.IonizationFraction,
+                        Daughter = iso.Daughter,
+                        AbsorptionCrossSection = iso.AbsorptionCrossSection,
+                        FissionCrossSection = iso.FissionCrossSection,
+                        NeutronYield = iso.NeutronYield,
+                        IsFissile = iso.IsFissile,
+                    }).ToList(),
+                },
                 ThermalExtras = new ThermalExtrasDto
                 {
                     RadiationOcclusion = w.Thermal.RadiationOcclusion,
@@ -980,6 +1097,15 @@ public static class Snapshot
                     AmbientScale = b.AmbientScale,
                     Temperature = b.Temperature,
                     ExpansionScale = b.ExpansionScale,
+        Nuclear = new NuclearBodyDto
+        {
+            Isotope = b.Nuclear.Isotope,
+            Activity = b.Nuclear.Activity,
+            Fuel = b.Nuclear.Fuel,
+            Neutrons = b.Nuclear.Neutrons,
+            DelayedNeutrons = b.Nuclear.DelayedNeutrons,
+            Dose = b.Nuclear.Dose,
+        },
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -1126,6 +1252,8 @@ public static class Snapshot
         [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
 
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
+
+        [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -1176,7 +1304,12 @@ public static class Snapshot
                 || w.Thermal.SkyTemperature != 0.0f
                 || w.Thermal.GroundTemperature != 0.0f
                 || w.Thermal.OccluderTransmittance != 0.0f;
-            uint schema = hasThermal || hasRadiationExtras ? RadiationExtrasSchemaVersion
+            // Schema v12: the nuclear configuration, the nuclide table
+            // and the per-body nuclear state need the v12 block, or they
+            // would be silently dropped on save.
+            bool hasNuclear = !w.Nuclear.Config.IsDefault()
+                || w.Bodies.Any(b => !b.Nuclear.IsDefault());
+            uint schema = hasThermal || hasRadiationExtras || hasNuclear ? NuclearSchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1255,6 +1388,33 @@ public static class Snapshot
                 GroundTemperature = w.Thermal.GroundTemperature,
                 OccluderTransmittance = w.Thermal.OccluderTransmittance,
             },
+                Nuclear = new NuclearConfigDto
+                {
+                    Enabled = w.Nuclear.Config.Enabled,
+                    TimeScale = w.Nuclear.Config.TimeScale,
+                    FissionEnergy = w.Nuclear.Config.FissionEnergy,
+                    AmbientFlux = w.Nuclear.Config.AmbientFlux,
+                    FissionRate = w.Nuclear.Config.FissionRate,
+                    FuelPerFission = w.Nuclear.Config.FuelPerFission,
+                    NeutronRange = w.Nuclear.Config.NeutronRange,
+                    DoseRange = w.Nuclear.Config.DoseRange,
+                    DelayedNeutronFraction = w.Nuclear.Config.DelayedNeutronFraction,
+                    DelayedNeutronDelay = w.Nuclear.Config.DelayedNeutronDelay,
+                    MaxActivity = w.Nuclear.Config.MaxActivity,
+                    DosePerJoule = w.Nuclear.Config.DosePerJoule,
+                    MaxDose = w.Nuclear.Config.MaxDose,
+                    Isotopes = w.Nuclear.Config.Isotopes.Select(iso => new NuclearIsotopeDto
+                    {
+                        HalfLife = iso.HalfLife,
+                        DecayEnergy = iso.DecayEnergy,
+                        IonizationFraction = iso.IonizationFraction,
+                        Daughter = iso.Daughter,
+                        AbsorptionCrossSection = iso.AbsorptionCrossSection,
+                        FissionCrossSection = iso.FissionCrossSection,
+                        NeutronYield = iso.NeutronYield,
+                        IsFissile = iso.IsFissile,
+                    }).ToList(),
+                },
                 ThermalExtras = new ThermalExtrasDto
                 {
                     RadiationOcclusion = w.Thermal.RadiationOcclusion,
@@ -1427,6 +1587,15 @@ public static class Snapshot
                     AmbientScale = b.AmbientScale,
                     Temperature = b.Temperature,
                     ExpansionScale = b.ExpansionScale,
+        Nuclear = new NuclearBodyDto
+        {
+            Isotope = b.Nuclear.Isotope,
+            Activity = b.Nuclear.Activity,
+            Fuel = b.Nuclear.Fuel,
+            Neutrons = b.Nuclear.Neutrons,
+            DelayedNeutrons = b.Nuclear.DelayedNeutrons,
+            Dose = b.Nuclear.Dose,
+        },
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -1664,6 +1833,35 @@ public static class Snapshot
         OccluderTransmittance = Fin(radiation.OccluderTransmittance, "occluder_transmittance"),
     };
 
+    /// <summary>Rebuilds the nuclear configuration from its DTO.</summary>
+    private static NuclearConfig NuclearConfigFrom(NuclearConfigDto d) => new()
+    {
+        Enabled = d.Enabled,
+        TimeScale = Fin(d.TimeScale, "nuclear_time_scale"),
+        FissionEnergy = Fin(d.FissionEnergy, "nuclear_fission_energy"),
+        AmbientFlux = Fin(d.AmbientFlux, "nuclear_ambient_flux"),
+        FissionRate = Fin(d.FissionRate, "nuclear_fission_rate"),
+        FuelPerFission = Fin(d.FuelPerFission, "nuclear_fuel_per_fission"),
+        NeutronRange = Fin(d.NeutronRange, "nuclear_neutron_range"),
+        DoseRange = Fin(d.DoseRange, "nuclear_dose_range"),
+        DelayedNeutronFraction = Fin(d.DelayedNeutronFraction, "nuclear_delayed_neutron_fraction"),
+        DelayedNeutronDelay = Fin(d.DelayedNeutronDelay, "nuclear_delayed_neutron_delay"),
+        MaxActivity = Fin(d.MaxActivity, "nuclear_max_activity"),
+        DosePerJoule = Fin(d.DosePerJoule, "nuclear_dose_per_joule"),
+        MaxDose = Fin(d.MaxDose, "nuclear_max_dose"),
+        Isotopes = d.Isotopes.Select(iso => new Isotope
+        {
+            HalfLife = Fin(iso.HalfLife, "isotope_half_life"),
+            DecayEnergy = Fin(iso.DecayEnergy, "isotope_decay_energy"),
+            IonizationFraction = Fin(iso.IonizationFraction, "isotope_ionization_fraction"),
+            Daughter = iso.Daughter,
+            AbsorptionCrossSection = Fin(iso.AbsorptionCrossSection, "isotope_absorption_cross_section"),
+            FissionCrossSection = Fin(iso.FissionCrossSection, "isotope_fission_cross_section"),
+            NeutronYield = Fin(iso.NeutronYield, "isotope_neutron_yield"),
+            IsFissile = iso.IsFissile,
+        }).ToList(),
+    };
+
     /// <summary>Rebuilds a material, carrying the thermal properties.</summary>
     private static PhysicsMaterial MaterialFrom(MaterialDto m) => new(
         Fin(m.Friction, "friction"),
@@ -1753,6 +1951,7 @@ public static class Snapshot
                 AutoCorrect = dto.Validation.AutoCorrect,
             },
         };
+        w.Nuclear.Config = NuclearConfigFrom(dto.Nuclear);
         w.Solver.Iterations = dto.Solver.Iterations > 1024
             ? throw new ArgumentException("Solver iterations exceed 1024.")
             : dto.Solver.Iterations;
@@ -1800,6 +1999,13 @@ public static class Snapshot
             body.ExpansionScale = Fin(b.ExpansionScale, "expansion_scale") > 0.0f
                 ? Fin(b.ExpansionScale, "expansion_scale")
                 : 1.0f;
+            // The nuclear state (schema v12).
+            body.Nuclear.Isotope = b.Nuclear.Isotope;
+            body.Nuclear.Activity = Fin(b.Nuclear.Activity, "nuclear_activity");
+            body.Nuclear.Fuel = Fin(b.Nuclear.Fuel, "nuclear_fuel");
+            body.Nuclear.Neutrons = Fin(b.Nuclear.Neutrons, "nuclear_neutrons");
+            body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
+            body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -1951,6 +2157,7 @@ public static class Snapshot
                 AutoCorrect = dto.Validation.AutoCorrect,
             },
         };
+        w.Nuclear.Config = NuclearConfigFrom(dto.Nuclear);
         w.Solver.Iterations = dto.Solver.Iterations > 1024
             ? throw new ArgumentException("Solver iterations exceed 1024.")
             : dto.Solver.Iterations;
@@ -1999,6 +2206,13 @@ public static class Snapshot
             body.ExpansionScale = Fin(b.ExpansionScale, "expansion_scale") > 0.0f
                 ? Fin(b.ExpansionScale, "expansion_scale")
                 : 1.0f;
+            // The nuclear state (schema v12).
+            body.Nuclear.Isotope = b.Nuclear.Isotope;
+            body.Nuclear.Activity = Fin(b.Nuclear.Activity, "nuclear_activity");
+            body.Nuclear.Fuel = Fin(b.Nuclear.Fuel, "nuclear_fuel");
+            body.Nuclear.Neutrons = Fin(b.Nuclear.Neutrons, "nuclear_neutrons");
+            body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
+            body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2201,6 +2415,61 @@ public static class Snapshot
         GroundTemperature = r.ReadSingle(),
         OccluderTransmittance = r.ReadSingle(),
     };
+    /// <summary>Reads the schema v12 nuclear configuration block.</summary>
+    private static NuclearConfigDto ReadNuclearConfig(BinaryReader r)
+    {
+        bool enabled = r.ReadByte() != 0;
+        float timeScale = r.ReadSingle();
+        float fissionEnergy = r.ReadSingle();
+        float ambientFlux = r.ReadSingle();
+        float fissionRate = r.ReadSingle();
+        float fuelPerFission = r.ReadSingle();
+        float neutronRange = r.ReadSingle();
+        float doseRange = r.ReadSingle();
+        float delayedNeutronFraction = r.ReadSingle();
+        float delayedNeutronDelay = r.ReadSingle();
+        float maxActivity = r.ReadSingle();
+        float dosePerJoule = r.ReadSingle();
+        float maxDose = r.ReadSingle();
+        int count = r.ReadInt32();
+        if (count < 0 || count > 4096)
+        {
+            throw new ArgumentException("Nuclide table length out of range.");
+        }
+        var isotopes = new List<NuclearIsotopeDto>(count);
+        for (int i = 0; i < count; i++)
+        {
+            isotopes.Add(new NuclearIsotopeDto
+            {
+                HalfLife = r.ReadSingle(),
+                DecayEnergy = r.ReadSingle(),
+                IonizationFraction = r.ReadSingle(),
+                Daughter = (ushort)r.ReadUInt32(),
+                AbsorptionCrossSection = r.ReadSingle(),
+                FissionCrossSection = r.ReadSingle(),
+                NeutronYield = r.ReadSingle(),
+                IsFissile = r.ReadByte() != 0,
+            });
+        }
+        return new NuclearConfigDto
+        {
+            Enabled = enabled,
+            TimeScale = timeScale,
+            FissionEnergy = fissionEnergy,
+            AmbientFlux = ambientFlux,
+            FissionRate = fissionRate,
+            FuelPerFission = fuelPerFission,
+            NeutronRange = neutronRange,
+            DoseRange = doseRange,
+            DelayedNeutronFraction = delayedNeutronFraction,
+            DelayedNeutronDelay = delayedNeutronDelay,
+            MaxActivity = maxActivity,
+            DosePerJoule = dosePerJoule,
+            MaxDose = maxDose,
+            Isotopes = isotopes,
+        };
+    }
+
     private static void WriteSolver(BinaryWriter w, SolverDto s, uint version)
     {
         w.Write(s.Iterations);
@@ -2503,6 +2772,36 @@ public static class Snapshot
             w.Write(dto.RadiationExtras.GroundTemperature);
             w.Write(dto.RadiationExtras.OccluderTransmittance);
         }
+        // Schema v12: the nuclear configuration and the nuclide table
+        // (own block, so every earlier payload still decodes).
+        if (dto.Schema >= NuclearSchemaVersion)
+        {
+            w.Write(dto.Nuclear.Enabled ? (byte)1 : (byte)0);
+            w.Write(dto.Nuclear.TimeScale);
+            w.Write(dto.Nuclear.FissionEnergy);
+            w.Write(dto.Nuclear.AmbientFlux);
+            w.Write(dto.Nuclear.FissionRate);
+            w.Write(dto.Nuclear.FuelPerFission);
+            w.Write(dto.Nuclear.NeutronRange);
+            w.Write(dto.Nuclear.DoseRange);
+            w.Write(dto.Nuclear.DelayedNeutronFraction);
+            w.Write(dto.Nuclear.DelayedNeutronDelay);
+            w.Write(dto.Nuclear.MaxActivity);
+            w.Write(dto.Nuclear.DosePerJoule);
+            w.Write(dto.Nuclear.MaxDose);
+            w.Write(dto.Nuclear.Isotopes.Count);
+            foreach (var iso in dto.Nuclear.Isotopes)
+            {
+                w.Write(iso.HalfLife);
+                w.Write(iso.DecayEnergy);
+                w.Write(iso.IonizationFraction);
+                w.Write((uint)iso.Daughter);
+                w.Write(iso.AbsorptionCrossSection);
+                w.Write(iso.FissionCrossSection);
+                w.Write(iso.NeutronYield);
+                w.Write(iso.IsFissile ? (byte)1 : (byte)0);
+            }
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.CellSize);
@@ -2534,6 +2833,16 @@ public static class Snapshot
             if (thermalV8) w.Write(b.Temperature);
             // Schema v10: per-body applied expansion factor.
             if (dto.Schema >= ThermalExtrasSchemaVersion) w.Write(b.ExpansionScale);
+            // Schema v12: the per-body nuclear state.
+            if (dto.Schema >= NuclearSchemaVersion)
+            {
+                w.Write((uint)b.Nuclear.Isotope);
+                w.Write(b.Nuclear.Activity);
+                w.Write(b.Nuclear.Fuel);
+                w.Write(b.Nuclear.Neutrons);
+                w.Write(b.Nuclear.DelayedNeutrons);
+                w.Write(b.Nuclear.Dose);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -2776,6 +3085,9 @@ public static class Snapshot
             ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
             // v11 payloads carry the radiation model block.
             RadiationExtras = version >= RadiationExtrasSchemaVersion ? ReadRadiationExtras(r) : new RadiationExtrasDto(),
+            // Schema v12 payloads carry the nuclear configuration and the
+            // nuclide table.
+            Nuclear = version >= NuclearSchemaVersion ? ReadNuclearConfig(r) : new NuclearConfigDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
@@ -2815,6 +3127,17 @@ public static class Snapshot
                 AmbientScale = ambientV5 ? r.ReadSingle() : 1.0f,
                 Temperature = thermalV8 ? r.ReadSingle() : 293.15f,
                 ExpansionScale = version >= ThermalExtrasSchemaVersion ? r.ReadSingle() : 1.0f,
+                Nuclear = version >= NuclearSchemaVersion
+                    ? new NuclearBodyDto
+                    {
+                        Isotope = (ushort)r.ReadUInt32(),
+                        Activity = r.ReadSingle(),
+                        Fuel = r.ReadSingle(),
+                        Neutrons = r.ReadSingle(),
+                        DelayedNeutrons = r.ReadSingle(),
+                        Dose = r.ReadSingle(),
+                    }
+                    : new NuclearBodyDto(),
             };
             dto.Bodies.Add(b);
         }
@@ -3088,6 +3411,36 @@ public static class Snapshot
             w.Write(dto.RadiationExtras.GroundTemperature);
             w.Write(dto.RadiationExtras.OccluderTransmittance);
         }
+        // Schema v12: the nuclear configuration and the nuclide table
+        // (own block, so every earlier payload still decodes).
+        if (dto.Schema >= NuclearSchemaVersion)
+        {
+            w.Write(dto.Nuclear.Enabled ? (byte)1 : (byte)0);
+            w.Write(dto.Nuclear.TimeScale);
+            w.Write(dto.Nuclear.FissionEnergy);
+            w.Write(dto.Nuclear.AmbientFlux);
+            w.Write(dto.Nuclear.FissionRate);
+            w.Write(dto.Nuclear.FuelPerFission);
+            w.Write(dto.Nuclear.NeutronRange);
+            w.Write(dto.Nuclear.DoseRange);
+            w.Write(dto.Nuclear.DelayedNeutronFraction);
+            w.Write(dto.Nuclear.DelayedNeutronDelay);
+            w.Write(dto.Nuclear.MaxActivity);
+            w.Write(dto.Nuclear.DosePerJoule);
+            w.Write(dto.Nuclear.MaxDose);
+            w.Write(dto.Nuclear.Isotopes.Count);
+            foreach (var iso in dto.Nuclear.Isotopes)
+            {
+                w.Write(iso.HalfLife);
+                w.Write(iso.DecayEnergy);
+                w.Write(iso.IonizationFraction);
+                w.Write((uint)iso.Daughter);
+                w.Write(iso.AbsorptionCrossSection);
+                w.Write(iso.FissionCrossSection);
+                w.Write(iso.NeutronYield);
+                w.Write(iso.IsFissile ? (byte)1 : (byte)0);
+            }
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.Bodies.Count);
@@ -3120,6 +3473,16 @@ public static class Snapshot
             if (thermalV8) w.Write(b.Temperature);
             // Schema v10: per-body applied expansion factor.
             if (dto.Schema >= ThermalExtrasSchemaVersion) w.Write(b.ExpansionScale);
+            // Schema v12: the per-body nuclear state.
+            if (dto.Schema >= NuclearSchemaVersion)
+            {
+                w.Write((uint)b.Nuclear.Isotope);
+                w.Write(b.Nuclear.Activity);
+                w.Write(b.Nuclear.Fuel);
+                w.Write(b.Nuclear.Neutrons);
+                w.Write(b.Nuclear.DelayedNeutrons);
+                w.Write(b.Nuclear.Dose);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -3173,6 +3536,9 @@ public static class Snapshot
             ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
             // v11 payloads carry the radiation model block.
             RadiationExtras = version >= RadiationExtrasSchemaVersion ? ReadRadiationExtras(r) : new RadiationExtrasDto(),
+            // Schema v12 payloads carry the nuclear configuration and the
+            // nuclide table.
+            Nuclear = version >= NuclearSchemaVersion ? ReadNuclearConfig(r) : new NuclearConfigDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
@@ -3208,6 +3574,17 @@ public static class Snapshot
                 AmbientScale = version >= AmbientSchemaVersion ? r.ReadSingle() : 1.0f,
                 Temperature = version >= ThermalSchemaVersion ? r.ReadSingle() : 293.15f,
                 ExpansionScale = version >= ThermalExtrasSchemaVersion ? r.ReadSingle() : 1.0f,
+                Nuclear = version >= NuclearSchemaVersion
+                    ? new NuclearBodyDto
+                    {
+                        Isotope = (ushort)r.ReadUInt32(),
+                        Activity = r.ReadSingle(),
+                        Fuel = r.ReadSingle(),
+                        Neutrons = r.ReadSingle(),
+                        DelayedNeutrons = r.ReadSingle(),
+                        Dose = r.ReadSingle(),
+                    }
+                    : new NuclearBodyDto(),
             });
         }
         int nj = r.ReadInt32();

@@ -342,6 +342,29 @@ contact for that frame rather than a guessed depth.
   to exempt blockers sitting near an endpoint, which let radiation leak
   through the gap. Persists in schema v11. Mirrored in both languages
   (U01–U12).
+- **Nuclear physics (2D and 3D, both languages):** a game-scale
+  radioactive-decay, activation and fission model. A body carries a
+  **nuclide** (from a config-supplied table: half-life, decay energy,
+  the fraction that leaves as ionizing radiation, a daughter nuclide,
+  absorption and fission cross-sections, the neutron yield and whether
+  it is fissile) plus a **nuclear state** (the activity, the remaining
+  fuel, the free and delayed neutron populations and the accumulated
+  dose). The phase runs *before* the thermal phase: the energy released
+  by decay and fission becomes heat, which the thermal phase turns into
+  temperature and then into thermal radiation. **Fission** consumes
+  fuel, releases `fission_energy` and produces `neutron_yield`
+  neutrons, a fraction of which are *delayed* — so a chain reaction
+  goes prompt-critical rather than immediately divergent. Free neutrons
+  are shared with the nearby bodies (a diffusion approximation, not a
+  transport solve) and the ionizing share of the energy is deposited
+  as **dose** in the bodies that are in range. Off by default, so a
+  default world is bit-identical to a pre-nuclear one. The decay uses
+  the engine's **deterministic** exponential, so a half-life drifts by
+  the same amount on every platform and Rust and C# agree bit-for-bit.
+  Crosses FFI (`phieng_world[_3]_set/get_nuclear_config`,
+  `phieng_world[_3]_set_isotope`,
+  `phieng_world[_3]_set/get_body_nuclear_state`) and persists in schema
+  v12. Mirrored in both languages (Y01–Y24).
 - **Broad-phase tiers (2D and 3D, both languages):** `BroadphaseMode`
   (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
   dynamic AABB tree backend for 2D and 3D, and an explicit O(n²) brute

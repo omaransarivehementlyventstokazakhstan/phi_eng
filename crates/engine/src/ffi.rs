@@ -3400,6 +3400,468 @@ fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalCo
     })
 }
 
+/// Nuclear config FFI mirror (2D).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NuclearConfigFfi {
+    /// Master switch. 1-byte bool, matching the other flags.
+    pub enabled: bool,
+    /// Nuclear seconds per simulation second.
+    pub time_scale: f32,
+    /// The energy released per fission, in joules.
+    pub fission_energy: f32,
+    /// The background neutron flux.
+    pub ambient_flux: f32,
+    /// The fission rate constant.
+    pub fission_rate: f32,
+    /// The fuel consumed per fission.
+    pub fuel_per_fission: f32,
+    /// The range within which free neutrons are shared.
+    pub neutron_range: f32,
+    /// The range within which ionizing radiation is deposited.
+    pub dose_range: f32,
+    /// The fraction of the fission neutrons that are delayed.
+    pub delayed_neutron_fraction: f32,
+    /// The delay of the delayed neutrons, in nuclear seconds.
+    pub delayed_neutron_delay: f32,
+    /// The maximum activity.
+    pub max_activity: f32,
+    /// The dose accumulated per joule of ionizing radiation.
+    pub dose_per_joule: f32,
+    /// The maximum accumulated dose.
+    pub max_dose: f32,
+    /// The number of nuclides in the table (index 0 is the placeholder).
+    pub isotope_count: u32,
+}
+
+pub type NuclearConfig3Ffi = NuclearConfigFfi;
+
+/// A nuclide FFI mirror (2D and 3D).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IsotopeFfi {
+    /// The half-life in seconds; zero or less means stable.
+    pub half_life: f32,
+    /// The energy released per decay, in joules.
+    pub decay_energy: f32,
+    /// The fraction of the decay energy that leaves as ionizing radiation.
+    pub ionization_fraction: f32,
+    /// The nuclide produced by neutron capture.
+    pub daughter: u32,
+    /// The neutron absorption cross-section, in barns.
+    pub absorption_cross_section: f32,
+    /// The fission cross-section, in barns.
+    pub fission_cross_section: f32,
+    /// The neutrons released per fission.
+    pub neutron_yield: f32,
+    /// Whether the nuclide can fission. 1-byte bool.
+    pub is_fissile: bool,
+}
+
+/// The per-body nuclear state FFI mirror (2D and 3D).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NuclearBodyFfi {
+    /// The nuclide index; zero means "no nuclide".
+    pub isotope: u32,
+    /// The activity, in decays per second.
+    pub activity: f32,
+    /// The remaining fissile fuel.
+    pub fuel: f32,
+    /// The free neutron population.
+    pub neutrons: f32,
+    /// The delayed neutron population.
+    pub delayed_neutrons: f32,
+    /// The accumulated ionizing dose.
+    pub dose: f32,
+}
+
+/// The maximum number of nuclides a world may carry.
+const MAX_NUCLIDES: usize = 4096;
+
+fn nuclear_from_ffi(c: &NuclearConfigFfi) -> Option<phieng_dynamics::nuclear::NuclearConfig> {
+    use phieng_dynamics::nuclear::NuclearConfig;
+    for v in [
+        c.time_scale,
+        c.fission_energy,
+        c.ambient_flux,
+        c.fission_rate,
+        c.fuel_per_fission,
+        c.neutron_range,
+        c.dose_range,
+        c.delayed_neutron_fraction,
+        c.delayed_neutron_delay,
+        c.max_activity,
+        c.dose_per_joule,
+        c.max_dose,
+    ] {
+        if !v.is_finite() {
+            return None;
+        }
+    }
+    if c.time_scale <= 0.0
+        || c.fission_energy < 0.0
+        || c.ambient_flux < 0.0
+        || c.fission_rate < 0.0
+        || c.fuel_per_fission < 0.0
+        || c.neutron_range < 0.0
+        || c.dose_range < 0.0
+        || c.delayed_neutron_fraction < 0.0
+        || c.delayed_neutron_fraction > 1.0
+        || c.delayed_neutron_delay < 0.0
+        || c.max_activity < 0.0
+        || c.dose_per_joule < 0.0
+        || c.max_dose < 0.0
+    {
+        return None;
+    }
+    if c.isotope_count as usize > MAX_NUCLIDES {
+        return None;
+    }
+    let mut isotopes = vec![phieng_dynamics::nuclear::Isotope::default(); c.isotope_count as usize];
+    if isotopes.is_empty() {
+        // The table always has the "no nuclide" placeholder at index 0.
+        isotopes.push(phieng_dynamics::nuclear::Isotope::default());
+    }
+    Some(NuclearConfig {
+        enabled: c.enabled,
+        isotopes,
+        time_scale: c.time_scale,
+        fission_energy: c.fission_energy,
+        ambient_flux: c.ambient_flux,
+        fission_rate: c.fission_rate,
+        fuel_per_fission: c.fuel_per_fission,
+        neutron_range: c.neutron_range,
+        dose_range: c.dose_range,
+        delayed_neutron_fraction: c.delayed_neutron_fraction,
+        delayed_neutron_delay: c.delayed_neutron_delay,
+        max_activity: c.max_activity,
+        dose_per_joule: c.dose_per_joule,
+        max_dose: c.max_dose,
+    })
+}
+
+fn nuclear_to_ffi(c: &phieng_dynamics::nuclear::NuclearConfig) -> NuclearConfigFfi {
+    NuclearConfigFfi {
+        enabled: c.enabled,
+        time_scale: c.time_scale,
+        fission_energy: c.fission_energy,
+        ambient_flux: c.ambient_flux,
+        fission_rate: c.fission_rate,
+        fuel_per_fission: c.fuel_per_fission,
+        neutron_range: c.neutron_range,
+        dose_range: c.dose_range,
+        delayed_neutron_fraction: c.delayed_neutron_fraction,
+        delayed_neutron_delay: c.delayed_neutron_delay,
+        max_activity: c.max_activity,
+        dose_per_joule: c.dose_per_joule,
+        max_dose: c.max_dose,
+        isotope_count: c.isotopes.len() as u32,
+    }
+}
+
+fn isotope_from_ffi(i: &IsotopeFfi) -> Option<phieng_dynamics::nuclear::Isotope> {
+    use phieng_dynamics::nuclear::Isotope;
+    for v in [
+        i.half_life,
+        i.decay_energy,
+        i.ionization_fraction,
+        i.absorption_cross_section,
+        i.fission_cross_section,
+        i.neutron_yield,
+    ] {
+        if !v.is_finite() {
+            return None;
+        }
+    }
+    if i.decay_energy < 0.0
+        || i.ionization_fraction < 0.0
+        || i.ionization_fraction > 1.0
+        || i.absorption_cross_section < 0.0
+        || i.fission_cross_section < 0.0
+        || i.neutron_yield < 0.0
+        || i.daughter as usize > u16::MAX as usize
+    {
+        return None;
+    }
+    Some(Isotope {
+        half_life: i.half_life,
+        decay_energy: i.decay_energy,
+        ionization_fraction: i.ionization_fraction,
+        daughter: i.daughter as u16,
+        absorption_cross_section: i.absorption_cross_section,
+        fission_cross_section: i.fission_cross_section,
+        neutron_yield: i.neutron_yield,
+        is_fissile: i.is_fissile,
+    })
+}
+
+fn nuclear_body_to_ffi(n: &phieng_dynamics::nuclear::NuclearState) -> NuclearBodyFfi {
+    NuclearBodyFfi {
+        isotope: n.isotope as u32,
+        activity: n.activity,
+        fuel: n.fuel,
+        neutrons: n.neutrons,
+        delayed_neutrons: n.delayed_neutrons,
+        dose: n.dose,
+    }
+}
+
+/// Set the 2D nuclear configuration.
+///
+/// The nuclide table is resized to `cfg->isotope_count`; the entries
+/// themselves are set with [`phieng_world_set_isotope`].
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `cfg` a valid pointer
+/// to a readable `NuclearConfigFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_nuclear_config(
+    world: *mut World2,
+    cfg: *const NuclearConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref = &*cfg;
+    let Some(parsed) = nuclear_from_ffi(cfg_ref) else {
+        return 0;
+    };
+    (*world).nuclear.config = parsed;
+    1
+}
+
+/// Get the 2D nuclear configuration.
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `out` a valid pointer
+/// to a writable `NuclearConfigFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_nuclear_config(
+    world: *const World2,
+    out: *mut NuclearConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = nuclear_to_ffi(&(*world).nuclear.config);
+    1
+}
+
+/// Set the 3D nuclear configuration.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `cfg` a valid pointer
+/// to a readable `NuclearConfig3Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_nuclear_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const NuclearConfig3Ffi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref = &*cfg;
+    let Some(parsed) = nuclear_from_ffi(cfg_ref) else {
+        return 0;
+    };
+    (*world).nuclear.config = parsed;
+    1
+}
+
+/// Get the 3D nuclear configuration.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `out` a valid pointer
+/// to a writable `NuclearConfig3Ffi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_nuclear_config(
+    world: *const phieng_dynamics::World3,
+    out: *mut NuclearConfig3Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    *out = nuclear_to_ffi(&(*world).nuclear.config);
+    1
+}
+
+/// Set one nuclide in the 2D table.
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `iso` a valid pointer to
+/// a readable `IsotopeFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_isotope(
+    world: *mut World2,
+    index: u32,
+    iso: *const IsotopeFfi,
+) -> i32 {
+    if world.is_null() || iso.is_null() {
+        return 0;
+    }
+    let iso_ref = &*iso;
+    let Some(parsed) = isotope_from_ffi(iso_ref) else {
+        return 0;
+    };
+    let table = &mut (*world).nuclear.config.isotopes;
+    let idx = index as usize;
+    if idx >= MAX_NUCLIDES {
+        return 0;
+    }
+    if idx >= table.len() {
+        table.resize(idx + 1, phieng_dynamics::nuclear::Isotope::default());
+    }
+    table[idx] = parsed;
+    1
+}
+
+/// Set one nuclide in the 3D table.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `iso` a valid pointer to
+/// a readable `IsotopeFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_isotope(
+    world: *mut phieng_dynamics::World3,
+    index: u32,
+    iso: *const IsotopeFfi,
+) -> i32 {
+    if world.is_null() || iso.is_null() {
+        return 0;
+    }
+    let iso_ref = &*iso;
+    let Some(parsed) = isotope_from_ffi(iso_ref) else {
+        return 0;
+    };
+    let table = &mut (*world).nuclear.config.isotopes;
+    let idx = index as usize;
+    if idx >= MAX_NUCLIDES {
+        return 0;
+    }
+    if idx >= table.len() {
+        table.resize(idx + 1, phieng_dynamics::nuclear::Isotope::default());
+    }
+    table[idx] = parsed;
+    1
+}
+
+/// Set the 2D per-body nuclear state.
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `state` a valid pointer
+/// to a readable `NuclearBodyFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_nuclear_state(
+    world: *mut World2,
+    body_id: u32,
+    state: *const NuclearBodyFfi,
+) -> i32 {
+    if world.is_null() || state.is_null() {
+        return 0;
+    }
+    let world_ref = &*world;
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let s = &*state;
+    for v in [s.activity, s.fuel, s.neutrons, s.delayed_neutrons, s.dose] {
+        if !v.is_finite() {
+            return 0;
+        }
+    }
+    let bodies = &mut (*world).bodies;
+    let body = &mut bodies[index];
+    body.nuclear.isotope = s.isotope as u16;
+    body.nuclear.activity = s.activity.max(0.0);
+    body.nuclear.fuel = s.fuel.max(0.0);
+    body.nuclear.neutrons = s.neutrons.max(0.0);
+    body.nuclear.delayed_neutrons = s.delayed_neutrons.max(0.0);
+    body.nuclear.dose = s.dose.max(0.0);
+    1
+}
+
+/// Get the 2D per-body nuclear state.
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `out` a valid pointer to
+/// a writable `NuclearBodyFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_nuclear_state(
+    world: *const World2,
+    body_id: u32,
+    out: *mut NuclearBodyFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = &*world;
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let bodies = &(*world).bodies;
+    *out = nuclear_body_to_ffi(&bodies[index].nuclear);
+    1
+}
+
+/// Set the 3D per-body nuclear state.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `state` a valid pointer
+/// to a readable `NuclearBodyFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_nuclear_state(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    state: *const NuclearBodyFfi,
+) -> i32 {
+    if world.is_null() || state.is_null() {
+        return 0;
+    }
+    let world_ref = &*world;
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let s = &*state;
+    for v in [s.activity, s.fuel, s.neutrons, s.delayed_neutrons, s.dose] {
+        if !v.is_finite() {
+            return 0;
+        }
+    }
+    let bodies = &mut (*world).bodies;
+    let body = &mut bodies[index];
+    body.nuclear.isotope = s.isotope as u16;
+    body.nuclear.activity = s.activity.max(0.0);
+    body.nuclear.fuel = s.fuel.max(0.0);
+    body.nuclear.neutrons = s.neutrons.max(0.0);
+    body.nuclear.delayed_neutrons = s.delayed_neutrons.max(0.0);
+    body.nuclear.dose = s.dose.max(0.0);
+    1
+}
+
+/// Get the 3D per-body nuclear state.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `out` a valid pointer to
+/// a writable `NuclearBodyFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_nuclear_state(
+    world: *const phieng_dynamics::World3,
+    body_id: u32,
+    out: *mut NuclearBodyFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = &*world;
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let bodies = &(*world).bodies;
+    *out = nuclear_body_to_ffi(&bodies[index].nuclear);
+    1
+}
+
 fn thermal2_to_ffi(c: &phieng_dynamics::ThermalConfig2D) -> ThermalConfig2Ffi {
     ThermalConfig2Ffi {
         enabled: c.enabled,
@@ -5004,6 +5466,131 @@ mod tests {
 
     fn add_joint_ffi(world: *mut World2, tag: u32, a: u32, b: u32, json: &str) -> i32 {
         unsafe { phieng_world_add_joint(world, tag, a, b, json.as_ptr(), json.len()) }
+    }
+
+    /// Y24: the nuclear config and the per-body state round-trip
+    /// through the FFI.
+    ///
+    /// Every field is checked, because a field-order or type-width
+    /// mismatch in the FFI structs would corrupt the values that follow
+    /// it.
+    #[test]
+    fn y24_nuclear_config_ffi_roundtrip() {
+        unsafe {
+            let mut world = World2::new();
+            let cfg = NuclearConfigFfi {
+                enabled: true,
+                time_scale: 3.0,
+                fission_energy: 2.5e-11,
+                ambient_flux: 0.75,
+                fission_rate: 2.0,
+                fuel_per_fission: 1e-5,
+                neutron_range: 4.5,
+                dose_range: 6.5,
+                delayed_neutron_fraction: 0.0125,
+                delayed_neutron_delay: 0.75,
+                max_activity: 1e20,
+                dose_per_joule: 2.5,
+                max_dose: 1e25,
+                isotope_count: 2,
+            };
+            assert_eq!(phieng_world_set_nuclear_config(&mut world, &cfg), 1);
+
+            let iso = IsotopeFfi {
+                half_life: 3600.0,
+                decay_energy: 1.5e-13,
+                ionization_fraction: 0.25,
+                daughter: 0,
+                absorption_cross_section: 3.0,
+                fission_cross_section: 4.0,
+                neutron_yield: 2.5,
+                is_fissile: false,
+            };
+            assert_eq!(phieng_world_set_isotope(&mut world, 1, &iso), 1);
+
+            let mut out = NuclearConfigFfi {
+                enabled: false,
+                time_scale: 0.0,
+                fission_energy: 0.0,
+                ambient_flux: 0.0,
+                fission_rate: 0.0,
+                fuel_per_fission: 0.0,
+                neutron_range: 0.0,
+                dose_range: 0.0,
+                delayed_neutron_fraction: 0.0,
+                delayed_neutron_delay: 0.0,
+                max_activity: 0.0,
+                dose_per_joule: 0.0,
+                max_dose: 0.0,
+                isotope_count: 0,
+            };
+            assert_eq!(phieng_world_get_nuclear_config(&world, &mut out), 1);
+            assert_eq!(out.time_scale.to_bits(), 3.0f32.to_bits());
+            assert_eq!(out.ambient_flux.to_bits(), 0.75f32.to_bits());
+            assert_eq!(out.neutron_range.to_bits(), 4.5f32.to_bits());
+            assert_eq!(out.dose_range.to_bits(), 6.5f32.to_bits());
+            assert_eq!(out.delayed_neutron_fraction.to_bits(), 0.0125f32.to_bits());
+            assert_eq!(out.isotope_count, 2);
+            assert!(out.enabled);
+
+            // The nuclide table round-trips.
+            assert_eq!(
+                world.nuclear.config.isotopes[1].half_life.to_bits(),
+                3600.0f32.to_bits()
+            );
+            assert_eq!(
+                world.nuclear.config.isotopes[1].neutron_yield.to_bits(),
+                2.5f32.to_bits()
+            );
+
+            // The per-body state round-trips.
+            // A circle body (shape tag 0).
+            let body = phieng_world_add_body(&mut world, 0.0, 0.0, 0, 0.5, 0.0, 1.0, 0, 0.4, 0.1);
+            assert!(body >= 0);
+            let state = NuclearBodyFfi {
+                isotope: 1,
+                activity: 12.5,
+                fuel: 0.75,
+                neutrons: 3.0,
+                delayed_neutrons: 2.0,
+                dose: 0.125,
+            };
+            assert_eq!(
+                phieng_world_set_body_nuclear_state(&mut world, body as u32, &state),
+                1
+            );
+            let mut body_out = NuclearBodyFfi {
+                isotope: 0,
+                activity: 0.0,
+                fuel: 0.0,
+                neutrons: 0.0,
+                delayed_neutrons: 0.0,
+                dose: 0.0,
+            };
+            assert_eq!(
+                phieng_world_get_body_nuclear_state(&world, body as u32, &mut body_out),
+                1
+            );
+            assert_eq!(body_out.isotope, 1);
+            assert_eq!(body_out.activity.to_bits(), 12.5f32.to_bits());
+            assert_eq!(body_out.fuel.to_bits(), 0.75f32.to_bits());
+            assert_eq!(body_out.dose.to_bits(), 0.125f32.to_bits());
+
+            // A null pointer or an unknown body is rejected, never a
+            // crash.
+            assert_eq!(
+                phieng_world_set_nuclear_config(std::ptr::null_mut(), &cfg),
+                0
+            );
+            assert_eq!(
+                phieng_world_get_nuclear_config(&world, std::ptr::null_mut()),
+                0
+            );
+            assert_eq!(
+                phieng_world_set_body_nuclear_state(&mut world, 9999, &state),
+                0
+            );
+        }
     }
 
     /// T25: the thermal config must round-trip through the FFI,

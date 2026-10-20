@@ -57,6 +57,13 @@ public class RigidBody2
     /// <c>RigidBody2::temperature</c>; default 293.15 K.
     /// </summary>
     public float Temperature { get; set; }
+
+    /// <summary>
+    /// The nuclear state (cold: the nuclear phase). The default nuclide
+    /// is "none", so a body takes no part in the nuclear phase until it
+    /// is given one.
+    /// </summary>
+    public NuclearState Nuclear { get; } = new();
     /// <summary>
     /// Thermal-expansion factor currently applied to this body's shape
     /// (1.0 = not expanded). Mirrors Rust

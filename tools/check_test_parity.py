@@ -63,6 +63,21 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               endpoint), a partial occluder attenuates it, a fully
               transparent one does not block, determinism plus parallel
               == serial, and a snapshot round-trip)
+    Y01-Y24  nuclear physics (mirrored both languages: a disabled
+              config is a no-op, the activity halves after a half-life,
+              decay heats the body, the temperature respects the thermal
+              clamps, the activity is clamped, the energy budget
+              balances, a stable nuclide never decays, a body without a
+              nuclide is untouched, a fission consumes fuel and releases
+              heat, a supercritical chain reaction grows while a
+              subcritical one dies out, delayed neutrons hold the
+              release back, the fuel never goes negative, the 3D mirror
+              decays too, determinism plus parallel == serial, a static
+              body does not heat up, the nuclide table is usable, the
+              decay constant is ln(2) over the half-life, the dose is
+              deposited in the nearby bodies and clamped, the nuclear
+              state round-trips through a snapshot, and the config and
+              the per-body state round-trip through the native FFI)
 """
 
 import re

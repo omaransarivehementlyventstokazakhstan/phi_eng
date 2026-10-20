@@ -12,6 +12,7 @@ pub mod joint;
 pub mod joint3;
 pub mod material;
 pub mod noise;
+pub mod nuclear;
 pub mod physics_config;
 pub mod pool;
 pub mod radiation;

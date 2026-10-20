@@ -101,6 +101,14 @@ public class World3
 
     /// <summary>Per-world thermal scratch (heat flux, cached areas).</summary>
     private readonly ThermalState2 _thermal = new();
+
+    /// <summary>
+    /// The nuclear simulation state (see <see cref="NuclearConfig"/>).
+    /// Disabled by default.
+    /// </summary>
+    public NuclearState2 Nuclear => _nuclear;
+
+    private readonly NuclearState2 _nuclear = new();
     private readonly List<(int, int)> _pairs = new();
     private readonly List<Vector3> _points = new();
     private readonly List<Vector3> _clipTmp = new();
@@ -439,8 +447,15 @@ public class World3
                 if (!body.IsSleeping) body.Integrate(dt);
         }
 
-        // 5c. Thermal transfer (conduction / radiation / convection),
-        // then 5d. Thermal expansion. The phase runs after integration
+        // 5c. Nuclear decay and fission (see World2.StepInner).
+        if (_nuclear.Config.IsActive())
+        {
+            NuclearIntegration.StepNuclear3(Bodies, _nuclear.Config, _nuclear.Scratch, dt);
+            NuclearIntegration.ApplyNuclearHeat3(Bodies, _nuclear.Scratch, _thermal.Config);
+        }
+
+        // 5d. Thermal transfer (conduction / radiation / convection),
+        // then 5e. Thermal expansion. The phase runs after integration
         // and before the sleep check, matching the Rust core. It does not
         // modify velocity, so it neither wakes sleeping bodies nor is
         // affected by sleep.

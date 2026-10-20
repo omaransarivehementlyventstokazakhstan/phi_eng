@@ -1258,4 +1258,151 @@ public sealed class PhiNativeWorld : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Set the 2D nuclear configuration and its nuclide table.
+    /// </summary>
+    /// <param name="config">The nuclear configuration.</param>
+    public unsafe void SetNuclearConfig(Dynamics.NuclearConfig config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.NuclearConfigFfi
+            {
+                Enabled = config.Enabled ? (byte)1 : (byte)0,
+                TimeScale = config.TimeScale,
+                FissionEnergy = config.FissionEnergy,
+                AmbientFlux = config.AmbientFlux,
+                FissionRate = config.FissionRate,
+                FuelPerFission = config.FuelPerFission,
+                NeutronRange = config.NeutronRange,
+                DoseRange = config.DoseRange,
+                DelayedNeutronFraction = config.DelayedNeutronFraction,
+                DelayedNeutronDelay = config.DelayedNeutronDelay,
+                MaxActivity = config.MaxActivity,
+                DosePerJoule = config.DosePerJoule,
+                MaxDose = config.MaxDose,
+                IsotopeCount = (uint)config.Isotopes.Count,
+            };
+            int ok = NativeMethods.phieng_world_set_nuclear_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclear config (check ranges).");
+            }
+            for (int i = 0; i < config.Isotopes.Count; i++)
+            {
+                SetIsotope((uint)i, config.Isotopes[i]);
+            }
+        }
+    }
+
+    /// <summary>Get the 2D nuclear configuration.</summary>
+    public unsafe Dynamics.NuclearConfig GetNuclearConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.NuclearConfigFfi();
+            int ok = NativeMethods.phieng_world_get_nuclear_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclear config request.");
+            }
+            return new Dynamics.NuclearConfig
+            {
+                Enabled = ffi.Enabled != 0,
+                TimeScale = ffi.TimeScale,
+                FissionEnergy = ffi.FissionEnergy,
+                AmbientFlux = ffi.AmbientFlux,
+                FissionRate = ffi.FissionRate,
+                FuelPerFission = ffi.FuelPerFission,
+                NeutronRange = ffi.NeutronRange,
+                DoseRange = ffi.DoseRange,
+                DelayedNeutronFraction = ffi.DelayedNeutronFraction,
+                DelayedNeutronDelay = ffi.DelayedNeutronDelay,
+                MaxActivity = ffi.MaxActivity,
+                DosePerJoule = ffi.DosePerJoule,
+                MaxDose = ffi.MaxDose,
+            };
+        }
+    }
+
+    /// <summary>Set one nuclide in the 2D table.</summary>
+    /// <param name="index">The nuclide index (0 is the placeholder).</param>
+    /// <param name="isotope">The nuclide.</param>
+    public unsafe void SetIsotope(uint index, Dynamics.Isotope isotope)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.IsotopeFfi
+            {
+                HalfLife = isotope.HalfLife,
+                DecayEnergy = isotope.DecayEnergy,
+                IonizationFraction = isotope.IonizationFraction,
+                Daughter = isotope.Daughter,
+                AbsorptionCrossSection = isotope.AbsorptionCrossSection,
+                FissionCrossSection = isotope.FissionCrossSection,
+                NeutronYield = isotope.NeutronYield,
+                IsFissile = isotope.IsFissile ? (byte)1 : (byte)0,
+            };
+            int ok = NativeMethods.phieng_world_set_isotope(_handle, index, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclide (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Set the 2D per-body nuclear state.</summary>
+    /// <param name="bodyId">The body id.</param>
+    /// <param name="state">The nuclear state.</param>
+    public unsafe void SetBodyNuclearState(uint bodyId, Dynamics.NuclearState state)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.NuclearBodyFfi
+            {
+                Isotope = state.Isotope,
+                Activity = state.Activity,
+                Fuel = state.Fuel,
+                Neutrons = state.Neutrons,
+                DelayedNeutrons = state.DelayedNeutrons,
+                Dose = state.Dose,
+            };
+            int ok = NativeMethods.phieng_world_set_body_nuclear_state(_handle, bodyId, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclear state (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Get the 2D per-body nuclear state.</summary>
+    /// <param name="bodyId">The body id.</param>
+    public unsafe Dynamics.NuclearState GetBodyNuclearState(uint bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.NuclearBodyFfi();
+            int ok = NativeMethods.phieng_world_get_body_nuclear_state(_handle, bodyId, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclear state request.");
+            }
+            return new Dynamics.NuclearState
+            {
+                Isotope = (ushort)ffi.Isotope,
+                Activity = ffi.Activity,
+                Fuel = ffi.Fuel,
+                Neutrons = ffi.Neutrons,
+                DelayedNeutrons = ffi.DelayedNeutrons,
+                Dose = ffi.Dose,
+            };
+        }
+    }
+
 }

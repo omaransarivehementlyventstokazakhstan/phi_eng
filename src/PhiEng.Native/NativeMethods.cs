@@ -274,6 +274,129 @@ public float GroundTemperature;
 public float OccluderTransmittance;
     }
 
+    /// <summary>
+    /// Nuclear config FFI struct (2D). Mirrors Rust <c>NuclearConfigFfi</c> —
+    /// never reorder. Bool fields are <c>byte</c> (0/1) to match Rust's
+    /// 1-byte <c>bool</c>.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct NuclearConfigFfi
+    {
+        public byte Enabled;
+        public float TimeScale;
+        public float FissionEnergy;
+        public float AmbientFlux;
+        public float FissionRate;
+        public float FuelPerFission;
+        public float NeutronRange;
+        public float DoseRange;
+        public float DelayedNeutronFraction;
+        public float DelayedNeutronDelay;
+        public float MaxActivity;
+        public float DosePerJoule;
+        public float MaxDose;
+        public uint IsotopeCount;
+    }
+
+    /// <summary>
+    /// A nuclide FFI struct (2D and 3D). Mirrors Rust <c>IsotopeFfi</c>.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct IsotopeFfi
+    {
+        public float HalfLife;
+        public float DecayEnergy;
+        public float IonizationFraction;
+        public uint Daughter;
+        public float AbsorptionCrossSection;
+        public float FissionCrossSection;
+        public float NeutronYield;
+        public byte IsFissile;
+    }
+
+    /// <summary>
+    /// The per-body nuclear state FFI struct (2D and 3D). Mirrors Rust
+    /// <c>NuclearBodyFfi</c>.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct NuclearBodyFfi
+    {
+        public uint Isotope;
+        public float Activity;
+        public float Fuel;
+        public float Neutrons;
+        public float DelayedNeutrons;
+        public float Dose;
+    }
+
+    // ---- Nuclear (mirrors the phieng_world_*_nuclear_* functions in ffi.rs) ----
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_nuclear_config(
+        IntPtr world,
+        NuclearConfigFfi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_nuclear_config(
+        IntPtr world,
+        NuclearConfigFfi* @out);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_nuclear_config(
+        IntPtr world,
+        NuclearConfigFfi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_nuclear_config(
+        IntPtr world,
+        NuclearConfigFfi* @out);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_isotope(
+        IntPtr world,
+        uint index,
+        IsotopeFfi* iso);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_isotope(
+        IntPtr world,
+        uint index,
+        IsotopeFfi* iso);
+
+    /// <returns>1 on success, 0 for null world/struct or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_body_nuclear_state(
+        IntPtr world,
+        uint bodyId,
+        NuclearBodyFfi* state);
+
+    /// <returns>1 on success, 0 for null world/out or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_nuclear_state(
+        IntPtr world,
+        uint bodyId,
+        NuclearBodyFfi* @out);
+
+    /// <returns>1 on success, 0 for null world/struct or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_body_nuclear_state(
+        IntPtr world,
+        uint bodyId,
+        NuclearBodyFfi* state);
+
+    /// <returns>1 on success, 0 for null world/out or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_nuclear_state(
+        IntPtr world,
+        uint bodyId,
+        NuclearBodyFfi* @out);
+
     /// <summary>SPH fluid config FFI struct (3D). Mirrors Rust <c>FluidConfig3Ffi</c>.</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct FluidConfig3Ffi

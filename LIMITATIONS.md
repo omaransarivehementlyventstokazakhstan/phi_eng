@@ -13,7 +13,44 @@ Q01–Q05 solver quality, T01–T24 thermal, B01–B06 broadphase tiers,
 K31–K44 3D joints,
 H01–H05 collision tiers, R01–R03 deterministic trigonometry).
 
-## Cross-platform determinism: the rigid core only (R01–R03)
+## The nuclear model is game-scale, not reactor-scale (Y01–Y24)
+
+The nuclear subsystem is a **rate-based** model, not a transport solve:
+
+- **Neutrons travel by a nearest-neighbour spread**, not by straight-line
+  transport. A body's free neutrons are shared equally among the
+  bodies within `neutron_range` (the share is uniform among the
+  neighbours). Real neutron transport would need per-neutron ray casting
+  against the broadphase — the same machinery the CCD tier uses — and a
+  scattering model. The diffusion approximation reproduces the
+  *qualitative* behaviour (a chain reaction grows above the critical
+  mass, dies out below it) and not the quantitative one.
+- **Fission is a rate, not a stochastic event.** The fission rate is
+  `flux * cross_section * fuel * rate`, so it is smooth in time. Real
+  fission is Poisson-distributed. The consequence is that the engine
+  cannot express "this one lump of fuel happened to fission now", and
+  a chain reaction never shows the statistical jitter of a real one.
+  Where randomness is wanted, the caller can drive it from the
+  deterministic counter-based hash the ambient turbulence uses.
+- **The nuclide table is flat.** A nuclide has one daughter, so a decay
+  chain is a chain, not a tree: branching ratios (the fraction of
+  decays that produce each daughter) are not modelled, and the
+  activation path is a single `daughter` field.
+- **There is no delayed-neutron *precursor* chain.** The delayed
+  fraction is modelled as a single exponential leak with one delay
+  time, not as the six precursor groups a real reactor has. The
+  qualitative effect (prompt-critical versus delayed-critical) is
+  captured; the timescales are not.
+- **Dose is a scalar accumulator**, not a spatial field: it records
+  how much ionizing energy a body received, with an inverse-square
+  weight, and stops there. There is no organ dose, no dose rate, and
+  no biological effect beyond whatever the game applies to the number.
+- **The per-body state stores the nuclide *index***, so reordering the
+  table changes what a saved body means. The table and the state
+  travel in the same snapshot block, so a file round-trips correctly,
+  but two snapshots with different tables are not comparable.
+
+## Cross-platform determinism: the rigid core only (R01–R07)
 
 The **rigid-body** core is platform-independent: the same inputs and
 the same number of steps give the same bits on Linux, Windows and macOS,

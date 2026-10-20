@@ -103,6 +103,12 @@ public class RigidBody3
     /// <c>RigidBody3::temperature</c>; default 293.15 K.
     /// </summary>
     public float Temperature { get; set; }
+
+    /// <summary>
+    /// The nuclear state (cold: the nuclear phase). See
+    /// <see cref="RigidBody2.Nuclear"/>.
+    /// </summary>
+    public NuclearState Nuclear { get; } = new();
     /// <summary>
     /// Thermal-expansion factor currently applied to this body's shape
     /// (1.0 = not expanded). See <see cref="RigidBody2.ExpansionScale"/>.

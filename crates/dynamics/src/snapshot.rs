@@ -56,7 +56,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 11;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 12;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -77,6 +77,10 @@ const SNAPSHOT_SCHEMA_THERMAL_EXTRAS: u32 = 10;
 /// the older blocks preserves byte-for-byte compatibility with every
 /// earlier payload.
 const SNAPSHOT_SCHEMA_RADIATION_EXTRAS: u32 = 11;
+/// Schema v12: the nuclear block (the configuration, the nuclide table
+/// and the per-body nuclear state). Its own block, so every earlier
+/// payload still decodes.
+const SNAPSHOT_SCHEMA_NUCLEAR: u32 = 12;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -274,6 +278,9 @@ struct Body2Dto {
     /// v10; default 1.0, elided).
     #[serde(default = "default_expansion_scale", skip_serializing_if = "is_one")]
     expansion_scale: f32,
+    /// Nuclear state (schema v12).
+    #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
+    nuclear: NuclearBodyDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +311,9 @@ struct Body3Dto {
     /// See `Body2Dto::expansion_scale`.
     #[serde(default = "default_expansion_scale", skip_serializing_if = "is_one")]
     expansion_scale: f32,
+    /// Nuclear state (schema v12). See `Body2Dto::nuclear`.
+    #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
+    nuclear: NuclearBodyDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -646,6 +656,94 @@ fn is_false(v: &bool) -> bool {
 /// `skip_serializing_if` companion for flags defaulting to true.
 fn is_true(v: &bool) -> bool {
     *v
+}
+
+/// The default nuclear time scale (nuclear seconds per sim second).
+fn default_nuclear_time_scale() -> f32 {
+    1.0
+}
+fn is_default_nuclear_time_scale(v: &f32) -> bool {
+    *v == default_nuclear_time_scale()
+}
+
+/// The default energy released per fission (200 MeV in joules).
+fn default_nuclear_fission_energy() -> f32 {
+    3.204e-11
+}
+fn is_default_nuclear_fission_energy(v: &f32) -> bool {
+    *v == default_nuclear_fission_energy()
+}
+
+/// The default fission rate constant.
+fn default_nuclear_fission_rate() -> f32 {
+    1.0
+}
+fn is_default_nuclear_fission_rate(v: &f32) -> bool {
+    *v == default_nuclear_fission_rate()
+}
+
+/// The default fuel consumed per fission.
+fn default_nuclear_fuel_per_fission() -> f32 {
+    1e-6
+}
+fn is_default_nuclear_fuel_per_fission(v: &f32) -> bool {
+    *v == default_nuclear_fuel_per_fission()
+}
+
+/// The default neutron sharing range.
+fn default_nuclear_neutron_range() -> f32 {
+    1.0
+}
+fn is_default_nuclear_neutron_range(v: &f32) -> bool {
+    *v == default_nuclear_neutron_range()
+}
+
+/// The default radiation deposition range.
+fn default_nuclear_dose_range() -> f32 {
+    1.0
+}
+fn is_default_nuclear_dose_range(v: &f32) -> bool {
+    *v == default_nuclear_dose_range()
+}
+
+/// The default delayed-neutron fraction.
+fn default_nuclear_delayed_fraction() -> f32 {
+    0.006
+}
+fn is_default_nuclear_delayed_fraction(v: &f32) -> bool {
+    *v == default_nuclear_delayed_fraction()
+}
+
+/// The default delayed-neutron delay, in nuclear seconds.
+fn default_nuclear_delayed_delay() -> f32 {
+    0.5
+}
+fn is_default_nuclear_delayed_delay(v: &f32) -> bool {
+    *v == default_nuclear_delayed_delay()
+}
+
+/// The default maximum activity.
+fn default_nuclear_max_activity() -> f32 {
+    1e30
+}
+fn is_default_nuclear_max_activity(v: &f32) -> bool {
+    *v == default_nuclear_max_activity()
+}
+
+/// The default dose per joule of ionizing radiation.
+fn default_nuclear_dose_per_joule() -> f32 {
+    1.0
+}
+fn is_default_nuclear_dose_per_joule(v: &f32) -> bool {
+    *v == default_nuclear_dose_per_joule()
+}
+
+/// The default maximum accumulated dose.
+fn default_nuclear_max_dose() -> f32 {
+    1e30
+}
+fn is_default_nuclear_max_dose(v: &f32) -> bool {
+    *v == default_nuclear_max_dose()
 }
 
 /// Default adaptive-resolution split ratio.
@@ -1147,6 +1245,335 @@ impl Default for RadiationExtrasDto {
     }
 }
 
+/// Schema v12 nuclear DTOs.
+///
+/// The nuclide table and the per-body nuclear state live in their own
+/// block so that every earlier payload still decodes.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NuclearIsotopeDto {
+    /// The half-life in seconds; zero or less means stable.
+    #[serde(default)]
+    pub half_life: f32,
+    /// The energy released per decay, in joules.
+    #[serde(default)]
+    pub decay_energy: f32,
+    /// The fraction of the decay energy that leaves as ionizing radiation.
+    #[serde(default)]
+    pub ionization_fraction: f32,
+    /// The nuclide produced by neutron capture; zero means unchanged.
+    #[serde(default)]
+    pub daughter: u16,
+    /// The neutron absorption cross-section, in barns.
+    #[serde(default)]
+    pub absorption_cross_section: f32,
+    /// The fission cross-section, in barns.
+    #[serde(default)]
+    pub fission_cross_section: f32,
+    /// The neutrons released per fission.
+    #[serde(default)]
+    pub neutron_yield: f32,
+    /// Whether the nuclide can fission.
+    #[serde(default)]
+    pub is_fissile: bool,
+}
+
+impl Default for NuclearIsotopeDto {
+    fn default() -> Self {
+        let d = super::nuclear::Isotope::default();
+        Self {
+            half_life: d.half_life,
+            decay_energy: d.decay_energy,
+            ionization_fraction: d.ionization_fraction,
+            daughter: d.daughter,
+            absorption_cross_section: d.absorption_cross_section,
+            fission_cross_section: d.fission_cross_section,
+            neutron_yield: d.neutron_yield,
+            is_fissile: d.is_fissile,
+        }
+    }
+}
+
+/// Schema v12 nuclear configuration DTO.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NuclearConfigDto {
+    /// Master switch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    /// Nuclear seconds per simulation second.
+    #[serde(
+        default = "default_nuclear_time_scale",
+        skip_serializing_if = "is_default_nuclear_time_scale"
+    )]
+    pub time_scale: f32,
+    /// The energy released per fission, in joules.
+    #[serde(
+        default = "default_nuclear_fission_energy",
+        skip_serializing_if = "is_default_nuclear_fission_energy"
+    )]
+    pub fission_energy: f32,
+    /// The background neutron flux.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ambient_flux: f32,
+    /// The fission rate constant.
+    #[serde(
+        default = "default_nuclear_fission_rate",
+        skip_serializing_if = "is_default_nuclear_fission_rate"
+    )]
+    pub fission_rate: f32,
+    /// The fuel consumed per fission.
+    #[serde(
+        default = "default_nuclear_fuel_per_fission",
+        skip_serializing_if = "is_default_nuclear_fuel_per_fission"
+    )]
+    pub fuel_per_fission: f32,
+    /// The range within which free neutrons are shared.
+    #[serde(
+        default = "default_nuclear_neutron_range",
+        skip_serializing_if = "is_default_nuclear_neutron_range"
+    )]
+    pub neutron_range: f32,
+    /// The range within which ionizing radiation is deposited.
+    #[serde(
+        default = "default_nuclear_dose_range",
+        skip_serializing_if = "is_default_nuclear_dose_range"
+    )]
+    pub dose_range: f32,
+    /// The fraction of the fission neutrons that are delayed.
+    #[serde(
+        default = "default_nuclear_delayed_fraction",
+        skip_serializing_if = "is_default_nuclear_delayed_fraction"
+    )]
+    pub delayed_neutron_fraction: f32,
+    /// The delay of the delayed neutrons, in nuclear seconds.
+    #[serde(
+        default = "default_nuclear_delayed_delay",
+        skip_serializing_if = "is_default_nuclear_delayed_delay"
+    )]
+    pub delayed_neutron_delay: f32,
+    /// The maximum activity.
+    #[serde(
+        default = "default_nuclear_max_activity",
+        skip_serializing_if = "is_default_nuclear_max_activity"
+    )]
+    pub max_activity: f32,
+    /// The dose accumulated per joule of ionizing radiation.
+    #[serde(
+        default = "default_nuclear_dose_per_joule",
+        skip_serializing_if = "is_default_nuclear_dose_per_joule"
+    )]
+    pub dose_per_joule: f32,
+    /// The maximum accumulated dose.
+    #[serde(
+        default = "default_nuclear_max_dose",
+        skip_serializing_if = "is_default_nuclear_max_dose"
+    )]
+    pub max_dose: f32,
+    /// The nuclide table. Index zero is the "no nuclide" placeholder.
+    #[serde(default)]
+    pub isotopes: Vec<NuclearIsotopeDto>,
+}
+
+impl NuclearConfigDto {
+    /// True when the configuration still holds its default value.
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.time_scale == d.time_scale
+            && self.fission_energy == d.fission_energy
+            && self.ambient_flux == d.ambient_flux
+            && self.fission_rate == d.fission_rate
+            && self.fuel_per_fission == d.fuel_per_fission
+            && self.neutron_range == d.neutron_range
+            && self.dose_range == d.dose_range
+            && self.delayed_neutron_fraction == d.delayed_neutron_fraction
+            && self.delayed_neutron_delay == d.delayed_neutron_delay
+            && self.max_activity == d.max_activity
+            && self.dose_per_joule == d.dose_per_joule
+            && self.max_dose == d.max_dose
+            && self.isotopes.len() == d.isotopes.len()
+            && self
+                .isotopes
+                .iter()
+                .zip(d.isotopes.iter())
+                .all(|(a, b)| a == b)
+    }
+}
+
+impl Default for NuclearConfigDto {
+    fn default() -> Self {
+        let c = super::nuclear::NuclearConfig::default();
+        Self {
+            enabled: c.enabled,
+            time_scale: c.time_scale,
+            fission_energy: c.fission_energy,
+            ambient_flux: c.ambient_flux,
+            fission_rate: c.fission_rate,
+            fuel_per_fission: c.fuel_per_fission,
+            neutron_range: c.neutron_range,
+            dose_range: c.dose_range,
+            delayed_neutron_fraction: c.delayed_neutron_fraction,
+            delayed_neutron_delay: c.delayed_neutron_delay,
+            max_activity: c.max_activity,
+            dose_per_joule: c.dose_per_joule,
+            max_dose: c.max_dose,
+            isotopes: c
+                .isotopes
+                .iter()
+                .map(|i| NuclearIsotopeDto {
+                    half_life: i.half_life,
+                    decay_energy: i.decay_energy,
+                    ionization_fraction: i.ionization_fraction,
+                    daughter: i.daughter,
+                    absorption_cross_section: i.absorption_cross_section,
+                    fission_cross_section: i.fission_cross_section,
+                    neutron_yield: i.neutron_yield,
+                    is_fissile: i.is_fissile,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Schema v12 per-body nuclear state DTO.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NuclearBodyDto {
+    /// The nuclide index; zero means "no nuclide".
+    #[serde(default)]
+    pub isotope: u16,
+    /// The activity, in decays per second.
+    #[serde(default)]
+    pub activity: f32,
+    /// The remaining fissible fuel.
+    #[serde(default)]
+    pub fuel: f32,
+    /// The free neutron population.
+    #[serde(default)]
+    pub neutrons: f32,
+    /// The delayed neutron population.
+    #[serde(default)]
+    pub delayed_neutrons: f32,
+    /// The accumulated ionizing dose.
+    #[serde(default)]
+    pub dose: f32,
+}
+
+impl NuclearBodyDto {
+    /// True when every field still holds its default value.
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.isotope == d.isotope
+            && self.activity == d.activity
+            && self.fuel == d.fuel
+            && self.neutrons == d.neutrons
+            && self.delayed_neutrons == d.delayed_neutrons
+            && self.dose == d.dose
+    }
+}
+
+impl Default for NuclearBodyDto {
+    fn default() -> Self {
+        let d = super::nuclear::NuclearState::default();
+        Self {
+            isotope: d.isotope,
+            activity: d.activity,
+            fuel: d.fuel,
+            neutrons: d.neutrons,
+            delayed_neutrons: d.delayed_neutrons,
+            dose: d.dose,
+        }
+    }
+}
+
+/// Build the schema v12 nuclear DTO from an engine nuclear config.
+fn nuclear_config_dto(c: &super::nuclear::NuclearConfig) -> NuclearConfigDto {
+    NuclearConfigDto {
+        enabled: c.enabled,
+        time_scale: c.time_scale,
+        fission_energy: c.fission_energy,
+        ambient_flux: c.ambient_flux,
+        fission_rate: c.fission_rate,
+        fuel_per_fission: c.fuel_per_fission,
+        neutron_range: c.neutron_range,
+        dose_range: c.dose_range,
+        delayed_neutron_fraction: c.delayed_neutron_fraction,
+        delayed_neutron_delay: c.delayed_neutron_delay,
+        max_activity: c.max_activity,
+        dose_per_joule: c.dose_per_joule,
+        max_dose: c.max_dose,
+        isotopes: c
+            .isotopes
+            .iter()
+            .map(|i| NuclearIsotopeDto {
+                half_life: i.half_life,
+                decay_energy: i.decay_energy,
+                ionization_fraction: i.ionization_fraction,
+                daughter: i.daughter,
+                absorption_cross_section: i.absorption_cross_section,
+                fission_cross_section: i.fission_cross_section,
+                neutron_yield: i.neutron_yield,
+                is_fissile: i.is_fissile,
+            })
+            .collect(),
+    }
+}
+
+/// Rebuild an engine nuclear config from the schema v12 DTO.
+fn nuclear_config_from_dto(c: &NuclearConfigDto) -> super::nuclear::NuclearConfig {
+    super::nuclear::NuclearConfig {
+        enabled: c.enabled,
+        isotopes: c
+            .isotopes
+            .iter()
+            .map(|i| super::nuclear::Isotope {
+                half_life: i.half_life,
+                decay_energy: i.decay_energy,
+                ionization_fraction: i.ionization_fraction,
+                daughter: i.daughter,
+                absorption_cross_section: i.absorption_cross_section,
+                fission_cross_section: i.fission_cross_section,
+                neutron_yield: i.neutron_yield,
+                is_fissile: i.is_fissile,
+            })
+            .collect(),
+        time_scale: c.time_scale,
+        fission_energy: c.fission_energy,
+        ambient_flux: c.ambient_flux,
+        fission_rate: c.fission_rate,
+        fuel_per_fission: c.fuel_per_fission,
+        neutron_range: c.neutron_range,
+        dose_range: c.dose_range,
+        delayed_neutron_fraction: c.delayed_neutron_fraction,
+        delayed_neutron_delay: c.delayed_neutron_delay,
+        max_activity: c.max_activity,
+        dose_per_joule: c.dose_per_joule,
+        max_dose: c.max_dose,
+    }
+}
+
+/// Build the schema v12 per-body nuclear DTO.
+fn nuclear_body_dto(n: &super::nuclear::NuclearState) -> NuclearBodyDto {
+    NuclearBodyDto {
+        isotope: n.isotope,
+        activity: n.activity,
+        fuel: n.fuel,
+        neutrons: n.neutrons,
+        delayed_neutrons: n.delayed_neutrons,
+        dose: n.dose,
+    }
+}
+
+/// Rebuild the per-body nuclear state.
+fn nuclear_body_from_dto(d: &NuclearBodyDto) -> super::nuclear::NuclearState {
+    super::nuclear::NuclearState {
+        isotope: d.isotope,
+        activity: d.activity,
+        fuel: d.fuel,
+        neutrons: d.neutrons,
+        delayed_neutrons: d.delayed_neutrons,
+        dose: d.dose,
+    }
+}
+
 /// Broad-phase backend tag used by schema-everything worlds (the default
 /// grid). Tag values are part of the schema: 0 brute force, 1 spatial
 /// hash, 2 dynamic tree, 3 hybrid — matching
@@ -1561,6 +1988,9 @@ struct World2Dto {
     thermal_extras: ThermalExtrasDto,
     #[serde(default, skip_serializing_if = "RadiationExtrasDto::is_default")]
     radiation_extras: RadiationExtrasDto,
+    /// Nuclear configuration and nuclide table (schema v12).
+    #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
+    nuclear: NuclearConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1668,6 +2098,9 @@ struct World3Dto {
     thermal_extras: ThermalExtrasDto,
     #[serde(default, skip_serializing_if = "RadiationExtrasDto::is_default")]
     radiation_extras: RadiationExtrasDto,
+    /// Nuclear configuration and nuclide table (schema v12).
+    #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
+    nuclear: NuclearConfigDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2193,6 +2626,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         ambient_scale: b.ambient_scale,
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
+        nuclear: nuclear_body_dto(&b.nuclear),
     }
 }
 
@@ -2214,6 +2648,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         ambient_scale: b.ambient_scale,
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
+        nuclear: nuclear_body_dto(&b.nuclear),
     }
 }
 
@@ -2385,11 +2820,19 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.thermal.config.sky_temperature != 0.0
         || w.thermal.config.ground_temperature != 0.0
         || w.thermal.config.occluder_transmittance != 0.0;
+    // Schema v12: the nuclear configuration, the nuclide table and the
+    // per-body nuclear state need the v12 block, or they would be
+    // silently dropped on save.
+    let has_nuclear = w.nuclear.config != super::nuclear::NuclearConfig::default()
+        || w.bodies
+            .iter()
+            .any(|b| b.nuclear != super::nuclear::NuclearState::default());
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
         || has_thermal_extras
         || has_radiation_extras
+        || has_nuclear
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -2414,6 +2857,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         thermal: thermal_config_dto(&w.thermal.config),
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
+        nuclear: nuclear_config_dto(&w.nuclear.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -2608,11 +3052,19 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.thermal.config.sky_temperature != 0.0
         || w.thermal.config.ground_temperature != 0.0
         || w.thermal.config.occluder_transmittance != 0.0;
+    // Schema v12: the nuclear configuration, the nuclide table and the
+    // per-body nuclear state need the v12 block, or they would be
+    // silently dropped on save.
+    let has_nuclear = w.nuclear.config != super::nuclear::NuclearConfig::default()
+        || w.bodies
+            .iter()
+            .any(|b| b.nuclear != super::nuclear::NuclearState::default());
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
         || has_thermal_extras
         || has_radiation_extras
+        || has_nuclear
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -2637,6 +3089,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         thermal: thermal_config_dto(&w.thermal.config),
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
+        nuclear: nuclear_config_dto(&w.nuclear.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -3032,6 +3485,8 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     } else {
         default_expansion_scale()
     };
+    // The nuclear state (schema v12).
+    body.nuclear = nuclear_body_from_dto(&b.nuclear);
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -3101,6 +3556,8 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     } else {
         default_expansion_scale()
     };
+    // The nuclear state (schema v12).
+    body.nuclear = nuclear_body_from_dto(&b.nuclear);
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -3627,6 +4084,9 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
         w.thermal.config =
             thermal_config_from_dto(&dto.thermal, &dto.thermal_extras, &dto.radiation_extras);
     }
+    // The nuclear block: a default payload carries the default
+    // configuration, so applying it unconditionally is equivalent.
+    w.nuclear.config = nuclear_config_from_dto(&dto.nuclear);
     Ok(w)
 }
 
@@ -3690,6 +4150,9 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
         w.thermal.config =
             thermal_config_from_dto(&dto.thermal, &dto.thermal_extras, &dto.radiation_extras);
     }
+    // The nuclear block: a default payload carries the default
+    // configuration, so applying it unconditionally is equivalent.
+    w.nuclear.config = nuclear_config_from_dto(&dto.nuclear);
     Ok(w)
 }
 
@@ -4271,6 +4734,34 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.radiation_extras.ground_temperature);
         write_f32(&mut p, dto.radiation_extras.occluder_transmittance);
     }
+    // Schema v12: the nuclear configuration and the nuclide table (own
+    // block, so every earlier payload still decodes).
+    if dto.schema >= SNAPSHOT_SCHEMA_NUCLEAR {
+        write_u8(&mut p, dto.nuclear.enabled as u8);
+        write_f32(&mut p, dto.nuclear.time_scale);
+        write_f32(&mut p, dto.nuclear.fission_energy);
+        write_f32(&mut p, dto.nuclear.ambient_flux);
+        write_f32(&mut p, dto.nuclear.fission_rate);
+        write_f32(&mut p, dto.nuclear.fuel_per_fission);
+        write_f32(&mut p, dto.nuclear.neutron_range);
+        write_f32(&mut p, dto.nuclear.dose_range);
+        write_f32(&mut p, dto.nuclear.delayed_neutron_fraction);
+        write_f32(&mut p, dto.nuclear.delayed_neutron_delay);
+        write_f32(&mut p, dto.nuclear.max_activity);
+        write_f32(&mut p, dto.nuclear.dose_per_joule);
+        write_f32(&mut p, dto.nuclear.max_dose);
+        write_u32(&mut p, dto.nuclear.isotopes.len() as u32);
+        for iso in &dto.nuclear.isotopes {
+            write_f32(&mut p, iso.half_life);
+            write_f32(&mut p, iso.decay_energy);
+            write_f32(&mut p, iso.ionization_fraction);
+            write_u32(&mut p, iso.daughter as u32);
+            write_f32(&mut p, iso.absorption_cross_section);
+            write_f32(&mut p, iso.fission_cross_section);
+            write_f32(&mut p, iso.neutron_yield);
+            write_u8(&mut p, iso.is_fissile as u8);
+        }
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_f32(&mut p, dto.cell_size);
@@ -4314,6 +4805,14 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         // Schema v10: per-body expansion factor.
         if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
             write_f32(&mut p, b.expansion_scale);
+        }
+        if dto.schema >= SNAPSHOT_SCHEMA_NUCLEAR {
+            write_u32(&mut p, b.nuclear.isotope as u32);
+            write_f32(&mut p, b.nuclear.activity);
+            write_f32(&mut p, b.nuclear.fuel);
+            write_f32(&mut p, b.nuclear.neutrons);
+            write_f32(&mut p, b.nuclear.delayed_neutrons);
+            write_f32(&mut p, b.nuclear.dose);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -5370,6 +5869,58 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         } else {
             RadiationExtrasDto::default()
         },
+        // Schema v12 payloads carry the nuclear configuration and the
+        // nuclide table.
+        nuclear: if version >= SNAPSHOT_SCHEMA_NUCLEAR {
+            let enabled = r.read_u8()? != 0;
+            let time_scale = r.read_f32()?;
+            let fission_energy = r.read_f32()?;
+            let ambient_flux = r.read_f32()?;
+            let fission_rate = r.read_f32()?;
+            let fuel_per_fission = r.read_f32()?;
+            let neutron_range = r.read_f32()?;
+            let dose_range = r.read_f32()?;
+            let delayed_neutron_fraction = r.read_f32()?;
+            let delayed_neutron_delay = r.read_f32()?;
+            let max_activity = r.read_f32()?;
+            let dose_per_joule = r.read_f32()?;
+            let max_dose = r.read_f32()?;
+            let count = r.read_u32()?;
+            if count > 4096 {
+                return Err(SnapshotError::Parse("nuclide table too long".into()));
+            }
+            let mut isotopes = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                isotopes.push(NuclearIsotopeDto {
+                    half_life: r.read_f32()?,
+                    decay_energy: r.read_f32()?,
+                    ionization_fraction: r.read_f32()?,
+                    daughter: r.read_u32()? as u16,
+                    absorption_cross_section: r.read_f32()?,
+                    fission_cross_section: r.read_f32()?,
+                    neutron_yield: r.read_f32()?,
+                    is_fissile: r.read_u8()? != 0,
+                });
+            }
+            NuclearConfigDto {
+                enabled,
+                time_scale,
+                fission_energy,
+                ambient_flux,
+                fission_rate,
+                fuel_per_fission,
+                neutron_range,
+                dose_range,
+                delayed_neutron_fraction,
+                delayed_neutron_delay,
+                max_activity,
+                dose_per_joule,
+                max_dose,
+                isotopes,
+            }
+        } else {
+            NuclearConfigDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -5436,6 +5987,18 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                         r.read_f32()?
                     } else {
                         default_expansion_scale()
+                    },
+                    nuclear: if version >= SNAPSHOT_SCHEMA_NUCLEAR {
+                        NuclearBodyDto {
+                            isotope: r.read_u32()? as u16,
+                            activity: r.read_f32()?,
+                            fuel: r.read_f32()?,
+                            neutrons: r.read_f32()?,
+                            delayed_neutrons: r.read_f32()?,
+                            dose: r.read_f32()?,
+                        }
+                    } else {
+                        NuclearBodyDto::default()
                     },
                 };
                 v.push(body);
@@ -5578,6 +6141,34 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.radiation_extras.ground_temperature);
         write_f32(&mut p, dto.radiation_extras.occluder_transmittance);
     }
+    // Schema v12: the nuclear configuration and the nuclide table (own
+    // block, so every earlier payload still decodes).
+    if dto.schema >= SNAPSHOT_SCHEMA_NUCLEAR {
+        write_u8(&mut p, dto.nuclear.enabled as u8);
+        write_f32(&mut p, dto.nuclear.time_scale);
+        write_f32(&mut p, dto.nuclear.fission_energy);
+        write_f32(&mut p, dto.nuclear.ambient_flux);
+        write_f32(&mut p, dto.nuclear.fission_rate);
+        write_f32(&mut p, dto.nuclear.fuel_per_fission);
+        write_f32(&mut p, dto.nuclear.neutron_range);
+        write_f32(&mut p, dto.nuclear.dose_range);
+        write_f32(&mut p, dto.nuclear.delayed_neutron_fraction);
+        write_f32(&mut p, dto.nuclear.delayed_neutron_delay);
+        write_f32(&mut p, dto.nuclear.max_activity);
+        write_f32(&mut p, dto.nuclear.dose_per_joule);
+        write_f32(&mut p, dto.nuclear.max_dose);
+        write_u32(&mut p, dto.nuclear.isotopes.len() as u32);
+        for iso in &dto.nuclear.isotopes {
+            write_f32(&mut p, iso.half_life);
+            write_f32(&mut p, iso.decay_energy);
+            write_f32(&mut p, iso.ionization_fraction);
+            write_u32(&mut p, iso.daughter as u32);
+            write_f32(&mut p, iso.absorption_cross_section);
+            write_f32(&mut p, iso.fission_cross_section);
+            write_f32(&mut p, iso.neutron_yield);
+            write_u8(&mut p, iso.is_fissile as u8);
+        }
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_u32(&mut p, dto.bodies.len() as u32);
@@ -5624,6 +6215,14 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         // Schema v10: per-body expansion factor.
         if dto.schema >= SNAPSHOT_SCHEMA_THERMAL_EXTRAS {
             write_f32(&mut p, b.expansion_scale);
+        }
+        if dto.schema >= SNAPSHOT_SCHEMA_NUCLEAR {
+            write_u32(&mut p, b.nuclear.isotope as u32);
+            write_f32(&mut p, b.nuclear.activity);
+            write_f32(&mut p, b.nuclear.fuel);
+            write_f32(&mut p, b.nuclear.neutrons);
+            write_f32(&mut p, b.nuclear.delayed_neutrons);
+            write_f32(&mut p, b.nuclear.dose);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -5731,6 +6330,58 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         } else {
             RadiationExtrasDto::default()
         },
+        // Schema v12 payloads carry the nuclear configuration and the
+        // nuclide table.
+        nuclear: if version >= SNAPSHOT_SCHEMA_NUCLEAR {
+            let enabled = r.read_u8()? != 0;
+            let time_scale = r.read_f32()?;
+            let fission_energy = r.read_f32()?;
+            let ambient_flux = r.read_f32()?;
+            let fission_rate = r.read_f32()?;
+            let fuel_per_fission = r.read_f32()?;
+            let neutron_range = r.read_f32()?;
+            let dose_range = r.read_f32()?;
+            let delayed_neutron_fraction = r.read_f32()?;
+            let delayed_neutron_delay = r.read_f32()?;
+            let max_activity = r.read_f32()?;
+            let dose_per_joule = r.read_f32()?;
+            let max_dose = r.read_f32()?;
+            let count = r.read_u32()?;
+            if count > 4096 {
+                return Err(SnapshotError::Parse("nuclide table too long".into()));
+            }
+            let mut isotopes = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                isotopes.push(NuclearIsotopeDto {
+                    half_life: r.read_f32()?,
+                    decay_energy: r.read_f32()?,
+                    ionization_fraction: r.read_f32()?,
+                    daughter: r.read_u32()? as u16,
+                    absorption_cross_section: r.read_f32()?,
+                    fission_cross_section: r.read_f32()?,
+                    neutron_yield: r.read_f32()?,
+                    is_fissile: r.read_u8()? != 0,
+                });
+            }
+            NuclearConfigDto {
+                enabled,
+                time_scale,
+                fission_energy,
+                ambient_flux,
+                fission_rate,
+                fuel_per_fission,
+                neutron_range,
+                dose_range,
+                delayed_neutron_fraction,
+                delayed_neutron_delay,
+                max_activity,
+                dose_per_joule,
+                max_dose,
+                isotopes,
+            }
+        } else {
+            NuclearConfigDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         bodies: {
@@ -5802,6 +6453,18 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         r.read_f32()?
                     } else {
                         default_expansion_scale()
+                    },
+                    nuclear: if version >= SNAPSHOT_SCHEMA_NUCLEAR {
+                        NuclearBodyDto {
+                            isotope: r.read_u32()? as u16,
+                            activity: r.read_f32()?,
+                            fuel: r.read_f32()?,
+                            neutrons: r.read_f32()?,
+                            delayed_neutrons: r.read_f32()?,
+                            dose: r.read_f32()?,
+                        }
+                    } else {
+                        NuclearBodyDto::default()
                     },
                 });
             }

@@ -1,6 +1,8 @@
 use super::material::{PhysicsMaterial, MIN_DENSITY};
 use glam::{Mat2, Mat3, Vec2, Vec3};
 use phieng_math::{InertiaTensor3, Transform2, Transform3};
+
+use super::nuclear::NuclearState;
 use std::collections::HashSet;
 
 /// Rigid body type in 2D
@@ -48,6 +50,10 @@ pub struct RigidBody2 {
     /// factor is applied relative to the authored shape instead of
     /// compounding every step.
     pub expansion_scale: f32,
+    /// Nuclear state (cold: nuclear phase). The default nuclide is
+    /// "none", so a body takes no part in the nuclear phase until it is
+    /// given one.
+    pub nuclear: NuclearState,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -426,6 +432,7 @@ impl RigidBody2 {
             ambient_scale: 1.0,
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
+            nuclear: NuclearState::default(),
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -764,6 +771,8 @@ pub struct RigidBody3 {
     /// Thermal-expansion factor currently applied to this body's shape
     /// (see `RigidBody2::expansion_scale`).
     pub expansion_scale: f32,
+    /// Nuclear state (cold: nuclear phase). See `RigidBody2::nuclear`.
+    pub nuclear: NuclearState,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -1060,6 +1069,7 @@ impl RigidBody3 {
             ambient_scale: 1.0,
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
+            nuclear: NuclearState::default(),
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,

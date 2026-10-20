@@ -105,6 +105,14 @@ public class World2
 
     /// <summary>Per-world thermal scratch (heat flux, cached areas).</summary>
     private readonly ThermalState2 _thermal = new();
+
+    /// <summary>
+    /// The nuclear simulation state (see <see cref="NuclearConfig"/>).
+    /// Disabled by default.
+    /// </summary>
+    public NuclearState2 Nuclear => _nuclear;
+
+    private readonly NuclearState2 _nuclear = new();
     private readonly List<(int, int)> _pairs = new();
     private readonly List<Vector2> _vertsA = new();
     private readonly List<Vector2> _vertsB = new();
@@ -557,8 +565,25 @@ public class World2
             }
         }
 
-        // 5c. Thermal transfer (conduction / radiation / convection),
-        // then 5d. Thermal expansion. The phase runs after integration
+        // 5c. Nuclear decay and fission: fills a per-body heat budget
+        // (and an ionizing-radiation budget) from the nuclides the
+        // bodies carry. Runs before the thermal phase, so the thermal
+        // radiation sees the heat in the same step. It modifies
+        // temperature only (no velocity change), so it neither wakes nor
+        // is gated by sleep.
+        if (_nuclear.Config.IsActive())
+        {
+            NuclearIntegration.StepNuclear2(Bodies, _nuclear.Config, _nuclear.Scratch, dt);
+            // 5c-2. The nuclear heat raises the body temperatures. The
+            // clamps come from the thermal configuration, so the bounds
+            // are the same ones the thermal phase enforces; the rate
+            // clamp is deliberately not applied, because a nuclear
+            // source has a physical rate.
+            NuclearIntegration.ApplyNuclearHeat2(Bodies, _nuclear.Scratch, _thermal.Config);
+        }
+
+        // 5d. Thermal transfer (conduction / radiation / convection),
+        // then 5e. Thermal expansion. The phase runs after integration
         // and before the sleep check, matching the Rust core. It does not
         // modify velocity, so it neither wakes sleeping bodies nor is
         // affected by sleep.

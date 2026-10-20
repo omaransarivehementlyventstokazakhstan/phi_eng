@@ -170,6 +170,9 @@ pub struct World2 {
     pub fluid: super::fluid::FluidState2,
     /// Thermal simulation state (see [`crate::thermal`]). Disabled by default.
     pub thermal: super::thermal::ThermalState2,
+    /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
+    /// default.
+    pub nuclear: super::nuclear::NuclearState2,
     /// Scratch buffers reused every step so the per-frame narrowphase
     /// performs no allocations in the steady state.
     scratch: ScratchBuffers2D,
@@ -201,6 +204,7 @@ impl World2 {
             next_joint_id: 0,
             fluid: super::fluid::FluidState2::new(),
             thermal: super::thermal::ThermalState2::new(),
+            nuclear: super::nuclear::NuclearState2::new(),
             scratch: ScratchBuffers2D::new(),
         }
     }
@@ -835,7 +839,30 @@ impl World2 {
             }
         }
 
-        // 5c. Thermal transfer: conduction, radiation, convection. Runs
+        // 5c. Nuclear decay and fission: fills a per-body heat budget
+        // (and an ionizing-radiation budget) from the nuclides the
+        // bodies carry. Runs before the thermal phase, so the thermal
+        // radiation sees the heat in the same step. It modifies
+        // temperature only (no velocity change), so it neither wakes nor
+        // is gated by sleep.
+        if self.nuclear.config.is_active() {
+            let nuclear_config = &self.nuclear.config;
+            let nuclear_scratch = &mut self.nuclear.scratch;
+            super::nuclear::step_nuclear_2d(&mut self.bodies, nuclear_config, nuclear_scratch, dt);
+            // 5c-2. The nuclear heat raises the body temperatures. The
+            // clamps come from the thermal configuration, so the bounds
+            // are the same ones the thermal phase enforces; the rate
+            // clamp is deliberately not applied, because a nuclear
+            // source has a physical rate.
+            let thermal_config = self.thermal.config;
+            super::nuclear::apply_nuclear_heat_2d(
+                &mut self.bodies,
+                &self.nuclear.scratch,
+                &thermal_config,
+            );
+        }
+
+        // 5d. Thermal transfer: conduction, radiation, convection. Runs
         // after integrate so it sees final positions; modifies temperature
         // only (no velocity change), so it neither wakes nor is gated by
         // sleep. Reads contact data from the narrowphase pass above.
@@ -1433,6 +1460,9 @@ pub struct World3 {
     pub fluid: super::fluid3::FluidState3,
     /// Thermal simulation state (see [`crate::thermal`]). Disabled by default.
     pub thermal: super::thermal::ThermalState3,
+    /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
+    /// default.
+    pub nuclear: super::nuclear::NuclearState2,
     /// Runtime validation configuration
     pub validation: ValidationConfig,
     /// Last validation report
@@ -1483,6 +1513,7 @@ impl World3 {
             next_joint_id: 0,
             fluid: super::fluid3::FluidState3::new(),
             thermal: super::thermal::ThermalState3::new(),
+            nuclear: super::nuclear::NuclearState2::new(),
             validation: ValidationConfig::default(),
             validation_report: ValidationReport::default(),
             scratch_constraints: Vec::new(),
@@ -1924,7 +1955,20 @@ impl World3 {
             }
         }
 
-        // 5c. Thermal transfer (see World2::step_inner phase 5c).
+        // 5c. Nuclear decay and fission (see World2::step_inner phase 5c).
+        if self.nuclear.config.is_active() {
+            let nuclear_config = &self.nuclear.config;
+            let nuclear_scratch = &mut self.nuclear.scratch;
+            super::nuclear::step_nuclear_3d(&mut self.bodies, nuclear_config, nuclear_scratch, dt);
+            let thermal_config = self.thermal.config;
+            super::nuclear::apply_nuclear_heat_3d(
+                &mut self.bodies,
+                &self.nuclear.scratch,
+                &thermal_config,
+            );
+        }
+
+        // 5d. Thermal transfer (see World2::step_inner phase 5d).
         let thermal_config = self.thermal.config;
         super::thermal::step_thermal_3d(
             &mut self.bodies,
