@@ -475,6 +475,58 @@ fn main() {
         );
     }
 
+    // Static-heavy scene: a dense grid of static boxes (plus a few
+    // dynamic bodies falling onto them). The static colliders alone
+    // generate a large number of broadphase pairs. The main pile scene
+    // has a single static floor, so it cannot show the cost of a
+    // static-dominated scene.
+    {
+        const STATICS: usize = 400;
+        let mut stat = World2::new();
+        stat.gravity = Vec2::new(0.0, -9.81);
+        for i in 0..STATICS {
+            // Deliberately dense: the boxes overlap heavily, so the
+            // broadphase emits a large number of static-static pairs.
+            // That is the case where the pair list, not the narrowphase,
+            // dominates the cost.
+            let x = -5.0 + (i as f32 % 20.0) * 0.5;
+            let y = 0.0 + (i as f32 / 20.0) * 0.5;
+            stat.add_static_body(
+                Vec2::new(x, y),
+                Shape2::Box {
+                    half_extents: Vec2::new(0.9, 0.9),
+                },
+            )
+            .expect("valid shape");
+        }
+        // A few dynamic bodies so the scene is not entirely static.
+        for i in 0..20 {
+            stat.add_dynamic_body(
+                Vec2::new(-10.0 + i as f32 * 1.0, 12.0),
+                Shape2::Circle { radius: 0.3 },
+                1.0,
+            )
+            .expect("valid shape");
+        }
+        for _ in 0..60 {
+            stat.step(dt);
+        }
+        // The dense static scene is much heavier per step than the pile
+        // (every static box overlaps its neighbours), so it uses fewer
+        // frames per sample to keep the benchmark's runtime sane.
+        const STATIC_FRAMES: usize = 60;
+        let mut stat_pairs = 0usize;
+        let stat_ms = median_ms(STATIC_FRAMES, || {
+            stat.step(dt);
+            stat_pairs += stat.contact_cache.len();
+        });
+        println!(
+            "[statics] bodies={} per step: {stat_ms:.3} ms (median of 5) avg contacts/step: {:.0}",
+            stat.bodies.len(),
+            stat_pairs as f64 / (STATIC_FRAMES * 5) as f64
+        );
+    }
+
     // 3D pile: 400 bodies (20 x 10 x 2 grid of boxes/spheres) over a
     // static floor. 3D was never benched at scale; this is the control
     // column for any future RigidBody3/Solver3D layout work.
