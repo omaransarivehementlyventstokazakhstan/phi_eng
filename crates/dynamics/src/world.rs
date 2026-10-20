@@ -680,7 +680,11 @@ impl World2 {
             self.insert_body_aabbs();
         });
         timed!(timings.broadphase_pairs, {
-            self.broadphase.collect_pairs(&mut self.scratch.pairs);
+            // Narrowphase fast path: only AABB-overlapping pairs can
+            // produce contacts. The CCD swept test below keeps the
+            // unfiltered sequence on purpose.
+            self.broadphase
+                .collect_overlapping_pairs(&mut self.scratch.pairs);
         });
 
         // 3. Narrow phase - test actual collisions (into scratch).
@@ -1914,7 +1918,10 @@ impl World3 {
         });
         timed!(timings.broadphase_pairs, {
             pairs.clear();
-            self.broadphase.collect_pairs(&mut pairs);
+            // Narrowphase fast path: only AABB-overlapping pairs can
+            // produce contacts. The CCD swept test keeps the unfiltered
+            // sequence on purpose.
+            self.broadphase.collect_overlapping_pairs(&mut pairs);
         });
 
         // 3. Narrow phase - test actual collisions (into scratch).

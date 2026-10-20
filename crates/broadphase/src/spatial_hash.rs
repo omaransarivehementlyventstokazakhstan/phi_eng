@@ -31,6 +31,14 @@ pub struct SpatialHash2 {
     /// Every inserted body id this frame (insertion order). Used to pair
     /// oversized bodies against the whole scene.
     all: Vec<usize>,
+    /// The AABB of every body, indexed by body id.
+    ///
+    /// The grid pairs two bodies when they share a cell, which is
+    /// conservative: sharing a cell says nothing about overlapping. The
+    /// AABB does, and the narrow phase would have rejected a pair whose
+    /// AABBs do not overlap anyway - so testing it here removes the
+    /// false positives before they are pushed, sorted and deduplicated.
+    aabbs: Vec<(Vec2, Vec2)>,
     /// Bodies whose AABB spans more cells than [`Self::MAX_CELLS_PER_BODY`].
     /// Such bodies are NOT written into the grid (a 1000-unit body at a
     /// 1.0 cell size would touch millions of cells and hang the step);
@@ -65,6 +73,7 @@ impl SpatialHash2 {
             count: 0,
             pool: Vec::new(),
             all: Vec::new(),
+            aabbs: Vec::new(),
             oversized: Vec::new(),
         }
     }
@@ -122,6 +131,10 @@ impl SpatialHash2 {
         }
         self.count += 1;
         self.all.push(body_id);
+        if self.aabbs.len() <= body_id {
+            self.aabbs.resize(body_id + 1, (Vec2::ZERO, Vec2::ZERO));
+        }
+        self.aabbs[body_id] = (min, max);
 
         // Cells spanned per axis, computed in float to avoid overflow on
         // extreme-but-finite coordinates (integer casts below saturate).
@@ -157,6 +170,20 @@ impl SpatialHash2 {
         }
     }
 
+    /// Whether two bodies' AABBs overlap.
+    ///
+    /// Conservative with respect to the narrow phase: an AABB contains
+    /// its shape, so two bodies whose AABBs do not overlap cannot touch.
+    fn aabbs_overlap(a: usize, b: usize, aabbs: &[(Vec2, Vec2)]) -> bool {
+        match (aabbs.get(a), aabbs.get(b)) {
+            (Some((amin, amax)), Some((bmin, bmax))) => {
+                amin.x <= bmax.x && amax.x >= bmin.x && amin.y <= bmax.y && amax.y >= bmin.y
+            }
+            // An id without a recorded AABB cannot be filtered.
+            _ => true,
+        }
+    }
+
     /// Get potential collision pairs
     pub fn get_pairs(&mut self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
@@ -188,6 +215,49 @@ impl SpatialHash2 {
         for &o in &self.oversized {
             for &b in &self.all {
                 if o != b {
+                    out.push(if o < b { (o, b) } else { (b, o) });
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Append the subset of potential collision pairs whose AABBs overlap.
+    ///
+    /// This is the narrowphase fast path: every dropped pair is two
+    /// bodies whose AABBs are disjoint, so neither body can touch the
+    /// other and the narrow phase would have produced zero contacts for
+    /// it. The emitted sequence is the AABB-overlapping subsequence of
+    /// what [`Self::collect_pairs`] emits (same canonical order), so
+    /// switching the narrowphase to this method cannot change the
+    /// constraint stream or the trajectory. Contract: `out` must be
+    /// empty (the world passes cleared scratch).
+    ///
+    /// The CCD swept-volume test deliberately keeps using
+    /// [`Self::collect_pairs`]: a pair whose current AABBs are disjoint
+    /// can still overlap once swept along the velocities, and dropping
+    /// it here would blind the substepping decision.
+    pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        debug_assert!(out.is_empty());
+        for cell_ids in self.grid.values() {
+            for i in 0..cell_ids.len() {
+                for j in i + 1..cell_ids.len() {
+                    let a = cell_ids[i];
+                    let b = cell_ids[j];
+                    if !Self::aabbs_overlap(a, b, &self.aabbs) {
+                        continue;
+                    }
+                    // Canonical pair key.
+                    out.push(if a < b { (a, b) } else { (b, a) });
+                }
+            }
+        }
+        // Oversized bodies are not in the grid: pair each against every
+        // body whose AABB it overlaps.
+        for &o in &self.oversized {
+            for &b in &self.all {
+                if o != b && Self::aabbs_overlap(o, b, &self.aabbs) {
                     out.push(if o < b { (o, b) } else { (b, o) });
                 }
             }
@@ -389,6 +459,58 @@ mod tests {
         hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
         hash.insert(1, Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0));
         assert_eq!(hash.get_pairs(), before);
+    }
+
+    #[test]
+    fn test_overlapping_pairs_drops_disjoint_cell_sharers() {
+        // Floor at y=-1.5..-0.5 and a ball at y=-0.4..0.2 share grid
+        // cells but their AABBs do not overlap: the unfiltered sequence
+        // still reports the pair (the CCD swept test relies on that),
+        // while the narrowphase fast path must not.
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert(0, Vec2::new(-10.0, -1.5), Vec2::new(10.0, -0.5));
+        hash.insert(1, Vec2::new(-0.3, -0.4), Vec2::new(0.3, 0.2));
+        let mut filtered = Vec::new();
+        hash.collect_overlapping_pairs(&mut filtered);
+        assert!(
+            filtered.is_empty(),
+            "disjoint AABBs must be filtered: {filtered:?}"
+        );
+        // The unfiltered contract is unchanged.
+        assert!(hash.get_pairs().contains(&(0, 1)));
+    }
+
+    #[test]
+    fn test_overlapping_pairs_agrees_with_brute_force() {
+        use super::super::brute_force2::BruteForce2;
+        // Mixed scene: true overlaps, cell-sharing non-overlaps, and an
+        // oversized body paired against near and far bodies.
+        let scene: Vec<(Vec2, Vec2)> = vec![
+            (Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0)),
+            (Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0)),
+            (Vec2::new(2.5, 0.0), Vec2::new(3.5, 1.0)),
+            (Vec2::new(50.0, 50.0), Vec2::new(52.0, 52.0)),
+            (Vec2::new(-10.0, -1.5), Vec2::new(10.0, -0.5)),
+            (Vec2::new(-0.3, -0.4), Vec2::new(0.3, 0.2)),
+            (Vec2::new(-1000.0, -1000.0), Vec2::new(1000.0, 1000.0)),
+            (Vec2::new(500.0, 500.0), Vec2::new(501.0, 501.0)),
+            (Vec2::new(2000.0, 2000.0), Vec2::new(2001.0, 2001.0)),
+        ];
+        let mut grid = SpatialHash2::new(1.0);
+        let mut bf = BruteForce2::new();
+        for (i, (min, max)) in scene.iter().enumerate() {
+            grid.insert(i, *min, *max);
+            bf.insert(i, *min, *max);
+        }
+        let mut a = Vec::new();
+        grid.collect_overlapping_pairs(&mut a);
+        let mut b = Vec::new();
+        bf.collect_overlapping_pairs(&mut b);
+        assert_eq!(a, b, "grid and brute force must filter identically");
+        // Sanity: the oversized body pairs with what it overlaps, not
+        // with the far body.
+        assert!(a.contains(&(6, 7)));
+        assert!(!a.iter().any(|&(x, y)| x == 8 || y == 8));
     }
 
     #[test]

@@ -44,6 +44,14 @@ impl BruteForce3 {
         out.dedup();
     }
 
+    /// Same as [`Self::collect_pairs`]: brute force tests every pair's
+    /// AABB overlap already, so its output is exactly the
+    /// AABB-overlapping subsequence by construction. Provided so the
+    /// narrowphase fast path is uniform across backends.
+    pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        self.collect_pairs(out);
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

@@ -149,6 +149,17 @@ pub enum BroadphaseMode {
     to measure, and the next attempt needs one.
 - **Remaining**: an actual persistent static constraint graph, or
   static-awareness in the broadphase.
+- **Shipped (narrowphase input filtering)**: every broadphase backend
+  now also offers `collect_overlapping_pairs` — the subset of candidate
+  pairs whose AABBs overlap — and both `step_inner` narrowphase loops
+  consume it instead of `collect_pairs`. Pairs with disjoint AABBs can
+  never produce contacts (an AABB contains its shape), so the
+  constraint stream is unchanged. Measured on the corrected trajectory
+  (median of 7, hash guard green both ways): pile 2D iters=8
+  **1.513 → 0.918 ms/step (−39 %)**, census **1.616 → 1.417 (−12 %)**,
+  pile 3D iters=8 **0.238 → 0.139 (−42 %)**. The CCD swept-volume test
+  deliberately keeps the unfiltered sequence: a currently-disjoint pair
+  can still overlap once swept along the velocities.
 - **Fixed (narrowphase correctness)**: `sat_circle_polygon` (Rust) and
   `SAT.CirclePolygon` (C#) tested only polygon face normals, so a
   circle grazing a polygon corner reported a phantom contact (face

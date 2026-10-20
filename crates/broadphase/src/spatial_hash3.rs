@@ -37,6 +37,10 @@ pub struct SpatialHash3 {
     all: Vec<usize>,
     /// Bodies too large for the grid; paired against the whole scene.
     oversized: Vec<usize>,
+    /// The AABB of every body, indexed by body id. Used only by
+    /// [`Self::collect_overlapping_pairs`] to drop candidate pairs whose
+    /// AABBs are disjoint before they are pushed, sorted and deduplicated.
+    aabbs: Vec<(Vec3, Vec3)>,
 }
 
 impl SpatialHash3 {
@@ -65,6 +69,7 @@ impl SpatialHash3 {
             pool: Vec::new(),
             all: Vec::new(),
             oversized: Vec::new(),
+            aabbs: Vec::new(),
         }
     }
 
@@ -121,6 +126,10 @@ impl SpatialHash3 {
         }
         self.count += 1;
         self.all.push(body_id);
+        if self.aabbs.len() <= body_id {
+            self.aabbs.resize(body_id + 1, (Vec3::ZERO, Vec3::ZERO));
+        }
+        self.aabbs[body_id] = (min, max);
 
         // Cells spanned per axis, computed in float to avoid overflow on
         // extreme-but-finite coordinates.
@@ -181,6 +190,68 @@ impl SpatialHash3 {
         for &o in &self.oversized {
             for &b in &self.all {
                 if o != b {
+                    out.push(if o < b { (o, b) } else { (b, o) });
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Whether two bodies' AABBs overlap.
+    ///
+    /// Conservative with respect to the narrow phase: an AABB contains
+    /// its shape, so two bodies whose AABBs do not overlap cannot touch.
+    fn aabbs_overlap(a: usize, b: usize, aabbs: &[(Vec3, Vec3)]) -> bool {
+        match (aabbs.get(a), aabbs.get(b)) {
+            (Some((amin, amax)), Some((bmin, bmax))) => {
+                amin.x <= bmax.x
+                    && amax.x >= bmin.x
+                    && amin.y <= bmax.y
+                    && amax.y >= bmin.y
+                    && amin.z <= bmax.z
+                    && amax.z >= bmin.z
+            }
+            // An id without a recorded AABB cannot be filtered.
+            _ => true,
+        }
+    }
+
+    /// Append the subset of potential collision pairs whose AABBs overlap.
+    ///
+    /// This is the narrowphase fast path: every dropped pair is two
+    /// bodies whose AABBs are disjoint, so neither body can touch the
+    /// other and the narrow phase would have produced zero contacts for
+    /// it. The emitted sequence is the AABB-overlapping subsequence of
+    /// what [`Self::collect_pairs`] emits (same canonical order), so
+    /// switching the narrowphase to this method cannot change the
+    /// constraint stream or the trajectory. Contract: `out` must be
+    /// empty (the world passes cleared scratch).
+    ///
+    /// The CCD swept-volume test deliberately keeps using
+    /// [`Self::collect_pairs`]: a pair whose current AABBs are disjoint
+    /// can still overlap once swept along the velocities, and dropping
+    /// it here would blind the substepping decision.
+    pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        debug_assert!(out.is_empty());
+        for cell_ids in self.grid.values() {
+            for i in 0..cell_ids.len() {
+                for j in i + 1..cell_ids.len() {
+                    let a = cell_ids[i];
+                    let b = cell_ids[j];
+                    if !Self::aabbs_overlap(a, b, &self.aabbs) {
+                        continue;
+                    }
+                    // Canonical pair key.
+                    out.push(if a < b { (a, b) } else { (b, a) });
+                }
+            }
+        }
+        // Oversized bodies are not in the grid: pair each against every
+        // body whose AABB it overlaps.
+        for &o in &self.oversized {
+            for &b in &self.all {
+                if o != b && Self::aabbs_overlap(o, b, &self.aabbs) {
                     out.push(if o < b { (o, b) } else { (b, o) });
                 }
             }
@@ -379,5 +450,53 @@ mod tests {
                 && amin.z <= bmax.z;
             assert!(!overlaps, "grid emitted {pair:?} as a non-overlapping pair");
         }
+    }
+
+    #[test]
+    fn test_overlapping_pairs_drops_disjoint_cell_sharers() {
+        // Two bodies sharing grid cells without overlapping: the
+        // unfiltered sequence reports the pair (the CCD swept test
+        // relies on that), while the narrowphase fast path must not.
+        let mut hash = SpatialHash3::new(1.0);
+        hash.insert(0, Vec3::new(-10.0, -1.5, -1.5), Vec3::new(10.0, -0.5, 0.5));
+        hash.insert(1, Vec3::new(-0.3, -0.4, -0.4), Vec3::new(0.3, 0.2, 0.2));
+        let mut filtered = Vec::new();
+        hash.collect_overlapping_pairs(&mut filtered);
+        assert!(
+            filtered.is_empty(),
+            "disjoint AABBs must be filtered: {filtered:?}"
+        );
+        let mut pairs = Vec::new();
+        hash.collect_pairs(&mut pairs);
+        assert!(pairs.contains(&(0, 1)));
+    }
+
+    #[test]
+    fn test_overlapping_pairs_agrees_with_brute_force() {
+        use crate::brute_force3::BruteForce3;
+        let scene: Vec<(Vec3, Vec3)> = vec![
+            (Vec3::ZERO, Vec3::splat(2.0)),
+            (Vec3::splat(1.0), Vec3::splat(3.0)),
+            (Vec3::new(2.5, 0.0, 0.0), Vec3::new(3.5, 1.0, 1.0)),
+            (Vec3::splat(50.0), Vec3::splat(52.0)),
+            (Vec3::splat(-1000.0), Vec3::splat(1000.0)),
+            (Vec3::splat(500.0), Vec3::splat(501.0)),
+            (Vec3::splat(2000.0), Vec3::splat(2001.0)),
+        ];
+        let mut grid = SpatialHash3::new(1.0);
+        let mut bf = BruteForce3::new();
+        for (i, (min, max)) in scene.iter().enumerate() {
+            grid.insert(i, *min, *max);
+            bf.insert(i, *min, *max);
+        }
+        let mut a = Vec::new();
+        grid.collect_overlapping_pairs(&mut a);
+        let mut b = Vec::new();
+        bf.collect_overlapping_pairs(&mut b);
+        assert_eq!(a, b, "grid and brute force must filter identically");
+        // Sanity: the oversized body pairs with what it overlaps, not
+        // with the far body.
+        assert!(a.contains(&(4, 5)));
+        assert!(!a.iter().any(|&(x, y)| x == 6 || y == 6));
     }
 }

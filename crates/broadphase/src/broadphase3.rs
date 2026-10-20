@@ -51,6 +51,19 @@ impl Broadphase3 {
         }
     }
 
+    /// Append the AABB-overlapping subsequence of [`Self::collect_pairs`].
+    ///
+    /// The narrowphase uses this fast path: every dropped pair is two
+    /// bodies whose AABBs are disjoint, so the narrow phase could only
+    /// have produced zero contacts for it.
+    pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        match self {
+            Broadphase3::BruteForce(b) => b.collect_overlapping_pairs(out),
+            Broadphase3::SpatialHash(h) => h.collect_overlapping_pairs(out),
+            Broadphase3::DynamicAABBTree(t) => t.collect_overlapping_pairs(out),
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Broadphase3::BruteForce(b) => b.len(),

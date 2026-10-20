@@ -275,6 +275,15 @@ impl DynamicAABBTree2 {
         out.dedup();
     }
 
+    /// Same as [`Self::collect_pairs`]: the tree only ever emits pairs
+    /// whose leaf AABBs overlap (every descent is guarded by an AABB
+    /// overlap test), so its output is exactly the AABB-overlapping
+    /// subsequence by construction. Provided so the narrowphase fast
+    /// path is uniform across backends.
+    pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        self.collect_pairs(out);
+    }
+
     fn collect_pairs_recursive(&self, index: usize, out: &mut Vec<(usize, usize)>) {
         let node = self.nodes[index];
         if node.left_child == NULL_NODE {
