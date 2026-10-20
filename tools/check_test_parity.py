@@ -52,6 +52,17 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               exp/ln as mutual inverses - the properties that make
               rigid-body trajectories platform-independent and
               Rust/C#-identical)
+    U01-U12  radiation model expansion (mirrored both languages: the
+              legacy view-factor model is the default and matches the
+              historical formula, the symmetric model matches it for
+              equal bodies and is order-independent, it differs for
+              unequal bodies, the sky/ground split changes the exchange
+              and is bit-identical to the historical one when the sky
+              and ground equal the ambient, an opaque occluder blocks
+              the exchange (including an off-axis one next to an
+              endpoint), a partial occluder attenuates it, a fully
+              transparent one does not block, determinism plus parallel
+              == serial, and a snapshot round-trip)
 """
 
 import re

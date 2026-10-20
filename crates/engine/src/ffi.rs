@@ -3323,6 +3323,14 @@ pub struct ThermalConfig2Ffi {
     pub expansion_coefficient: f32,
     /// Reference temperature the expansion is measured against.
     pub expansion_reference_temperature: f32,
+    /// View-factor model: 0 = legacy, 1 = symmetric.
+    pub view_factor_model: u32,
+    /// Sky temperature (K); 0 means "use the ambient temperature".
+    pub sky_temperature: f32,
+    /// Ground temperature (K); 0 means "use the ambient temperature".
+    pub ground_temperature: f32,
+    /// Fraction of radiation transmitted through an occluding body.
+    pub occluder_transmittance: f32,
 }
 
 pub type ThermalConfig3Ffi = ThermalConfig2Ffi;
@@ -3337,6 +3345,12 @@ fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalCo
         c.min_temperature,
         c.radiation_radius_factor,
         c.max_temperature_rate,
+        c.forced_convection_coefficient,
+        c.expansion_coefficient,
+        c.expansion_reference_temperature,
+        c.sky_temperature,
+        c.ground_temperature,
+        c.occluder_transmittance,
     ] {
         if !v.is_finite() {
             return None;
@@ -3348,9 +3362,21 @@ fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalCo
         || c.max_temperature <= c.min_temperature
         || c.radiation_radius_factor <= 0.0
         || c.max_temperature_rate <= 0.0
+        || c.forced_convection_coefficient < 0.0
+        || c.expansion_coefficient < 0.0
+        || c.occluder_transmittance < 0.0
+        || c.occluder_transmittance > 1.0
     {
         return None;
     }
+    // The sky and ground temperatures are overrides: a non-positive
+    // value means "use the ambient temperature", so only the finiteness
+    // is checked above.
+    let view_factor_model = match c.view_factor_model {
+        0 => phieng_dynamics::ViewFactorModel::Legacy,
+        1 => phieng_dynamics::ViewFactorModel::Symmetric,
+        _ => return None,
+    };
     Some(ThermalConfig2D {
         enabled: c.enabled,
         ambient_temperature: c.ambient_temperature,
@@ -3367,6 +3393,10 @@ fn thermal2_from_ffi(c: &ThermalConfig2Ffi) -> Option<phieng_dynamics::ThermalCo
         forced_convection_coefficient: c.forced_convection_coefficient,
         expansion_coefficient: c.expansion_coefficient,
         expansion_reference_temperature: c.expansion_reference_temperature,
+        view_factor_model,
+        sky_temperature: c.sky_temperature,
+        ground_temperature: c.ground_temperature,
+        occluder_transmittance: c.occluder_transmittance,
     })
 }
 
@@ -3387,6 +3417,10 @@ fn thermal2_to_ffi(c: &phieng_dynamics::ThermalConfig2D) -> ThermalConfig2Ffi {
         forced_convection_coefficient: c.forced_convection_coefficient,
         expansion_coefficient: c.expansion_coefficient,
         expansion_reference_temperature: c.expansion_reference_temperature,
+        view_factor_model: c.view_factor_model as u32,
+        sky_temperature: c.sky_temperature,
+        ground_temperature: c.ground_temperature,
+        occluder_transmittance: c.occluder_transmittance,
     }
 }
 
@@ -4996,6 +5030,10 @@ mod tests {
                 forced_convection_coefficient: 7.25,
                 expansion_coefficient: 1.5e-4,
                 expansion_reference_temperature: 280.0,
+                view_factor_model: 1,
+                sky_temperature: 210.0,
+                ground_temperature: 295.0,
+                occluder_transmittance: 0.25,
             };
             assert_eq!(phieng_world_set_thermal_config(&mut world, &cfg), 1);
 
@@ -5015,6 +5053,10 @@ mod tests {
                 forced_convection_coefficient: 0.0,
                 expansion_coefficient: 0.0,
                 expansion_reference_temperature: 0.0,
+                view_factor_model: 0,
+                sky_temperature: 0.0,
+                ground_temperature: 0.0,
+                occluder_transmittance: 0.0,
             };
             assert_eq!(phieng_world_get_thermal_config(&world, &mut out), 1);
 

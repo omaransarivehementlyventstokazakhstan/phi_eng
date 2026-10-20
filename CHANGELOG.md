@@ -38,12 +38,49 @@ This project follows [Semantic Versioning](https://semver.org/) and
   for their particle placement, so their trajectories remain
   platform-dependent; `LIMITATIONS.md` records the gap.
 
+### Added
+- **Radiation model expansion (2D and 3D, both languages).** Three
+  opt-in options on `ThermalConfig2/3`, all of which default to the
+  historical behaviour so existing trajectories stay bit-identical:
+  - a **symmetric view-factor model** (`ViewFactorModel::Symmetric`):
+    the view factor becomes `min(r_i * r_j / d^2, 1)` and the exchange
+    uses the mean of the two emitting areas, so the exchange rate no
+    longer depends on which body of the pair the loop visits first;
+  - a **sky/ground split** of the environment radiation: each body's
+    up-facing area fraction (a box's top edge, a box's top face in 3D,
+    isotropic for everything else) splits the exchange between a cold
+    sky and a warm ground. A sky and ground equal to the ambient are
+    bit-identical to the historical single-temperature exchange;
+  - a **partially transparent occluder** (`occluder_transmittance`):
+    an occluded exchange is attenuated by the transmitted fraction
+    instead of being blocked completely. Zero (the default) keeps the
+    historical "fully opaque" behaviour bit-for-bit.
+- The occlusion test was **fixed**: it used to require a blocker to be
+  closer to the segment's midpoint than the endpoints are, which
+  wrongly exempted blockers sitting next to one of the two exchanging
+  bodies and let radiation leak through the gap.
+- The new options persist in **snapshot schema v11** (its own block, so
+  every earlier payload still decodes) and cross FFI with the thermal
+  config.
+
 ### Tests
-- **Deterministic-trigonometry parity block R01–R03** (mirrored
+- **Radiation parity block U01-U12** (mirrored Rust↔C#): the legacy
+  view-factor model is the default and matches the historical formula
+  bit-for-bit, the symmetric model matches it for equal bodies, is
+  order-independent and differs for unequal bodies, the sky/ground split
+  changes the exchange and is bit-identical to the historical one when
+  the sky and ground equal the ambient, an opaque occluder blocks the
+  exchange (including an off-axis one next to an endpoint), a partial
+  occluder attenuates it, a fully transparent one does not block,
+  determinism plus parallel == serial, and a snapshot round-trip.
+- **Deterministic-trigonometry parity block R01–R07** (mirrored
   Rust↔C#): pinned cosine/sine bit patterns (R01), pinned `atan2` bit
-  patterns (R02), and the engine's own 2D rotation integration pinned to
-  exact bits (R03) — the property that makes rigid-body trajectories
-  platform-independent and Rust/C#-identical.
+  patterns (R02), the engine's own 2D rotation integration pinned to
+  exact bits (R03), pinned `exp` bit patterns (R04), pinned `ln` bit
+  patterns (R05), agreement with the platform libm within a tolerance
+  (R06), and `exp`/`ln` as mutual inverses (R07) — the properties
+  that make rigid-body trajectories platform-independent and
+  Rust/C#-identical.
 - **Broad-phase tier parity block B01–B06** (mirrored Rust↔C#): every
   backend bit-identical trajectories (2D B01, 3D B02), Hybrid matches its
   auto-selected backend (B03), default stays the pre-tier-system grid

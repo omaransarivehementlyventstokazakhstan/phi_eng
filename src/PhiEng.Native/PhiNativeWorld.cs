@@ -423,6 +423,10 @@ public sealed class PhiNativeWorld : IDisposable
                 ForcedConvectionCoefficient = config.ForcedConvectionCoefficient,
                 ExpansionCoefficient = config.ExpansionCoefficient,
                 ExpansionReferenceTemperature = config.ExpansionReferenceTemperature,
+                ViewFactorModel = (uint)config.ViewFactorModel,
+                SkyTemperature = config.SkyTemperature,
+                GroundTemperature = config.GroundTemperature,
+                OccluderTransmittance = config.OccluderTransmittance,
             };
             int ok = NativeMethods.phieng_world_set_thermal_config(_handle, &ffi);
             if (ok == 0)

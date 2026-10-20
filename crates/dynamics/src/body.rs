@@ -120,6 +120,27 @@ impl Shape2 {
         }
     }
 
+    /// Fraction of the surface that faces "up" (towards +y), used to
+    /// split the environment radiation between the sky and the ground.
+    ///
+    /// The body's *rotation* is deliberately ignored: the fraction is a
+    /// property of the authored shape, not of its orientation. A circle
+    /// and a polygon are treated as isotropic (0.5); a box uses the
+    /// fraction of its perimeter that is the top edge.
+    pub fn up_facing_fraction(&self) -> f32 {
+        match self {
+            Shape2::Circle { .. } => 0.5,
+            Shape2::Box { half_extents } => {
+                let perimeter = self.surface_area();
+                if perimeter <= 0.0 {
+                    return 0.5;
+                }
+                (2.0 * half_extents.x / perimeter).clamp(0.0, 1.0)
+            }
+            Shape2::Polygon { .. } => 0.5,
+        }
+    }
+
     /// Bounding radius: max distance from centroid to any vertex.
     pub fn bounding_radius(&self) -> f32 {
         match self {
@@ -855,6 +876,31 @@ impl Shape3 {
                 }
                 area
             }
+        }
+    }
+
+    /// Fraction of the surface that faces "up" (towards +y), used to
+    /// split the environment radiation between the sky and the ground.
+    ///
+    /// The body's *rotation* is deliberately ignored: the fraction is a
+    /// property of the authored shape, not of its orientation. A sphere
+    /// and a capsule are isotropic (0.5); a box uses the fraction of
+    /// its surface that is the top face; hulls and meshes are treated as
+    /// isotropic.
+    pub fn up_facing_fraction(&self) -> f32 {
+        match self {
+            Shape3::Sphere { .. } => 0.5,
+            Shape3::Box { half_extents } => {
+                let total = self.surface_area();
+                if total <= 0.0 {
+                    return 0.5;
+                }
+                let top = 4.0 * half_extents.x * half_extents.z;
+                (top / total).clamp(0.0, 1.0)
+            }
+            Shape3::Capsule { .. } => 0.5,
+            Shape3::ConvexHull { .. } => 0.5,
+            Shape3::ConvexMesh { .. } => 0.5,
         }
     }
 

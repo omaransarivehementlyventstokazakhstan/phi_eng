@@ -79,6 +79,38 @@ public static class ThermalGeometry
         }
     }
 
+    /// <summary>
+    /// Fraction of a 2D shape's surface that faces "up" (towards +y),
+    /// used to split the environment radiation between the sky and the
+    /// ground.
+    /// </summary>
+    /// <remarks>
+    /// The body's <i>rotation</i> is deliberately ignored: the fraction is
+    /// a property of the authored shape, not of its orientation. A circle
+    /// and a polygon are treated as isotropic (0.5); a box uses the
+    /// fraction of its perimeter that is the top edge.
+    /// </remarks>
+    public static float UpFacingFraction2(Shape2? shape)
+    {
+        switch (shape)
+        {
+            case BoxShape2 b:
+            {
+                float perimeter = SurfaceArea2(shape);
+                if (perimeter <= 0.0f)
+                {
+                    return 0.5f;
+                }
+                return System.Math.Clamp((2.0f * b.HalfExtents.X) / perimeter, 0.0f, 1.0f);
+            }
+            case CircleShape:
+            case PolygonShape:
+                return 0.5f;
+            default:
+                return 0.5f;
+        }
+    }
+
     /// <summary>Bounding radius of a 2D shape (max vertex distance from the centroid).</summary>
     public static float BoundingRadius2(Shape2? shape)
     {
@@ -213,6 +245,41 @@ public static class ThermalGeometry
             }
             default:
                 return 0.0f;
+        }
+    }
+
+    /// <summary>
+    /// Fraction of a 3D shape's surface that faces "up" (towards +y),
+    /// used to split the environment radiation between the sky and the
+    /// ground.
+    /// </summary>
+    /// <remarks>
+    /// The body's <i>rotation</i> is deliberately ignored: the fraction is
+    /// a property of the authored shape, not of its orientation. A sphere
+    /// and a capsule are isotropic (0.5); a box uses the fraction of its
+    /// surface that is the top face; hulls and meshes are treated as
+    /// isotropic.
+    /// </remarks>
+    public static float UpFacingFraction3(Shape3? shape)
+    {
+        switch (shape)
+        {
+            case BoxShape3 b:
+            {
+                float total = SurfaceArea3(shape);
+                if (total <= 0.0f)
+                {
+                    return 0.5f;
+                }
+                float top = 4.0f * b.HalfExtents.X * b.HalfExtents.Z;
+                return System.Math.Clamp(top / total, 0.0f, 1.0f);
+            }
+            case SphereShape3:
+            case CapsuleShape3:
+            case ConvexHullShape3:
+                return 0.5f;
+            default:
+                return 0.5f;
         }
     }
 

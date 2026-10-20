@@ -35,6 +35,29 @@ use super::solver3d::ContactConstraint3D;
 use glam::Vec2;
 use phieng_math::{DEFAULT_TEMPERATURE, MAX_TEMPERATURE, MIN_TEMPERATURE, STEFAN_BOLTZMANN};
 
+/// Which exchange model the body-to-body radiation uses.
+///
+/// [`ViewFactorModel::Legacy`] is the historical model and the default:
+/// the view factor is `min((r_j / d)^2, 1)` (the small-source
+/// approximation, using the *second* body of the pair) and the exchange
+/// rate is `eps_eff * sigma * A * F * (T_i^4 - T_j^4)`.
+///
+/// [`ViewFactorModel::Symmetric`] replaces that with a model that does
+/// not depend on the order of the pair: the view factor is
+/// `min(r_i * r_j / d^2, 1)` and the exchange rate is
+/// `sigma * A_eff * (T_i^4 - T_j^4) / (1/eps_i + 1/eps_j - 1)` with
+/// `A_eff = A_i * F`. This is the standard parallel-plate gray-body
+/// result generalised to unequal areas. For two equal-sized bodies it
+/// reduces *exactly* to the legacy formula.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewFactorModel {
+    /// Historical model: order-dependent view factor (the default).
+    #[default]
+    Legacy,
+    /// Order-independent view factor and exchange rate.
+    Symmetric,
+}
+
 /// Global thermal simulation settings (2D).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThermalConfig2D {
@@ -63,6 +86,27 @@ pub struct ThermalConfig2D {
     pub expansion_coefficient: f32,
     /// Reference temperature (K) the expansion is measured against.
     pub expansion_reference_temperature: f32,
+    /// Exchange model used by the body-to-body radiation.
+    ///
+    /// `Legacy` (the default) keeps the historical, order-dependent
+    /// view factor; `Symmetric` uses the order-independent model.
+    /// Switching models changes the exchanged heat, so it is opt-in.
+    pub view_factor_model: ViewFactorModel,
+    /// Sky temperature (K) used by the environment radiation.
+    ///
+    /// `<= 0` means "use `ambient_temperature`". When the sky and the
+    /// ground differ, a body's environment exchange is split between
+    /// them by its up-facing area fraction; when they are equal (the
+    /// default) the historical single-temperature exchange is used and
+    /// the result is bit-identical to the pre-split model.
+    pub sky_temperature: f32,
+    /// Ground temperature (K) used by the environment radiation.
+    /// `<= 0` means "use `ambient_temperature`".
+    pub ground_temperature: f32,
+    /// Fraction of the radiation that passes through an occluding body
+    /// (0.0 = fully opaque, the historical behaviour; 1.0 = the occluder
+    /// does not block at all).
+    pub occluder_transmittance: f32,
 }
 
 impl Default for ThermalConfig2D {
@@ -83,6 +127,10 @@ impl Default for ThermalConfig2D {
             forced_convection_coefficient: 0.0,
             expansion_coefficient: 0.0,
             expansion_reference_temperature: DEFAULT_TEMPERATURE,
+            view_factor_model: ViewFactorModel::Legacy,
+            sky_temperature: 0.0,
+            ground_temperature: 0.0,
+            occluder_transmittance: 0.0,
         }
     }
 }

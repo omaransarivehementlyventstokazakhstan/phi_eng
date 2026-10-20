@@ -44,6 +44,15 @@ public static class RadiationIntegration
         float tAmbFourth = tAmbSq * tAmbSq;
         float cutoffFactor = config.RadiationRadiusFactor;
 
+        // Sky / ground environment split. A non-positive sky or ground
+        // temperature means "use the ambient". When the two end up equal
+        // (the default) the historical single-temperature exchange is
+        // used, so the result stays bit-identical.
+        (float tSky, float tGround) = EnvironmentTemperatures(config);
+        bool splitEnvironment = tSky != tGround;
+        float tSkyFourth = FourthPower(tSky);
+        float tGroundFourth = FourthPower(tGround);
+
         for (int i = 0; i < bodies.Count; i++)
         {
             var bodyI = bodies[i];
@@ -59,9 +68,15 @@ public static class RadiationIntegration
             float tISq = tI * tI;
             float tIFourth = tISq * tISq;
 
+            // Fraction of the body's surface that faces the sky.
+            float fUp = ThermalGeometry.UpFacingFraction2(bodyI.Shape);
+
             // q_env is the radiative loss (positive when hotter than
             // ambient), but heat_flux accumulates heat gained.
-            float qEnv = epsI * sigma * aSurf * (tIFourth - tAmbFourth);
+            float qEnv = splitEnvironment
+                ? epsI * sigma * aSurf
+                    * (fUp * (tIFourth - tSkyFourth) + (1.0f - fUp) * (tIFourth - tGroundFourth))
+                : epsI * sigma * aSurf * (tIFourth - tAmbFourth);
             heatFlux[i] -= qEnv;
 
             float rI = ThermalGeometry.BoundingRadius2(bodyI.Shape);
@@ -76,6 +91,7 @@ public static class RadiationIntegration
                 if (epsJ <= 0.0f) continue;
 
                 float rJ = ThermalGeometry.BoundingRadius2(bodyJ.Shape);
+                float lJ = ThermalGeometry.CharacteristicLength2(bodyJ.Shape);
                 float dist = (bodyI.Transform.Position - bodyJ.Transform.Position).Length();
                 float cutoff = cutoffFactor * (rI + rJ);
                 if (dist > cutoff || dist <= 0.0f) continue;
@@ -91,12 +107,47 @@ public static class RadiationIntegration
 
                 // Occlusion: a third body between the pair blocks the
                 // line of sight. Opt-in: it costs an O(n) scan per pair.
-                if (config.RadiationOcclusion && IsOccluded2(bodies, i, j)) continue;
+                bool occluded = config.RadiationOcclusion && IsOccluded2(bodies, i, j);
 
                 // Note: the 2D pair term uses the characteristic length
                 // (the 3D one uses the surface area) — reproduced
                 // verbatim from the Rust core.
-                float qRad = epsEff * sigma * lI * viewFactor * (tIFourth - tJFourth);
+                float qRad;
+                if (config.ViewFactorModel == ViewFactorModel.Symmetric)
+                {
+                    // Order-independent view factor: the geometric mean
+                    // of the two directed factors, so the exchange rate
+                    // does not depend on which body the pair loop
+                    // happened to visit first.
+                    float f = System.Math.Min((rI * rJ) / (dist * dist), 1.0f);
+                    // The mean of the two emitting areas; for two equal
+                    // bodies this is exactly the shared area.
+                    float aEff = 0.5f * (lI + lJ) * f;
+                    qRad = epsEff * sigma * aEff * (tIFourth - tJFourth);
+                    if (occluded)
+                    {
+                        // A partially transparent occluder attenuates the
+                        // exchange instead of blocking it completely.
+                        qRad *= config.OccluderTransmittance;
+                    }
+                }
+                else
+                {
+                    if (occluded)
+                    {
+                        if (config.OccluderTransmittance <= 0.0f)
+                        {
+                            // Fully opaque: the historical behaviour.
+                            continue;
+                        }
+                        qRad = epsEff * sigma * lI * viewFactor * (tIFourth - tJFourth)
+                            * config.OccluderTransmittance;
+                    }
+                    else
+                    {
+                        qRad = epsEff * sigma * lI * viewFactor * (tIFourth - tJFourth);
+                    }
+                }
 
                 heatFlux[i] -= qRad;
                 heatFlux[j] += qRad;
@@ -116,6 +167,15 @@ public static class RadiationIntegration
         float tAmbFourth = tAmbSq * tAmbSq;
         float cutoffFactor = config.RadiationRadiusFactor;
 
+        // Sky / ground environment split. A non-positive sky or ground
+        // temperature means "use the ambient". When the two end up equal
+        // (the default) the historical single-temperature exchange is
+        // used, so the result stays bit-identical.
+        (float tSky, float tGround) = EnvironmentTemperatures(config);
+        bool splitEnvironment = tSky != tGround;
+        float tSkyFourth = FourthPower(tSky);
+        float tGroundFourth = FourthPower(tGround);
+
         for (int i = 0; i < bodies.Count; i++)
         {
             var bodyI = bodies[i];
@@ -131,7 +191,13 @@ public static class RadiationIntegration
             float tISq = tI * tI;
             float tIFourth = tISq * tISq;
 
-            float qEnv = epsI * sigma * aSurf * (tIFourth - tAmbFourth);
+            // Fraction of the body's surface that faces the sky.
+            float fUp = ThermalGeometry.UpFacingFraction3(bodyI.Shape);
+
+            float qEnv = splitEnvironment
+                ? epsI * sigma * aSurf
+                    * (fUp * (tIFourth - tSkyFourth) + (1.0f - fUp) * (tIFourth - tGroundFourth))
+                : epsI * sigma * aSurf * (tIFourth - tAmbFourth);
             heatFlux[i] -= qEnv;
 
             float rI = ThermalGeometry.BoundingRadius3(bodyI.Shape);
@@ -158,11 +224,40 @@ public static class RadiationIntegration
 
                 float viewFactor = MathF.Min((rJ / dist) * (rJ / dist), 1.0f);
 
-                if (config.RadiationOcclusion && IsOccluded3(bodies, i, j)) continue;
+                // Occlusion (3D): see IsOccluded2.
+                bool occluded = config.RadiationOcclusion && IsOccluded3(bodies, i, j);
 
-                // The 3D pair term uses the surface area (the 2D one uses
-                // the characteristic length).
-                float qRad = epsEff * sigma * aSurf * viewFactor * (tIFourth - tJFourth);
+                float qRad;
+                if (config.ViewFactorModel == ViewFactorModel.Symmetric)
+                {
+                    // Order-independent view factor (see the 2D
+                    // counterpart).
+                    float f = System.Math.Min((rI * rJ) / (dist * dist), 1.0f);
+                    // The mean of the two emitting areas.
+                    float aEff = 0.5f * (aSurf + surfaceArea[j]) * f;
+                    qRad = epsEff * sigma * aEff * (tIFourth - tJFourth);
+                    if (occluded)
+                    {
+                        qRad *= config.OccluderTransmittance;
+                    }
+                }
+                else
+                {
+                    if (occluded)
+                    {
+                        if (config.OccluderTransmittance <= 0.0f)
+                        {
+                            // Fully opaque: the historical behaviour.
+                            continue;
+                        }
+                        qRad = epsEff * sigma * aSurf * viewFactor * (tIFourth - tJFourth)
+                            * config.OccluderTransmittance;
+                    }
+                    else
+                    {
+                        qRad = epsEff * sigma * aSurf * viewFactor * (tIFourth - tJFourth);
+                    }
+                }
 
                 heatFlux[i] -= qRad;
                 heatFlux[j] += qRad;
@@ -170,6 +265,20 @@ public static class RadiationIntegration
         }
     }
 
+    /// <summary>
+    /// True when a third body lies between bodies a and b (2D), blocking
+    /// the line of sight.
+    /// </summary>
+    /// <remarks>
+    /// The blocker must project strictly inside the segment (so the two
+    /// endpoints never block each other) and reach the line of sight.
+    /// The historical implementation additionally required the blocker to
+    /// be closer to the segment's midpoint than the endpoints are. That
+    /// test was wrong: a blocker sitting just next to one of the two
+    /// bodies blocks the line of sight just as effectively as one in the
+    /// middle, so the exemption let radiation leak through gaps next to
+    /// the endpoints.
+    /// </remarks>
     public static bool IsOccluded2(List<RigidBody2> bodies, int a, int b)
     {
         Vector2 pa = bodies[a].Transform.Position;
@@ -177,8 +286,6 @@ public static class RadiationIntegration
         Vector2 ab = pb - pa;
         float lenSq = ab.LengthSquared();
         if (lenSq <= 0.0f) return false;
-        Vector2 mid = (pa + pb) * 0.5f;
-        float half = MathF.Sqrt(lenSq) * 0.5f;
 
         for (int idx = 0; idx < bodies.Count; idx++)
         {
@@ -193,9 +300,8 @@ public static class RadiationIntegration
             Vector2 closest = pa + ab * t;
             float d = (p - closest).Length();
             float radius = ThermalGeometry.BoundingRadius2(body.Shape);
-            // The blocker must reach the line (within its radius) and sit
-            // closer to the midpoint than the endpoints do.
-            if (d <= radius && (p - mid).Length() < half) return true;
+            // The blocker must reach the line of sight.
+            if (d <= radius) return true;
         }
         return false;
     }
@@ -207,8 +313,6 @@ public static class RadiationIntegration
         Vector3 ab = pb - pa;
         float lenSq = ab.LengthSquared();
         if (lenSq <= 0.0f) return false;
-        Vector3 mid = (pa + pb) * 0.5f;
-        float half = MathF.Sqrt(lenSq) * 0.5f;
 
         for (int idx = 0; idx < bodies.Count; idx++)
         {
@@ -221,9 +325,27 @@ public static class RadiationIntegration
             Vector3 closest = pa + ab * t;
             float d = (p - closest).Length();
             float radius = ThermalGeometry.BoundingRadius3(body.Shape);
-            if (d <= radius && (p - mid).Length() < half) return true;
+            if (d <= radius) return true;
         }
         return false;
     }
 
+    /// <summary>
+    /// The sky and ground temperatures used by the environment radiation.
+    /// A non-positive value means "use the ambient temperature".
+    /// </summary>
+    internal static (float Sky, float Ground) EnvironmentTemperatures(ThermalConfig2 config)
+    {
+        float ambient = config.AmbientTemperature;
+        float sky = config.SkyTemperature > 0.0f ? config.SkyTemperature : ambient;
+        float ground = config.GroundTemperature > 0.0f ? config.GroundTemperature : ambient;
+        return (sky, ground);
+    }
+
+    /// <summary>t^4, computed the same way the model has always computed it.</summary>
+    internal static float FourthPower(float t)
+    {
+        float sq = t * t;
+        return sq * sq;
+    }
 }

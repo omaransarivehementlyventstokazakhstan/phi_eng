@@ -329,6 +329,19 @@ contact for that frame rather than a guessed depth.
   (`PhiEng.Dynamics`) steps the same thermal subsystem; its snapshot
   layout is byte-identical to the Rust writer's, so a file written by
   either engine loads in the other (F40).
+- **Radiation model expansion (2D and 3D, both languages):** three
+  opt-in options on `ThermalConfig2/3`, all defaulting to the
+  historical behaviour so existing trajectories stay bit-identical:
+  a **symmetric view-factor model** (`ViewFactorModel::Symmetric`) whose
+  exchange rate no longer depends on which body of a pair the loop
+  visits first, a **sky/ground split** of the environment radiation
+  (each body's up-facing area fraction splits the exchange between a
+  cold sky and a warm ground), and a **partially transparent occluder**
+  (`occluder_transmittance`) that attenuates an occluded exchange
+  instead of blocking it. The occlusion test itself was fixed: it used
+  to exempt blockers sitting near an endpoint, which let radiation leak
+  through the gap. Persists in schema v11. Mirrored in both languages
+  (U01–U12).
 - **Broad-phase tiers (2D and 3D, both languages):** `BroadphaseMode`
   (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
   dynamic AABB tree backend for 2D and 3D, and an explicit O(n²) brute

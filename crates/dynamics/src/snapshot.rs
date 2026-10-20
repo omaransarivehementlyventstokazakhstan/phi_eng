@@ -56,7 +56,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 10;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 11;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -71,6 +71,12 @@ const SNAPSHOT_SCHEMA_COLLISION_TIER: u32 = 9;
 /// the v9 collision-tier block. Keeping them out of the v8 thermal
 /// block preserves byte-for-byte compatibility with v8/v9 payloads.
 const SNAPSHOT_SCHEMA_THERMAL_EXTRAS: u32 = 10;
+/// Schema v11: the radiation model options (view-factor model,
+/// sky/ground environment split, occluder transmittance) live in their
+/// own block, after the v10 thermal-extras block. Keeping them out of
+/// the older blocks preserves byte-for-byte compatibility with every
+/// earlier payload.
+const SNAPSHOT_SCHEMA_RADIATION_EXTRAS: u32 = 11;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -1050,6 +1056,7 @@ fn thermal_config_dto(c: &super::thermal::ThermalConfig2D) -> ThermalConfigDto {
 fn thermal_config_from_dto(
     c: &ThermalConfigDto,
     extras: &ThermalExtrasDto,
+    radiation: &RadiationExtrasDto,
 ) -> super::thermal::ThermalConfig2D {
     super::thermal::ThermalConfig2D {
         enabled: c.enabled,
@@ -1067,6 +1074,13 @@ fn thermal_config_from_dto(
         forced_convection_coefficient: extras.forced_convection_coefficient,
         expansion_coefficient: extras.expansion_coefficient,
         expansion_reference_temperature: extras.expansion_reference_temperature,
+        view_factor_model: match radiation.view_factor_model {
+            1 => super::thermal::ViewFactorModel::Symmetric,
+            _ => super::thermal::ViewFactorModel::Legacy,
+        },
+        sky_temperature: radiation.sky_temperature,
+        ground_temperature: radiation.ground_temperature,
+        occluder_transmittance: radiation.occluder_transmittance,
     }
 }
 
@@ -1077,6 +1091,59 @@ fn thermal_extras_dto(c: &super::thermal::ThermalConfig2D) -> ThermalExtrasDto {
         forced_convection_coefficient: c.forced_convection_coefficient,
         expansion_coefficient: c.expansion_coefficient,
         expansion_reference_temperature: c.expansion_reference_temperature,
+    }
+}
+
+/// Build the schema v11 radiation DTO from an engine thermal config.
+fn radiation_extras_dto(c: &super::thermal::ThermalConfig2D) -> RadiationExtrasDto {
+    RadiationExtrasDto {
+        view_factor_model: c.view_factor_model as u32,
+        sky_temperature: c.sky_temperature,
+        ground_temperature: c.ground_temperature,
+        occluder_transmittance: c.occluder_transmittance,
+    }
+}
+
+/// Schema v11 radiation model block.
+///
+/// Kept separate from the v8 thermal config block and the v10 thermal
+/// extras block so those keep their exact byte layout (every earlier
+/// payload must still decode).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RadiationExtrasDto {
+    /// View-factor model: 0 = legacy (order-dependent), 1 = symmetric.
+    #[serde(default)]
+    pub view_factor_model: u32,
+    /// Sky temperature (K); 0 means "use the ambient temperature".
+    #[serde(default)]
+    pub sky_temperature: f32,
+    /// Ground temperature (K); 0 means "use the ambient temperature".
+    #[serde(default)]
+    pub ground_temperature: f32,
+    /// Fraction of radiation transmitted through an occluding body.
+    #[serde(default)]
+    pub occluder_transmittance: f32,
+}
+
+impl RadiationExtrasDto {
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.view_factor_model == d.view_factor_model
+            && self.sky_temperature == d.sky_temperature
+            && self.ground_temperature == d.ground_temperature
+            && self.occluder_transmittance == d.occluder_transmittance
+    }
+}
+
+impl Default for RadiationExtrasDto {
+    fn default() -> Self {
+        let c = super::thermal::ThermalConfig2D::default();
+        Self {
+            view_factor_model: c.view_factor_model as u32,
+            sky_temperature: c.sky_temperature,
+            ground_temperature: c.ground_temperature,
+            occluder_transmittance: c.occluder_transmittance,
+        }
     }
 }
 
@@ -1492,6 +1559,8 @@ struct World2Dto {
     /// pre-v10 files so default output stays byte-identical.
     #[serde(default, skip_serializing_if = "ThermalExtrasDto::is_default")]
     thermal_extras: ThermalExtrasDto,
+    #[serde(default, skip_serializing_if = "RadiationExtrasDto::is_default")]
+    radiation_extras: RadiationExtrasDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -1597,6 +1666,8 @@ struct World3Dto {
     /// pre-v10 files so default output stays byte-identical.
     #[serde(default, skip_serializing_if = "ThermalExtrasDto::is_default")]
     thermal_extras: ThermalExtrasDto,
+    #[serde(default, skip_serializing_if = "RadiationExtrasDto::is_default")]
+    radiation_extras: RadiationExtrasDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2307,7 +2378,19 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.thermal.config.forced_convection_coefficient != 0.0
         || w.thermal.config.expansion_coefficient != 0.0
         || w.thermal.config.expansion_reference_temperature != phieng_math::DEFAULT_TEMPERATURE;
-    let schema = if has_thermal || has_broadphase_mode || has_collision_tier || has_thermal_extras {
+    // Schema v11: the radiation model options are a user choice too, so
+    // they need the v11 block even when thermal stepping is disabled.
+    let has_radiation_extras = w.thermal.config.view_factor_model
+        != super::thermal::ViewFactorModel::Legacy
+        || w.thermal.config.sky_temperature != 0.0
+        || w.thermal.config.ground_temperature != 0.0
+        || w.thermal.config.occluder_transmittance != 0.0;
+    let schema = if has_thermal
+        || has_broadphase_mode
+        || has_collision_tier
+        || has_thermal_extras
+        || has_radiation_extras
+    {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
@@ -2330,6 +2413,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
         thermal_extras: thermal_extras_dto(&w.thermal.config),
+        radiation_extras: radiation_extras_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -2517,7 +2601,19 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.thermal.config.forced_convection_coefficient != 0.0
         || w.thermal.config.expansion_coefficient != 0.0
         || w.thermal.config.expansion_reference_temperature != phieng_math::DEFAULT_TEMPERATURE;
-    let schema = if has_thermal || has_broadphase_mode || has_collision_tier || has_thermal_extras {
+    // Schema v11: the radiation model options are a user choice too, so
+    // they need the v11 block even when thermal stepping is disabled.
+    let has_radiation_extras = w.thermal.config.view_factor_model
+        != super::thermal::ViewFactorModel::Legacy
+        || w.thermal.config.sky_temperature != 0.0
+        || w.thermal.config.ground_temperature != 0.0
+        || w.thermal.config.occluder_transmittance != 0.0;
+    let schema = if has_thermal
+        || has_broadphase_mode
+        || has_collision_tier
+        || has_thermal_extras
+        || has_radiation_extras
+    {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
@@ -2540,6 +2636,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         ccd: ccd_config_dto(&w.ccd),
         thermal: thermal_config_dto(&w.thermal.config),
         thermal_extras: thermal_extras_dto(&w.thermal.config),
+        radiation_extras: radiation_extras_dto(&w.thermal.config),
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -3527,7 +3624,8 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     apply_fluid2(&mut w, &dto.fluid)?;
     // Thermal config: v8+ carries the block; older payloads use defaults.
     if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
-        w.thermal.config = thermal_config_from_dto(&dto.thermal, &dto.thermal_extras);
+        w.thermal.config =
+            thermal_config_from_dto(&dto.thermal, &dto.thermal_extras, &dto.radiation_extras);
     }
     Ok(w)
 }
@@ -3589,7 +3687,8 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     apply_fluid3(&mut w, &dto.fluid)?;
     // Thermal config: v8+ carries the block; older payloads use defaults.
     if dto.schema >= SNAPSHOT_SCHEMA_THERMAL {
-        w.thermal.config = thermal_config_from_dto(&dto.thermal, &dto.thermal_extras);
+        w.thermal.config =
+            thermal_config_from_dto(&dto.thermal, &dto.thermal_extras, &dto.radiation_extras);
     }
     Ok(w)
 }
@@ -4163,6 +4262,14 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.thermal_extras.forced_convection_coefficient);
         write_f32(&mut p, dto.thermal_extras.expansion_coefficient);
         write_f32(&mut p, dto.thermal_extras.expansion_reference_temperature);
+    }
+    // Schema v11: radiation model options (own block, after the v10
+    // thermal-extras block in the byte stream).
+    if dto.schema >= SNAPSHOT_SCHEMA_RADIATION_EXTRAS {
+        write_u32(&mut p, dto.radiation_extras.view_factor_model);
+        write_f32(&mut p, dto.radiation_extras.sky_temperature);
+        write_f32(&mut p, dto.radiation_extras.ground_temperature);
+        write_f32(&mut p, dto.radiation_extras.occluder_transmittance);
     }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
@@ -5251,6 +5358,18 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         } else {
             ThermalExtrasDto::default()
         },
+        // Schema v11: radiation model options (own block, after the v10
+        // thermal-extras block in the byte stream).
+        radiation_extras: if version >= SNAPSHOT_SCHEMA_RADIATION_EXTRAS {
+            RadiationExtrasDto {
+                view_factor_model: r.read_u32()?,
+                sky_temperature: r.read_f32()?,
+                ground_temperature: r.read_f32()?,
+                occluder_transmittance: r.read_f32()?,
+            }
+        } else {
+            RadiationExtrasDto::default()
+        },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,
         cell_size: r.read_f32()?,
@@ -5451,6 +5570,14 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.thermal_extras.expansion_coefficient);
         write_f32(&mut p, dto.thermal_extras.expansion_reference_temperature);
     }
+    // Schema v11: radiation model options (own block, after the v10
+    // thermal-extras block in the byte stream).
+    if dto.schema >= SNAPSHOT_SCHEMA_RADIATION_EXTRAS {
+        write_u32(&mut p, dto.radiation_extras.view_factor_model);
+        write_f32(&mut p, dto.radiation_extras.sky_temperature);
+        write_f32(&mut p, dto.radiation_extras.ground_temperature);
+        write_f32(&mut p, dto.radiation_extras.occluder_transmittance);
+    }
     write_u32(&mut p, dto.next_body_id);
     write_u32(&mut p, dto.next_joint_id);
     write_u32(&mut p, dto.bodies.len() as u32);
@@ -5591,6 +5718,18 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             }
         } else {
             ThermalExtrasDto::default()
+        },
+        // Schema v11: radiation model options (own block, after the v10
+        // thermal-extras block in the byte stream).
+        radiation_extras: if version >= SNAPSHOT_SCHEMA_RADIATION_EXTRAS {
+            RadiationExtrasDto {
+                view_factor_model: r.read_u32()?,
+                sky_temperature: r.read_f32()?,
+                ground_temperature: r.read_f32()?,
+                occluder_transmittance: r.read_f32()?,
+            }
+        } else {
+            RadiationExtrasDto::default()
         },
         next_body_id: r.read_u32()?,
         next_joint_id: r.read_u32()?,

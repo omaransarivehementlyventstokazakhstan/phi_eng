@@ -243,6 +243,10 @@ internal unsafe struct ThermalConfig2Ffi
     public float ForcedConvectionCoefficient;
     public float ExpansionCoefficient;
     public float ExpansionReferenceTemperature;
+public uint ViewFactorModel;
+public float SkyTemperature;
+public float GroundTemperature;
+public float OccluderTransmittance;
 }
 
 /// <summary>Thermal config FFI struct (3D). Mirrors Rust <c>ThermalConfig3Ffi</c> (same field set as 2D).</summary>
@@ -264,6 +268,10 @@ internal unsafe struct ThermalConfig2Ffi
         public float ForcedConvectionCoefficient;
         public float ExpansionCoefficient;
         public float ExpansionReferenceTemperature;
+public uint ViewFactorModel;
+public float SkyTemperature;
+public float GroundTemperature;
+public float OccluderTransmittance;
     }
 
     /// <summary>SPH fluid config FFI struct (3D). Mirrors Rust <c>FluidConfig3Ffi</c>.</summary>

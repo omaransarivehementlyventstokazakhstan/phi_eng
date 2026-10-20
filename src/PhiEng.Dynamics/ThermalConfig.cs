@@ -80,6 +80,31 @@ public class ThermalConfig2
     public float ExpansionReferenceTemperature { get; set; } = DefaultTemperature;
 
     /// <summary>
+    /// Exchange model used by the body-to-body radiation. Mirrors the Rust
+    /// <c>ViewFactorModel</c>.
+    /// </summary>
+    public ViewFactorModel ViewFactorModel { get; set; } = ViewFactorModel.Legacy;
+
+    /// <summary>
+    /// Sky temperature (K) used by the environment radiation.
+    /// Zero or less means "use <see cref="AmbientTemperature"/>.
+    /// </summary>
+    public float SkyTemperature { get; set; }
+
+    /// <summary>
+    /// Ground temperature (K) used by the environment radiation.
+    /// Zero or less means "use <see cref="AmbientTemperature"/>.
+    /// </summary>
+    public float GroundTemperature { get; set; }
+
+    /// <summary>
+    /// Fraction of the radiation that passes through an occluding body
+    /// (0 = fully opaque, the historical behaviour; 1 = the occluder
+    /// does not block at all).
+    /// </summary>
+    public float OccluderTransmittance { get; set; }
+
+    /// <summary>
     /// True when the thermal phase would do work: the subsystem is
     /// enabled, at least one heat-transfer mechanism is on, and the
     /// ambient temperature is usable. Mirrors Rust
@@ -113,7 +138,11 @@ public class ThermalConfig2
             && RadiationOcclusion == d.RadiationOcclusion
             && ForcedConvectionCoefficient == d.ForcedConvectionCoefficient
             && ExpansionCoefficient == d.ExpansionCoefficient
-            && ExpansionReferenceTemperature == d.ExpansionReferenceTemperature;
+            && ExpansionReferenceTemperature == d.ExpansionReferenceTemperature
+        && ViewFactorModel == d.ViewFactorModel
+        && SkyTemperature == d.SkyTemperature
+        && GroundTemperature == d.GroundTemperature
+        && OccluderTransmittance == d.OccluderTransmittance;
     }
 }
 

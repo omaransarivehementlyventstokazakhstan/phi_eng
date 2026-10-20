@@ -49,7 +49,7 @@ public static class Snapshot
     /// Rust writer's, so a file written by either engine loads in the
     /// other.
     /// </summary>
-    public const uint SchemaVersion = 10;
+    public const uint SchemaVersion = 11;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -83,6 +83,20 @@ public static class Snapshot
     /// occlusion, forced convection, thermal expansion).
     /// </summary>
     public const uint ThermalExtrasSchemaVersion = 10;
+
+    /// <summary>
+    /// Schema version that introduced the radiation model block (view
+    /// factor model, sky/ground environment split, occluder
+    /// transmittance). Must match Rust
+    /// <c>SNAPSHOT_SCHEMA_RADIATION_EXTRAS</c>.
+    /// </summary>
+    /// <remarks>
+    /// This gate is deliberately a named constant and NOT
+    /// <see cref="SchemaVersion"/>: tracking the current version would
+    /// silently retarget it whenever the schema is bumped, breaking
+    /// every older payload.
+    /// </remarks>
+    public const uint RadiationExtrasSchemaVersion = 11;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -321,6 +335,32 @@ public static class Snapshot
         [JsonPropertyName("min_temperature")] public float MinTemperature { get; set; }
         [JsonPropertyName("radiation_radius_factor")] public float RadiationRadiusFactor { get; set; } = 5.0f;
         [JsonPropertyName("max_temperature_rate")] public float MaxTemperatureRate { get; set; } = 100.0f;
+    }
+
+    /// <summary>
+    /// Schema v11 radiation model block. Kept separate from the v8
+    /// thermal config block and the v10 thermal extras block so those
+    /// keep their exact byte layout.
+    /// </summary>
+    private sealed class RadiationExtrasDto
+    {
+        [JsonPropertyName("view_factor_model")] public uint ViewFactorModel { get; set; }
+
+        [JsonPropertyName("sky_temperature")] public float SkyTemperature { get; set; }
+
+        [JsonPropertyName("ground_temperature")] public float GroundTemperature { get; set; }
+
+        [JsonPropertyName("occluder_transmittance")] public float OccluderTransmittance { get; set; }
+
+        /// <summary>True when every field still holds its default value.</summary>
+        public bool IsDefault()
+        {
+            var d = new RadiationExtrasDto();
+            return ViewFactorModel == d.ViewFactorModel
+                && SkyTemperature == d.SkyTemperature
+                && GroundTemperature == d.GroundTemperature
+                && OccluderTransmittance == d.OccluderTransmittance;
+        }
     }
 
     private sealed class ThermalExtrasDto
@@ -729,6 +769,8 @@ public static class Snapshot
         [JsonPropertyName("thermal")] public ThermalConfigDto Thermal { get; set; } = new();
         /// <summary>Thermal sub-features (schema v10).</summary>
         [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
+
+        [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -775,7 +817,14 @@ public static class Snapshot
                 || w.Thermal.ForcedConvectionCoefficient != 0.0f
                 || w.Thermal.ExpansionCoefficient != 0.0f
                 || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
-            uint schema = hasThermal ? ThermalExtrasSchemaVersion
+            // Schema v11: the radiation model options are a user choice too,
+            // so they need the v11 block even when thermal stepping is
+            // disabled. Mirrors the Rust writer rule exactly.
+            bool hasRadiationExtras = w.Thermal.ViewFactorModel != ViewFactorModel.Legacy
+                || w.Thermal.SkyTemperature != 0.0f
+                || w.Thermal.GroundTemperature != 0.0f
+                || w.Thermal.OccluderTransmittance != 0.0f;
+            uint schema = hasThermal || hasRadiationExtras ? RadiationExtrasSchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -847,6 +896,13 @@ public static class Snapshot
                     RadiationRadiusFactor = w.Thermal.RadiationRadiusFactor,
                     MaxTemperatureRate = w.Thermal.MaxTemperatureRate,
                 },
+            RadiationExtras = new RadiationExtrasDto
+            {
+                ViewFactorModel = (uint)w.Thermal.ViewFactorModel,
+                SkyTemperature = w.Thermal.SkyTemperature,
+                GroundTemperature = w.Thermal.GroundTemperature,
+                OccluderTransmittance = w.Thermal.OccluderTransmittance,
+            },
                 ThermalExtras = new ThermalExtrasDto
                 {
                     RadiationOcclusion = w.Thermal.RadiationOcclusion,
@@ -1068,6 +1124,8 @@ public static class Snapshot
         [JsonPropertyName("thermal")] public ThermalConfigDto Thermal { get; set; } = new();
         /// <summary>Thermal sub-features (schema v10).</summary>
         [JsonPropertyName("thermal_extras")] public ThermalExtrasDto ThermalExtras { get; set; } = new();
+
+        [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -1111,7 +1169,14 @@ public static class Snapshot
                 || w.Thermal.ForcedConvectionCoefficient != 0.0f
                 || w.Thermal.ExpansionCoefficient != 0.0f
                 || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
-            uint schema = hasThermal ? ThermalExtrasSchemaVersion
+            // Schema v11: the radiation model options are a user choice too,
+            // so they need the v11 block even when thermal stepping is
+            // disabled. Mirrors the Rust writer rule exactly.
+            bool hasRadiationExtras = w.Thermal.ViewFactorModel != ViewFactorModel.Legacy
+                || w.Thermal.SkyTemperature != 0.0f
+                || w.Thermal.GroundTemperature != 0.0f
+                || w.Thermal.OccluderTransmittance != 0.0f;
+            uint schema = hasThermal || hasRadiationExtras ? RadiationExtrasSchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1183,6 +1248,13 @@ public static class Snapshot
                     RadiationRadiusFactor = w.Thermal.RadiationRadiusFactor,
                     MaxTemperatureRate = w.Thermal.MaxTemperatureRate,
                 },
+            RadiationExtras = new RadiationExtrasDto
+            {
+                ViewFactorModel = (uint)w.Thermal.ViewFactorModel,
+                SkyTemperature = w.Thermal.SkyTemperature,
+                GroundTemperature = w.Thermal.GroundTemperature,
+                OccluderTransmittance = w.Thermal.OccluderTransmittance,
+            },
                 ThermalExtras = new ThermalExtrasDto
                 {
                     RadiationOcclusion = w.Thermal.RadiationOcclusion,
@@ -1566,7 +1638,10 @@ public static class Snapshot
     /// sub-feature block. Older payloads have neither, so they resolve
     /// to the engine defaults (thermal off).
     /// </summary>
-    private static ThermalConfig2 ThermalConfigFrom(ThermalConfigDto c, ThermalExtrasDto extras) => new()
+    private static ThermalConfig2 ThermalConfigFrom(
+        ThermalConfigDto c,
+        ThermalExtrasDto extras,
+        RadiationExtrasDto radiation) => new()
     {
         Enabled = c.Enabled,
         AmbientTemperature = Fin(c.AmbientTemperature, "ambient_temperature"),
@@ -1583,6 +1658,10 @@ public static class Snapshot
         ForcedConvectionCoefficient = Fin(extras.ForcedConvectionCoefficient, "forced_convection_coefficient"),
         ExpansionCoefficient = Fin(extras.ExpansionCoefficient, "expansion_coefficient"),
         ExpansionReferenceTemperature = Fin(extras.ExpansionReferenceTemperature, "expansion_reference_temperature"),
+        ViewFactorModel = radiation.ViewFactorModel == 1 ? ViewFactorModel.Symmetric : ViewFactorModel.Legacy,
+        SkyTemperature = Fin(radiation.SkyTemperature, "sky_temperature"),
+        GroundTemperature = Fin(radiation.GroundTemperature, "ground_temperature"),
+        OccluderTransmittance = Fin(radiation.OccluderTransmittance, "occluder_transmittance"),
     };
 
     /// <summary>Rebuilds a material, carrying the thermal properties.</summary>
@@ -1657,7 +1736,7 @@ public static class Snapshot
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
             Ccd = CcdConfigFrom(dto.Ccd),
-            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras),
+            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras, dto.RadiationExtras),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -1856,7 +1935,7 @@ public static class Snapshot
             Ambient = AmbientConfigFrom(dto.Ambient),
             Time = Fin(dto.Time, "time"),
             Ccd = CcdConfigFrom(dto.Ccd),
-            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras),
+            Thermal = ThermalConfigFrom(dto.Thermal, dto.ThermalExtras, dto.RadiationExtras),
             Dt = Fin(dto.Dt, "dt"),
             LinearSleepThreshold = Fin(dto.LinearSleepThreshold, "sleep"),
             AngularSleepThreshold = Fin(dto.AngularSleepThreshold, "sleep"),
@@ -2113,6 +2192,15 @@ public static class Snapshot
         ExpansionReferenceTemperature = r.ReadSingle(),
     };
 
+
+    /// <summary>Reads the schema v11 radiation model block.</summary>
+    private static RadiationExtrasDto ReadRadiationExtras(BinaryReader r) => new()
+    {
+        ViewFactorModel = r.ReadUInt32(),
+        SkyTemperature = r.ReadSingle(),
+        GroundTemperature = r.ReadSingle(),
+        OccluderTransmittance = r.ReadSingle(),
+    };
     private static void WriteSolver(BinaryWriter w, SolverDto s, uint version)
     {
         w.Write(s.Iterations);
@@ -2406,6 +2494,15 @@ public static class Snapshot
             w.Write(dto.ThermalExtras.ExpansionCoefficient);
             w.Write(dto.ThermalExtras.ExpansionReferenceTemperature);
         }
+        // Schema v11: radiation model options (own block, after the v10
+        // thermal-extras block in the byte stream).
+        if (dto.Schema >= RadiationExtrasSchemaVersion)
+        {
+            w.Write(dto.RadiationExtras.ViewFactorModel);
+            w.Write(dto.RadiationExtras.SkyTemperature);
+            w.Write(dto.RadiationExtras.GroundTemperature);
+            w.Write(dto.RadiationExtras.OccluderTransmittance);
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.CellSize);
@@ -2677,6 +2774,8 @@ public static class Snapshot
             CollisionTierMaxTier = version >= CollisionTierSchemaVersion ? r.ReadUInt32() : DefaultCollisionTierMaxTier,
             // v10 payloads carry the thermal sub-feature block.
             ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
+            // v11 payloads carry the radiation model block.
+            RadiationExtras = version >= RadiationExtrasSchemaVersion ? ReadRadiationExtras(r) : new RadiationExtrasDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
             CellSize = r.ReadSingle(),
@@ -2980,6 +3079,15 @@ public static class Snapshot
             w.Write(dto.ThermalExtras.ExpansionCoefficient);
             w.Write(dto.ThermalExtras.ExpansionReferenceTemperature);
         }
+        // Schema v11: radiation model options (own block, after the v10
+        // thermal-extras block in the byte stream).
+        if (dto.Schema >= RadiationExtrasSchemaVersion)
+        {
+            w.Write(dto.RadiationExtras.ViewFactorModel);
+            w.Write(dto.RadiationExtras.SkyTemperature);
+            w.Write(dto.RadiationExtras.GroundTemperature);
+            w.Write(dto.RadiationExtras.OccluderTransmittance);
+        }
         w.Write(dto.NextBodyId);
         w.Write(dto.NextJointId);
         w.Write(dto.Bodies.Count);
@@ -3063,6 +3171,8 @@ public static class Snapshot
             CollisionTierMaxTier = version >= CollisionTierSchemaVersion ? r.ReadUInt32() : DefaultCollisionTierMaxTier,
             // v10 payloads carry the thermal sub-feature block.
             ThermalExtras = version >= ThermalExtrasSchemaVersion ? ReadThermalExtras(r) : new ThermalExtrasDto(),
+            // v11 payloads carry the radiation model block.
+            RadiationExtras = version >= RadiationExtrasSchemaVersion ? ReadRadiationExtras(r) : new RadiationExtrasDto(),
             NextBodyId = r.ReadInt32(),
             NextJointId = r.ReadInt32(),
         };
