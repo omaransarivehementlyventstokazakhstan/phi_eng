@@ -36,6 +36,13 @@ The nuclear subsystem is a **rate-based** model, not a transport solve:
   chain is a chain, not a tree: branching ratios (the fraction of
   decays that produce each daughter) are not modelled, and the
   activation path is a single `daughter` field.
+- **Capture is mean-field, not per-neutron.** A body with a daughter
+  accumulates capture progress at a rate proportional to the flux and
+  the absorption cross-section, and becomes the daughter when that
+  progress reaches one. A real capture is a per-neutron event with a
+  branching ratio, so the model gets the *average* right and not the
+  individual event. It is deterministic by construction (no RNG), which
+  is the trade the engine makes.
 - **There is no delayed-neutron *precursor* chain.** The delayed
   fraction is modelled as a single exponential leak with one delay
   time, not as the six precursor groups a real reactor has. The
@@ -130,7 +137,7 @@ interpenetrated pairs (past any range the solver would let persist) can
 report flipped axes, which is another reason penetration must be
 arrested early rather than resolved late.
 
-## No raycasts, triggers — broadphase tiers, rigid-only joints, snapshots are versioned v8
+## No raycasts, triggers — broadphase tiers, rigid-only joints, snapshots are versioned v12
 
 Broad-phase backends (`BroadphaseMode`: brute force, spatial hash,
 dynamic AABB tree, hybrid auto-select — B01–B06) are behavior-identical

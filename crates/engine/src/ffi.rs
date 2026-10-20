@@ -3414,6 +3414,8 @@ pub struct NuclearConfigFfi {
     pub ambient_flux: f32,
     /// The fission rate constant.
     pub fission_rate: f32,
+    /// The capture rate constant.
+    pub activation_rate: f32,
     /// The fuel consumed per fission.
     pub fuel_per_fission: f32,
     /// The range within which free neutrons are shared.
@@ -3474,6 +3476,8 @@ pub struct NuclearBodyFfi {
     pub delayed_neutrons: f32,
     /// The accumulated ionizing dose.
     pub dose: f32,
+    /// The accumulated neutron-capture progress.
+    pub capture_progress: f32,
 }
 
 /// The maximum number of nuclides a world may carry.
@@ -3486,6 +3490,7 @@ fn nuclear_from_ffi(c: &NuclearConfigFfi) -> Option<phieng_dynamics::nuclear::Nu
         c.fission_energy,
         c.ambient_flux,
         c.fission_rate,
+        c.activation_rate,
         c.fuel_per_fission,
         c.neutron_range,
         c.dose_range,
@@ -3503,6 +3508,7 @@ fn nuclear_from_ffi(c: &NuclearConfigFfi) -> Option<phieng_dynamics::nuclear::Nu
         || c.fission_energy < 0.0
         || c.ambient_flux < 0.0
         || c.fission_rate < 0.0
+        || c.activation_rate < 0.0
         || c.fuel_per_fission < 0.0
         || c.neutron_range < 0.0
         || c.dose_range < 0.0
@@ -3530,6 +3536,7 @@ fn nuclear_from_ffi(c: &NuclearConfigFfi) -> Option<phieng_dynamics::nuclear::Nu
         fission_energy: c.fission_energy,
         ambient_flux: c.ambient_flux,
         fission_rate: c.fission_rate,
+        activation_rate: c.activation_rate,
         fuel_per_fission: c.fuel_per_fission,
         neutron_range: c.neutron_range,
         dose_range: c.dose_range,
@@ -3548,6 +3555,7 @@ fn nuclear_to_ffi(c: &phieng_dynamics::nuclear::NuclearConfig) -> NuclearConfigF
         fission_energy: c.fission_energy,
         ambient_flux: c.ambient_flux,
         fission_rate: c.fission_rate,
+        activation_rate: c.activation_rate,
         fuel_per_fission: c.fuel_per_fission,
         neutron_range: c.neutron_range,
         dose_range: c.dose_range,
@@ -3604,6 +3612,7 @@ fn nuclear_body_to_ffi(n: &phieng_dynamics::nuclear::NuclearState) -> NuclearBod
         neutrons: n.neutrons,
         delayed_neutrons: n.delayed_neutrons,
         dose: n.dose,
+        capture_progress: n.capture_progress,
     }
 }
 
@@ -3746,6 +3755,68 @@ pub unsafe extern "C" fn phieng_world3_set_isotope(
     1
 }
 
+/// Get one nuclide from the 2D table.
+///
+/// # Safety
+/// `world` must be a valid `World2` pointer and `out` a valid pointer to
+/// a writable `IsotopeFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_isotope(
+    world: *const World2,
+    index: u32,
+    out: *mut IsotopeFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let table = &(*world).nuclear.config.isotopes;
+    let Some(iso) = table.get(index as usize) else {
+        return 0;
+    };
+    *out = IsotopeFfi {
+        half_life: iso.half_life,
+        decay_energy: iso.decay_energy,
+        ionization_fraction: iso.ionization_fraction,
+        daughter: iso.daughter as u32,
+        absorption_cross_section: iso.absorption_cross_section,
+        fission_cross_section: iso.fission_cross_section,
+        neutron_yield: iso.neutron_yield,
+        is_fissile: iso.is_fissile,
+    };
+    1
+}
+
+/// Get one nuclide from the 3D table.
+///
+/// # Safety
+/// `world` must be a valid `World3` pointer and `out` a valid pointer to
+/// a writable `IsotopeFfi`.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_isotope(
+    world: *const phieng_dynamics::World3,
+    index: u32,
+    out: *mut IsotopeFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let table = &(*world).nuclear.config.isotopes;
+    let Some(iso) = table.get(index as usize) else {
+        return 0;
+    };
+    *out = IsotopeFfi {
+        half_life: iso.half_life,
+        decay_energy: iso.decay_energy,
+        ionization_fraction: iso.ionization_fraction,
+        daughter: iso.daughter as u32,
+        absorption_cross_section: iso.absorption_cross_section,
+        fission_cross_section: iso.fission_cross_section,
+        neutron_yield: iso.neutron_yield,
+        is_fissile: iso.is_fissile,
+    };
+    1
+}
+
 /// Set the 2D per-body nuclear state.
 ///
 /// # Safety
@@ -3771,6 +3842,13 @@ pub unsafe extern "C" fn phieng_world_set_body_nuclear_state(
         }
     }
     let bodies = &mut (*world).bodies;
+    // The nuclide index must exist in the table: truncating it would
+    // silently turn an unknown nuclide into a different one.
+    let table = &(*world).nuclear.config.isotopes;
+    let table_len = table.len();
+    if s.isotope as usize >= table_len {
+        return 0;
+    }
     let body = &mut bodies[index];
     body.nuclear.isotope = s.isotope as u16;
     body.nuclear.activity = s.activity.max(0.0);
@@ -3778,6 +3856,7 @@ pub unsafe extern "C" fn phieng_world_set_body_nuclear_state(
     body.nuclear.neutrons = s.neutrons.max(0.0);
     body.nuclear.delayed_neutrons = s.delayed_neutrons.max(0.0);
     body.nuclear.dose = s.dose.max(0.0);
+    body.nuclear.capture_progress = s.capture_progress.max(0.0);
     1
 }
 
@@ -3829,6 +3908,13 @@ pub unsafe extern "C" fn phieng_world3_set_body_nuclear_state(
         }
     }
     let bodies = &mut (*world).bodies;
+    // The nuclide index must exist in the table: truncating it would
+    // silently turn an unknown nuclide into a different one.
+    let table = &(*world).nuclear.config.isotopes;
+    let table_len = table.len();
+    if s.isotope as usize >= table_len {
+        return 0;
+    }
     let body = &mut bodies[index];
     body.nuclear.isotope = s.isotope as u16;
     body.nuclear.activity = s.activity.max(0.0);
@@ -3836,6 +3922,7 @@ pub unsafe extern "C" fn phieng_world3_set_body_nuclear_state(
     body.nuclear.neutrons = s.neutrons.max(0.0);
     body.nuclear.delayed_neutrons = s.delayed_neutrons.max(0.0);
     body.nuclear.dose = s.dose.max(0.0);
+    body.nuclear.capture_progress = s.capture_progress.max(0.0);
     1
 }
 
@@ -5484,6 +5571,7 @@ mod tests {
                 fission_energy: 2.5e-11,
                 ambient_flux: 0.75,
                 fission_rate: 2.0,
+                activation_rate: 1.5,
                 fuel_per_fission: 1e-5,
                 neutron_range: 4.5,
                 dose_range: 6.5,
@@ -5514,6 +5602,7 @@ mod tests {
                 fission_energy: 0.0,
                 ambient_flux: 0.0,
                 fission_rate: 0.0,
+                activation_rate: 0.0,
                 fuel_per_fission: 0.0,
                 neutron_range: 0.0,
                 dose_range: 0.0,
@@ -5554,6 +5643,7 @@ mod tests {
                 neutrons: 3.0,
                 delayed_neutrons: 2.0,
                 dose: 0.125,
+                capture_progress: 0.25,
             };
             assert_eq!(
                 phieng_world_set_body_nuclear_state(&mut world, body as u32, &state),
@@ -5566,6 +5656,7 @@ mod tests {
                 neutrons: 0.0,
                 delayed_neutrons: 0.0,
                 dose: 0.0,
+                capture_progress: 0.0,
             };
             assert_eq!(
                 phieng_world_get_body_nuclear_state(&world, body as u32, &mut body_out),

@@ -32,6 +32,50 @@ namespace PhiEng.Dynamics;
 public static class NuclearIntegration
 {
     /// <summary>
+    /// The minimum of two values, ignoring NaN. This is Rust's
+    /// <c>f32::min</c> (IEEE <c>minNum</c>): .NET's <c>Math.Min</c>
+    /// *propagates* NaN instead, which would make the two engines
+    /// disagree.
+    /// </summary>
+    internal static float MinNum(float a, float b)
+    {
+        if (float.IsNaN(a)) return b;
+        if (float.IsNaN(b)) return a;
+        return System.Math.Min(a, b);
+    }
+
+    /// <summary>
+    /// The maximum of two values, ignoring NaN - the counterpart of
+    /// <see cref="MinNum"/>.
+    /// </summary>
+    internal static float MaxNum(float a, float b)
+    {
+        if (float.IsNaN(a)) return b;
+        if (float.IsNaN(b)) return a;
+        return System.Math.Max(a, b);
+    }
+
+    /// <summary>
+    /// The product of two values, saturated at <see cref="float.MaxValue"/>
+    /// instead of overflowing to infinity. An infinite energy would turn
+    /// into NaN in the heat/ionizing split (infinity * 0.0), and a NaN
+    /// temperature poisons the body for good.
+    /// </summary>
+    internal static float SaturatingProduct(float a, float b)
+    {
+        if (float.IsNaN(a) || float.IsNaN(b))
+        {
+            return float.NaN;
+        }
+        float product = a * b;
+        if (float.IsInfinity(product))
+        {
+            return (a < 0.0f) != (b < 0.0f) ? float.NegativeInfinity : float.MaxValue;
+        }
+        return product;
+    }
+
+    /// <summary>
     /// Runs the nuclear phase for a 2D world.
     /// </summary>
     /// <param name="bodies">The world bodies.</param>
@@ -44,16 +88,10 @@ public static class NuclearIntegration
         NuclearScratch scratch,
         float dt)
     {
-        if (!config.IsActive() || dt <= 0.0f || bodies.Count == 0)
-        {
-            return;
-        }
-        float dtNuclear = dt * config.TimeScale;
-        if (dtNuclear <= 0.0f)
-        {
-            return;
-        }
-
+        // The scratch is cleared *before* the early returns: the world
+        // applies the heat budget after this call, and a stale budget
+        // would be re-applied every step (an unbounded temperature
+        // ramp).
         int n = bodies.Count;
         if (scratch.Heat.Length != n)
         {
@@ -66,6 +104,16 @@ public static class NuclearIntegration
             Array.Clear(scratch.Heat);
             Array.Clear(scratch.Radiation);
             Array.Clear(scratch.Flux);
+        }
+
+        if (!config.IsActive() || dt <= 0.0f || bodies.Count == 0)
+        {
+            return;
+        }
+        float dtNuclear = dt * config.TimeScale;
+        if (dtNuclear <= 0.0f)
+        {
+            return;
         }
 
         // 1. Decay: the activity falls and releases energy.
@@ -95,8 +143,13 @@ public static class NuclearIntegration
 
             // The energy released in this step uses the start-of-step
             // activity (explicit, like the thermal phase).
-            float energy = ns.Activity * iso.DecayEnergy * dtNuclear;
-            float ionizing = energy * System.Math.Clamp(iso.IonizationFraction, 0.0f, 1.0f);
+            // The product can overflow to infinity for extreme inputs, and
+            // `infinity * 0.0` is NaN - which would poison the body's
+            // temperature for good. The split is therefore computed on a
+            // saturated energy and with an explicit zero-ionizing branch.
+            float energy = SaturatingProduct(ns.Activity, iso.DecayEnergy) * dtNuclear;
+            float fraction = System.Math.Clamp(iso.IonizationFraction, 0.0f, 1.0f);
+            float ionizing = fraction <= 0.0f ? 0.0f : energy * fraction;
             scratch.Heat[i] += energy - ionizing;
             scratch.Radiation[i] += ionizing;
 
@@ -105,7 +158,7 @@ public static class NuclearIntegration
             {
                 ns.Activity = 0.0f;
             }
-            ns.Activity = System.Math.Min(ns.Activity, config.MaxActivity);
+            ns.Activity = MinNum(ns.Activity, config.MaxActivity);
         }
 
         // 2. Fission and the chain reaction.
@@ -131,16 +184,10 @@ public static class NuclearIntegration
         NuclearScratch scratch,
         float dt)
     {
-        if (!config.IsActive() || dt <= 0.0f || bodies.Count == 0)
-        {
-            return;
-        }
-        float dtNuclear = dt * config.TimeScale;
-        if (dtNuclear <= 0.0f)
-        {
-            return;
-        }
-
+        // The scratch is cleared *before* the early returns: the world
+        // applies the heat budget after this call, and a stale budget
+        // would be re-applied every step (an unbounded temperature
+        // ramp).
         int n = bodies.Count;
         if (scratch.Heat.Length != n)
         {
@@ -153,6 +200,16 @@ public static class NuclearIntegration
             Array.Clear(scratch.Heat);
             Array.Clear(scratch.Radiation);
             Array.Clear(scratch.Flux);
+        }
+
+        if (!config.IsActive() || dt <= 0.0f || bodies.Count == 0)
+        {
+            return;
+        }
+        float dtNuclear = dt * config.TimeScale;
+        if (dtNuclear <= 0.0f)
+        {
+            return;
         }
 
         for (int i = 0; i < n; i++)
@@ -177,8 +234,13 @@ public static class NuclearIntegration
             {
                 continue;
             }
-            float energy = ns.Activity * iso.DecayEnergy * dtNuclear;
-            float ionizing = energy * System.Math.Clamp(iso.IonizationFraction, 0.0f, 1.0f);
+            // The product can overflow to infinity for extreme inputs, and
+            // `infinity * 0.0` is NaN - which would poison the body's
+            // temperature for good. The split is therefore computed on a
+            // saturated energy and with an explicit zero-ionizing branch.
+            float energy = SaturatingProduct(ns.Activity, iso.DecayEnergy) * dtNuclear;
+            float fraction = System.Math.Clamp(iso.IonizationFraction, 0.0f, 1.0f);
+            float ionizing = fraction <= 0.0f ? 0.0f : energy * fraction;
             scratch.Heat[i] += energy - ionizing;
             scratch.Radiation[i] += ionizing;
 
@@ -187,7 +249,7 @@ public static class NuclearIntegration
             {
                 ns.Activity = 0.0f;
             }
-            ns.Activity = System.Math.Min(ns.Activity, config.MaxActivity);
+            ns.Activity = MinNum(ns.Activity, config.MaxActivity);
         }
 
         // 2. Fission and the chain reaction.
@@ -265,10 +327,13 @@ public static class NuclearIntegration
             {
                 continue;
             }
-            float delay = config.DelayedNeutronDelay > 0.0f
-                ? config.DelayedNeutronDelay
-                : 1.17549435e-38f;
-            float released = ns.DelayedNeutrons * (1.0f - DeterministicScalar.Exp(-dtNuclear / delay));
+            // A non-positive delay means "release everything now". The
+            // explicit branch avoids relying on dt / (the smallest
+            // normal) overflowing to -inf.
+            float released = config.DelayedNeutronDelay > 0.0f
+                ? ns.DelayedNeutrons
+                    * (1.0f - DeterministicScalar.Exp(-dtNuclear / config.DelayedNeutronDelay))
+                : ns.DelayedNeutrons;
             ns.DelayedNeutrons -= released;
             ns.Neutrons += released;
         }
@@ -301,12 +366,54 @@ public static class NuclearIntegration
             {
                 continue;
             }
+            // The fissions cannot exceed the fuel actually present.
+            if (config.FuelPerFission > 0.0f)
+            {
+                fissions = System.Math.Min(fissions, ns.Fuel / config.FuelPerFission);
+            }
+            if (fissions <= 0.0f)
+            {
+                continue;
+            }
             ns.Fuel = System.Math.Max(ns.Fuel - fissions * config.FuelPerFission, 0.0f);
-            scratch.Heat[i] += fissions * config.FissionEnergy;
+            scratch.Heat[i] += SaturatingProduct(fissions, config.FissionEnergy);
             float neutrons = fissions * iso.NeutronYield;
             float delayed = neutrons * System.Math.Clamp(config.DelayedNeutronFraction, 0.0f, 1.0f);
             ns.DelayedNeutrons += delayed;
             ns.Neutrons += neutrons - delayed;
+        }
+
+        // 4. Capture (see the 2D counterpart).
+        for (int i = 0; i < bodies.Count; i++)
+        {
+            var ns = bodies[i].Nuclear;
+            if (ns.Isotope == 0)
+            {
+                continue;
+            }
+            var iso = config.GetIsotope(ns.Isotope);
+            if (iso == null || iso.Daughter == 0 || iso.AbsorptionCrossSection <= 0.0f)
+            {
+                continue;
+            }
+            float flux = config.AmbientFlux + scratch.Flux[i];
+            if (flux <= 0.0f)
+            {
+                continue;
+            }
+            float rate = flux * iso.AbsorptionCrossSection * config.ActivationRate;
+            if (rate <= 0.0f)
+            {
+                continue;
+            }
+            ns.CaptureProgress += rate * dtNuclear;
+            if (ns.CaptureProgress >= 1.0f)
+            {
+                ns.Isotope = iso.Daughter;
+                ns.CaptureProgress = 0.0f;
+                ns.Activity = 0.0f;
+                ns.Fuel = 0.0f;
+            }
         }
     }
 
@@ -377,10 +484,13 @@ public static class NuclearIntegration
             {
                 continue;
             }
-            float delay = config.DelayedNeutronDelay > 0.0f
-                ? config.DelayedNeutronDelay
-                : 1.17549435e-38f;
-            float released = ns.DelayedNeutrons * (1.0f - DeterministicScalar.Exp(-dtNuclear / delay));
+            // A non-positive delay means "release everything now". The
+            // explicit branch avoids relying on dt / (the smallest
+            // normal) overflowing to -inf.
+            float released = config.DelayedNeutronDelay > 0.0f
+                ? ns.DelayedNeutrons
+                    * (1.0f - DeterministicScalar.Exp(-dtNuclear / config.DelayedNeutronDelay))
+                : ns.DelayedNeutrons;
             ns.DelayedNeutrons -= released;
             ns.Neutrons += released;
         }
@@ -414,16 +524,63 @@ public static class NuclearIntegration
             {
                 continue;
             }
+            // The fissions cannot exceed the fuel actually present:
+            // without this cap a body would keep producing heat and
+            // neutrons long after its fuel ran out.
+            if (config.FuelPerFission > 0.0f)
+            {
+                fissions = System.Math.Min(fissions, ns.Fuel / config.FuelPerFission);
+            }
+            if (fissions <= 0.0f)
+            {
+                continue;
+            }
 
             ns.Fuel = System.Math.Max(ns.Fuel - fissions * config.FuelPerFission, 0.0f);
 
-            float energy = fissions * config.FissionEnergy;
+            float energy = SaturatingProduct(fissions, config.FissionEnergy);
             scratch.Heat[i] += energy;
 
             float neutrons = fissions * iso.NeutronYield;
             float delayed = neutrons * System.Math.Clamp(config.DelayedNeutronFraction, 0.0f, 1.0f);
             ns.DelayedNeutrons += delayed;
             ns.Neutrons += neutrons - delayed;
+        }
+
+        // 4. Capture: a body with a daughter nuclide absorbs the
+        //    neutrons in its flux and becomes that daughter. The capture
+        //    is mean-field (a rate, not a per-neutron coin flip), so it
+        //    stays deterministic without an RNG.
+        for (int i = 0; i < bodies.Count; i++)
+        {
+            var ns = bodies[i].Nuclear;
+            if (ns.Isotope == 0)
+            {
+                continue;
+            }
+            var iso = config.GetIsotope(ns.Isotope);
+            if (iso == null || iso.Daughter == 0 || iso.AbsorptionCrossSection <= 0.0f)
+            {
+                continue;
+            }
+            float flux = config.AmbientFlux + scratch.Flux[i];
+            if (flux <= 0.0f)
+            {
+                continue;
+            }
+            float rate = flux * iso.AbsorptionCrossSection * config.ActivationRate;
+            if (rate <= 0.0f)
+            {
+                continue;
+            }
+            ns.CaptureProgress += rate * dtNuclear;
+            if (ns.CaptureProgress >= 1.0f)
+            {
+                ns.Isotope = iso.Daughter;
+                ns.CaptureProgress = 0.0f;
+                ns.Activity = 0.0f;
+                ns.Fuel = 0.0f;
+            }
         }
     }
 
@@ -472,7 +629,7 @@ public static class NuclearIntegration
                 {
                     continue;
                 }
-                float w = 1.0f / System.Math.Max(d2, 1e-6f);
+                float w = 1.0f / MaxNum(d2, 1e-6f);
                 scratch.DoseWeights[j] = w;
                 total += w;
             }
@@ -495,7 +652,7 @@ public static class NuclearIntegration
                 {
                     ns.Dose = 0.0f;
                 }
-                ns.Dose = System.Math.Min(ns.Dose, config.MaxDose);
+                ns.Dose = MinNum(ns.Dose, config.MaxDose);
             }
             Array.Clear(scratch.DoseWeights);
         }
@@ -541,7 +698,7 @@ public static class NuclearIntegration
                 {
                     continue;
                 }
-                float w = 1.0f / System.Math.Max(d2, 1e-6f);
+                float w = 1.0f / MaxNum(d2, 1e-6f);
                 scratch.DoseWeights[j] = w;
                 total += w;
             }
@@ -563,7 +720,7 @@ public static class NuclearIntegration
                 {
                     ns.Dose = 0.0f;
                 }
-                ns.Dose = System.Math.Min(ns.Dose, config.MaxDose);
+                ns.Dose = MinNum(ns.Dose, config.MaxDose);
             }
             Array.Clear(scratch.DoseWeights);
         }

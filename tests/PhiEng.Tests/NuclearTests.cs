@@ -583,4 +583,92 @@ public class NuclearTests
         Assert.Equal(2.0f, state.DelayedNeutrons);
         Assert.Equal(0.125f, state.Dose);
     }
+
+    /// <summary>
+    /// Y25: an extreme activity must not poison the body's temperature.
+    /// </summary>
+    [Fact]
+    public void Y25_ExtremeActivityDoesNotPoisonTheTemperature()
+    {
+        var (world, id) = WorldWith(Short, 1e30f);
+        // A decay energy that overflows when multiplied by the activity.
+        world.Nuclear.Config.Isotopes[Short].DecayEnergy = 1e30f;
+
+        world.Step(Dt);
+        float temperature = world.Bodies[id].Temperature;
+        Assert.True(float.IsFinite(temperature), $"the temperature must stay finite, got {temperature}");
+        Assert.True(
+            temperature >= world.Thermal.MinTemperature,
+            $"the temperature must not fall below the clamp, got {temperature}");
+    }
+
+    /// <summary>
+    /// Y26: the fissions cannot exceed the fuel actually present.
+    /// </summary>
+    [Fact]
+    public void Y26_FissionCannotExceedTheAvailableFuel()
+    {
+        var (world, id) = WorldWith(Fissile, 0.0f);
+        world.Bodies[id].Nuclear.Fuel = 1.0f;
+        world.Nuclear.Config.AmbientFlux = 1.0f;
+        world.Nuclear.Config.FissionRate = 1.0f;
+        // One fission consumes the whole fuel.
+        world.Nuclear.Config.FuelPerFission = 1.0f;
+        world.Nuclear.Config.FissionEnergy = 1.0e6f;
+
+        // One unit of fuel buys exactly one fission, so the whole run can
+        // release at most 1e6 J - no matter how many steps it takes.
+        float totalHeat = 0.0f;
+        for (int i = 0; i < 240; i++)
+        {
+            world.Step(Dt);
+            totalHeat += world.Nuclear.Scratch.HeatAt(id);
+        }
+        float fuel = world.Bodies[id].Nuclear.Fuel;
+        Assert.True(fuel >= 0.0f, $"the fuel must not go negative, got {fuel}");
+        Assert.True(totalHeat <= 1.0e6f * 1.001f, $"the heat must not exceed the fuel, got {totalHeat}");
+        Assert.True(totalHeat > 0.0f, $"the fission must have released heat, got {totalHeat}");
+    }
+
+    /// <summary>
+    /// Y27: a zero-length step must not re-apply the previous step's heat.
+    /// </summary>
+    [Fact]
+    public void Y27_AZeroLengthStepDoesNotReapplyTheHeat()
+    {
+        var (world, id) = WorldWith(Short, 1e6f);
+        world.Step(Dt);
+        float afterOne = world.Bodies[id].Temperature;
+        Assert.True(afterOne > 293.15f, "the decay must heat the body");
+
+        world.Step(0.0f);
+        float afterZero = world.Bodies[id].Temperature;
+        Assert.True(
+            BitConverter.SingleToUInt32Bits(afterOne)
+            == BitConverter.SingleToUInt32Bits(afterZero),
+            "a zero-length step must not re-apply the previous heat");
+    }
+
+    /// <summary>
+    /// Y28: a nuclide with a daughter captures a neutron and becomes it.
+    /// </summary>
+    [Fact]
+    public void Y28_ANuclideWithADaughterCapturesANeutron()
+    {
+        var (world, id) = WorldWith(Short, 0.0f);
+        // The short nuclide absorbs neutrons and decays into the stable one.
+        world.Nuclear.Config.Isotopes[Short].AbsorptionCrossSection = 1.0f;
+        world.Nuclear.Config.AmbientFlux = 1000.0f;
+        world.Nuclear.Config.ActivationRate = 1000.0f;
+
+        ushort startIsotope = world.Bodies[id].Nuclear.Isotope;
+        for (int i = 0; i < 10; i++)
+        {
+            world.Step(Dt);
+        }
+        Assert.True(
+            world.Nuclear.Config.Isotopes[startIsotope].Daughter
+            == world.Bodies[id].Nuclear.Isotope,
+            "the body must become its daughter after capturing a neutron");
+    }
 }

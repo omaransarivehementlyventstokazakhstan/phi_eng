@@ -1194,6 +1194,7 @@ public sealed class PhiNativeWorld3 : IDisposable
                 FissionEnergy = config.FissionEnergy,
                 AmbientFlux = config.AmbientFlux,
                 FissionRate = config.FissionRate,
+                ActivationRate = config.ActivationRate,
                 FuelPerFission = config.FuelPerFission,
                 NeutronRange = config.NeutronRange,
                 DoseRange = config.DoseRange,
@@ -1274,6 +1275,33 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>Get one nuclide from the 3D table.</summary>
+    /// <param name="index">The nuclide index (0 is the placeholder).</param>
+    public unsafe Dynamics.Isotope GetIsotope(uint index)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.IsotopeFfi();
+            int ok = NativeMethods.phieng_world3_get_isotope(_handle, index, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected the nuclide request.");
+            }
+            return new Dynamics.Isotope
+            {
+                HalfLife = ffi.HalfLife,
+                DecayEnergy = ffi.DecayEnergy,
+                IonizationFraction = ffi.IonizationFraction,
+                Daughter = (ushort)ffi.Daughter,
+                AbsorptionCrossSection = ffi.AbsorptionCrossSection,
+                FissionCrossSection = ffi.FissionCrossSection,
+                NeutronYield = ffi.NeutronYield,
+                IsFissile = ffi.IsFissile != 0,
+            };
+        }
+    }
+
     /// <summary>Set the 3D per-body nuclear state.</summary>
     /// <param name="bodyId">The body id.</param>
     /// <param name="state">The nuclear state.</param>
@@ -1290,6 +1318,7 @@ public sealed class PhiNativeWorld3 : IDisposable
                 Neutrons = state.Neutrons,
                 DelayedNeutrons = state.DelayedNeutrons,
                 Dose = state.Dose,
+                CaptureProgress = state.CaptureProgress,
             };
             int ok = NativeMethods.phieng_world3_set_body_nuclear_state(_handle, bodyId, &ffi);
             if (ok == 0)
@@ -1320,6 +1349,7 @@ public sealed class PhiNativeWorld3 : IDisposable
                 Neutrons = ffi.Neutrons,
                 DelayedNeutrons = ffi.DelayedNeutrons,
                 Dose = ffi.Dose,
+                CaptureProgress = ffi.CaptureProgress,
             };
         }
     }

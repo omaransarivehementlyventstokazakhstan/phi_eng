@@ -31,6 +31,38 @@ The status column is the state of the tree, not an aspiration.
 | 5 | The dose: depositing the ionizing energy into the bodies in range | **Done** — Y21–Y22 |
 | 6 | The snapshot (schema v12), the FFI, the managed mirror | **Done** — Y23–Y24, F40 |
 
+## What the review found
+
+A bug hunt over the finished subsystem found seven real defects, all
+fixed (see the CHANGELOG). The interesting ones, because they are the
+kind of mistake that only shows up under a review rather than in the
+tests:
+
+- **An energy product that overflowed to infinity** and then became
+  NaN in the heat/ionizing split (`infinity * 0.0`), leaving the body
+  with a NaN temperature forever. A test that only used sane inputs
+  would never have found it.
+- **A fission count that was derived from the fuel but never capped
+  by it** - so a body kept producing energy and neutrons after its
+  fuel ran out. The feature that is supposed to be bounded by physics
+  was not.
+- **A stale heat budget**, because the nuclear phase computes the
+  budget and the world applies it afterwards, so the phase's early
+  return left the previous step's budget in place.
+- **A managed-mirror layout that disagreed with the Rust core's** for
+  the new fields: the C# reader did not read them, so a managed-written
+  file could not be read back by the managed engine. The cross-boundary
+  test (F40) could not catch it, because it only goes one way.
+- **A `float.Epsilon` vs `f32::EPSILON` mix-up** in the *pre-existing*
+  expansion code: C#'s `float.Epsilon` is the smallest subnormal, not
+  the machine epsilon, so the two engines rescaled bodies at different
+  times. It had been there since the expansion feature landed.
+
+The lesson: a mirror needs a *bidirectional* test. The parity block
+checks that both languages implement the same behaviour, but nothing
+checked that the two *serializers* agreed field-for-field until the
+layout diverged.
+
 ## What a later phase could add
 
 - **Real neutron transport.** Straight-line neutrons with broadphase

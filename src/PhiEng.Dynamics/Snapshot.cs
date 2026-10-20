@@ -130,6 +130,13 @@ public static class Snapshot
 
     private const byte KindWorld2 = 2;
     private const byte KindWorld3 = 3;
+
+    /// <summary>
+    /// The maximum number of nuclides a world may carry. The writer
+    /// refuses a longer table and the reader rejects one, so a save/load
+    /// round-trip can never produce an unloadable file.
+    /// </summary>
+    private const int MaxNuclideTable = 4096;
     private static readonly byte[] Magic = [(byte)'P', (byte)'H', (byte)'E', (byte)'1'];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -407,6 +414,8 @@ public static class Snapshot
 
         [JsonPropertyName("fission_rate")] public float FissionRate { get; set; } = 1.0f;
 
+        [JsonPropertyName("activation_rate")] public float ActivationRate { get; set; } = 1.0f;
+
         [JsonPropertyName("fuel_per_fission")] public float FuelPerFission { get; set; } = 1e-6f;
 
         [JsonPropertyName("neutron_range")] public float NeutronRange { get; set; } = 1.0f;
@@ -423,7 +432,7 @@ public static class Snapshot
 
         [JsonPropertyName("max_dose")] public float MaxDose { get; set; } = 1e30f;
 
-        [JsonPropertyName("isotopes")] public List<NuclearIsotopeDto> Isotopes { get; set; } = new();
+        [JsonPropertyName("isotopes")] public List<NuclearIsotopeDto> Isotopes { get; set; } = new() { new NuclearIsotopeDto() };
     }
 
     /// <summary>Schema v12 per-body nuclear state DTO.</summary>
@@ -440,6 +449,8 @@ public static class Snapshot
         [JsonPropertyName("delayed_neutrons")] public float DelayedNeutrons { get; set; }
 
         [JsonPropertyName("dose")] public float Dose { get; set; }
+
+        [JsonPropertyName("capture_progress")] public float CaptureProgress { get; set; }
     }
 
     private sealed class ThermalExtrasDto
@@ -1000,6 +1011,7 @@ public static class Snapshot
                     FissionEnergy = w.Nuclear.Config.FissionEnergy,
                     AmbientFlux = w.Nuclear.Config.AmbientFlux,
                     FissionRate = w.Nuclear.Config.FissionRate,
+            ActivationRate = w.Nuclear.Config.ActivationRate,
                     FuelPerFission = w.Nuclear.Config.FuelPerFission,
                     NeutronRange = w.Nuclear.Config.NeutronRange,
                     DoseRange = w.Nuclear.Config.DoseRange,
@@ -1105,6 +1117,7 @@ public static class Snapshot
             Neutrons = b.Nuclear.Neutrons,
             DelayedNeutrons = b.Nuclear.DelayedNeutrons,
             Dose = b.Nuclear.Dose,
+            CaptureProgress = b.Nuclear.CaptureProgress,
         },
                 });
             }
@@ -1395,6 +1408,7 @@ public static class Snapshot
                     FissionEnergy = w.Nuclear.Config.FissionEnergy,
                     AmbientFlux = w.Nuclear.Config.AmbientFlux,
                     FissionRate = w.Nuclear.Config.FissionRate,
+            ActivationRate = w.Nuclear.Config.ActivationRate,
                     FuelPerFission = w.Nuclear.Config.FuelPerFission,
                     NeutronRange = w.Nuclear.Config.NeutronRange,
                     DoseRange = w.Nuclear.Config.DoseRange,
@@ -1595,6 +1609,7 @@ public static class Snapshot
             Neutrons = b.Nuclear.Neutrons,
             DelayedNeutrons = b.Nuclear.DelayedNeutrons,
             Dose = b.Nuclear.Dose,
+            CaptureProgress = b.Nuclear.CaptureProgress,
         },
                 });
             }
@@ -1841,6 +1856,7 @@ public static class Snapshot
         FissionEnergy = Fin(d.FissionEnergy, "nuclear_fission_energy"),
         AmbientFlux = Fin(d.AmbientFlux, "nuclear_ambient_flux"),
         FissionRate = Fin(d.FissionRate, "nuclear_fission_rate"),
+        ActivationRate = Fin(d.ActivationRate, "nuclear_activation_rate"),
         FuelPerFission = Fin(d.FuelPerFission, "nuclear_fuel_per_fission"),
         NeutronRange = Fin(d.NeutronRange, "nuclear_neutron_range"),
         DoseRange = Fin(d.DoseRange, "nuclear_dose_range"),
@@ -2006,6 +2022,7 @@ public static class Snapshot
             body.Nuclear.Neutrons = Fin(b.Nuclear.Neutrons, "nuclear_neutrons");
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
+            body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2213,6 +2230,7 @@ public static class Snapshot
             body.Nuclear.Neutrons = Fin(b.Nuclear.Neutrons, "nuclear_neutrons");
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
+            body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2423,6 +2441,7 @@ public static class Snapshot
         float fissionEnergy = r.ReadSingle();
         float ambientFlux = r.ReadSingle();
         float fissionRate = r.ReadSingle();
+        float activationRate = r.ReadSingle();
         float fuelPerFission = r.ReadSingle();
         float neutronRange = r.ReadSingle();
         float doseRange = r.ReadSingle();
@@ -2458,6 +2477,7 @@ public static class Snapshot
             FissionEnergy = fissionEnergy,
             AmbientFlux = ambientFlux,
             FissionRate = fissionRate,
+            ActivationRate = activationRate,
             FuelPerFission = fuelPerFission,
             NeutronRange = neutronRange,
             DoseRange = doseRange,
@@ -2781,6 +2801,7 @@ public static class Snapshot
             w.Write(dto.Nuclear.FissionEnergy);
             w.Write(dto.Nuclear.AmbientFlux);
             w.Write(dto.Nuclear.FissionRate);
+            w.Write(dto.Nuclear.ActivationRate);
             w.Write(dto.Nuclear.FuelPerFission);
             w.Write(dto.Nuclear.NeutronRange);
             w.Write(dto.Nuclear.DoseRange);
@@ -2789,6 +2810,15 @@ public static class Snapshot
             w.Write(dto.Nuclear.MaxActivity);
             w.Write(dto.Nuclear.DosePerJoule);
             w.Write(dto.Nuclear.MaxDose);
+            // The reader rejects a longer table, so the writer must
+            // refuse it too: a save must never produce a file the same
+            // engine cannot load.
+            if (dto.Nuclear.Isotopes.Count > MaxNuclideTable)
+            {
+                throw new ArgumentException(
+                    $"Nuclide table too long: {dto.Nuclear.Isotopes.Count} entries "
+                    + $"(max {MaxNuclideTable}).");
+            }
             w.Write(dto.Nuclear.Isotopes.Count);
             foreach (var iso in dto.Nuclear.Isotopes)
             {
@@ -2842,6 +2872,7 @@ public static class Snapshot
                 w.Write(b.Nuclear.Neutrons);
                 w.Write(b.Nuclear.DelayedNeutrons);
                 w.Write(b.Nuclear.Dose);
+                w.Write(b.Nuclear.CaptureProgress);
             }
         }
         w.Write(dto.Joints.Count);
@@ -3136,6 +3167,7 @@ public static class Snapshot
                         Neutrons = r.ReadSingle(),
                         DelayedNeutrons = r.ReadSingle(),
                         Dose = r.ReadSingle(),
+                        CaptureProgress = r.ReadSingle(),
                     }
                     : new NuclearBodyDto(),
             };
@@ -3420,6 +3452,7 @@ public static class Snapshot
             w.Write(dto.Nuclear.FissionEnergy);
             w.Write(dto.Nuclear.AmbientFlux);
             w.Write(dto.Nuclear.FissionRate);
+            w.Write(dto.Nuclear.ActivationRate);
             w.Write(dto.Nuclear.FuelPerFission);
             w.Write(dto.Nuclear.NeutronRange);
             w.Write(dto.Nuclear.DoseRange);
@@ -3428,6 +3461,15 @@ public static class Snapshot
             w.Write(dto.Nuclear.MaxActivity);
             w.Write(dto.Nuclear.DosePerJoule);
             w.Write(dto.Nuclear.MaxDose);
+            // The reader rejects a longer table, so the writer must
+            // refuse it too: a save must never produce a file the same
+            // engine cannot load.
+            if (dto.Nuclear.Isotopes.Count > MaxNuclideTable)
+            {
+                throw new ArgumentException(
+                    $"Nuclide table too long: {dto.Nuclear.Isotopes.Count} entries "
+                    + $"(max {MaxNuclideTable}).");
+            }
             w.Write(dto.Nuclear.Isotopes.Count);
             foreach (var iso in dto.Nuclear.Isotopes)
             {
@@ -3482,6 +3524,7 @@ public static class Snapshot
                 w.Write(b.Nuclear.Neutrons);
                 w.Write(b.Nuclear.DelayedNeutrons);
                 w.Write(b.Nuclear.Dose);
+                w.Write(b.Nuclear.CaptureProgress);
             }
         }
         w.Write(dto.Joints.Count);
@@ -3583,6 +3626,7 @@ public static class Snapshot
                         Neutrons = r.ReadSingle(),
                         DelayedNeutrons = r.ReadSingle(),
                         Dose = r.ReadSingle(),
+                        CaptureProgress = r.ReadSingle(),
                     }
                     : new NuclearBodyDto(),
             });

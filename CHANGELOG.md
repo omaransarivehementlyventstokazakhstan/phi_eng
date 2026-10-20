@@ -62,8 +62,103 @@ This project follows [Semantic Versioning](https://semver.org/) and
 - The new options persist in **snapshot schema v11** (its own block, so
   every earlier payload still decodes) and cross FFI with the thermal
   config.
+- **Nuclear physics (2D and 3D, both languages).** A game-scale
+  radioactive-decay, activation and fission model. A body carries a
+  **nuclide** (from a config-supplied table: half-life, decay energy,
+  the fraction that leaves as ionizing radiation, a daughter nuclide,
+  absorption and fission cross-sections, the neutron yield and whether
+  it is fissile) plus a **nuclear state** (the activity, the remaining
+  fuel, the free and delayed neutron populations and the accumulated
+  dose). The phase runs *before* the thermal phase: the energy released
+  by decay and fission becomes heat, which the thermal phase turns
+  into temperature and then into thermal radiation. Fission consumes
+  fuel, releases energy and produces neutrons, a fraction of which are
+  *delayed* - so a chain reaction goes prompt-critical rather than
+  immediately divergent. Free neutrons are shared with the nearby
+  bodies and the ionizing share of the energy is deposited as **dose**
+  in the bodies that are in range. Off by default, so a default world
+  is bit-identical to a pre-nuclear one.
+- The decay uses the engine's **deterministic** exponential, not the
+  platform libm: `exp` is exactly the function whose last-ULP
+  disagreement between glibc and the Microsoft CRT broke the Linux CI
+  run, and a half-life that drifts by a different amount on every
+  platform would be worse - a chain reaction is a feedback loop, so it
+  amplifies even a tiny difference into a different outcome.
+- The nuclear subsystem crosses FFI
+  (`phieng_world[_3]_set/get_nuclear_config`,
+  `phieng_world[_3]_set_isotope`,
+  `phieng_world[_3]_set/get_body_nuclear_state`) and persists in
+  **snapshot schema v12** (its own block, so every earlier payload
+  still decodes).
+
+### Fixed
+- **The nuclear subsystem could poison a body's temperature with NaN.**
+  The released decay energy is `activity * decay_energy`, which overflows
+  to infinity for extreme inputs, and `infinity * 0.0` is NaN - so the
+  heat/ionizing split produced NaN and the body kept a NaN temperature
+  for good (poisoning the thermal phase, the radiation phase and the
+  trajectory hash). The energy product is now saturated instead of
+  overflowing, and the split has an explicit zero-ionizing branch.
+- **A fission could produce heat and neutrons the body did not have
+  fuel for.** The fission count was derived from the fuel but never
+  capped by it, so a body kept producing energy long after its fuel ran
+  out - free energy, and free neutrons, in the exact regime the feature
+  targets. The count is now capped by the fuel actually present.
+- **A zero-length step re-applied the previous step's nuclear heat.**
+  The nuclear phase computes a heat budget and the world applies it
+  afterwards, so a stale budget survived the phase's early return and was
+  applied again every step - an unbounded temperature ramp with no decay
+  happening. The budget is now cleared before the early returns.
+- **The sky and ground temperatures were ignored when they were equal
+  to each other.** The split only activated when the two differed, so
+  "sky = ground = 200 K" silently fell back to the ambient
+  temperature. The split now applies whenever the configured
+  temperatures differ from the ambient, and stays bit-identical to the
+  historical exchange when they do not.
+- **The managed mirror's snapshot layout disagreed with the Rust core's
+  for the new nuclear fields.** The C# reader did not read the new
+  `activation_rate` and `capture_progress` fields, so a managed-written
+  file could not be read back by the managed engine (the shape tag
+  desynchronised). The managed layout now matches the Rust core
+  field-for-field, and the round-trip is pinned by the tests.
+- **The managed mirror compared the expansion factor against
+  `float.Epsilon`,** which in C# is the smallest *subnormal*
+  (1.4e-45), not the machine epsilon (1.19e-7) that the Rust code
+  uses (`f32::EPSILON`). The two engines therefore rescaled a body at
+  different times, producing different shapes, masses and trajectories.
+  Both now use the machine epsilon.
+- **`atan2(-0.0, x > 0)` returned `+0.0`** instead of the IEEE-754
+  `-0.0` that the platform libm returns. The deterministic
+  trigonometry now preserves the sign of a zero, and the test compares
+  the bits (because `0.0 == -0.0` is true).
+- **A world with more than 4096 nuclides could be saved but not
+  loaded.** The reader rejected the over-long table; the writer did not.
+  The writer now refuses it too, so a save can never produce a file the
+  same engine cannot load.
+
+### Changed
+- The C ABI's thermal config struct **grew**: `ThermalConfig2Ffi` and
+  `ThermalConfig3Ffi` carry four new fields (the view-factor model, the
+  sky and ground temperatures, and the occluder transmittance) after the
+  existing ones. The existing fields keep their offsets, so a C caller
+  that only sets the old fields still works, but a caller that allocates
+  the struct itself must be recompiled against the new header. The
+  managed `ThermalConfig2Ffi` mirror was extended to match.
 
 ### Tests
+- **Nuclear parity block Y01-Y24** (mirrored Rust↔C#): a disabled
+  config is a no-op, the activity halves after a half-life, decay heats
+  the body, the temperature respects the thermal clamps, the activity
+  is clamped, the energy budget balances, a stable nuclide never decays,
+  a body without a nuclide is untouched, a fission consumes fuel and
+  releases heat, a supercritical chain reaction grows while a
+  subcritical one dies out, delayed neutrons hold the release back, the
+  fuel never goes negative, the 3D mirror decays too, determinism plus
+  parallel == serial, a static body does not heat up, the nuclide
+  table is usable, the decay constant is ln(2) over the half-life, the
+  dose is deposited in the nearby bodies and clamped, the nuclear state
+  round-trips through a snapshot, and the config and the per-body state
+  round-trip through the native FFI.
 - **Radiation parity block U01-U12** (mirrored Rust↔C#): the legacy
   view-factor model is the default and matches the historical formula
   bit-for-bit, the symmetric model matches it for equal bodies, is

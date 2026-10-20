@@ -43,9 +43,15 @@
 //! The public API is `f32` (the simulation is `f32` throughout), but the
 //! evaluation is carried out in `f64` and rounded once at the end. The
 //! `f64` scratch keeps the range reduction and the polynomial error far
-//! below the `f32` rounding step, so the result is the correctly
-//! rounded `f32` value for all practical inputs — at least as accurate
-//! as the platform libm it replaces.
+//! below the `f32` rounding step, so for the angles a simulation
+//! actually uses the result is the correctly rounded `f32` value - at
+//! least as accurate as the platform libm it replaces.
+//!
+//! Past about 1e7 radians the *input* has already lost its low bits,
+//! and no implementation can recover them: the reduction becomes
+//! accurate only to the precision of the `f32` angle itself. That is a
+//! property of the input, not of this implementation, and it matches
+//! what the platform libm does with the same `f32`.
 //!
 //! `f64` is safe here because it is *scratch*: no `f64` value is ever
 //! stored in the simulation state, so nothing can accumulate in double
@@ -181,7 +187,13 @@ pub fn atan2(y: f32, x: f32) -> f32 {
     // Degenerate axes, matching the usual IEEE-754 conventions.
     if y == 0.0 {
         return if x > 0.0 {
-            0.0
+            // IEEE-754: atan2(+-0, +x) is +-0, preserving the sign of
+            // the zero. The platform libm does the same.
+            if y_negative {
+                -0.0
+            } else {
+                0.0
+            }
         } else if x < 0.0 {
             if y_negative {
                 -PI_F32
@@ -362,8 +374,10 @@ mod tests {
         assert!(compute_cos_sin(f32::NEG_INFINITY).1.is_nan());
         assert!(compute_cos_sin(f32::NAN).0.is_nan());
 
-        assert_eq!(atan2(0.0, 1.0), 0.0);
-        assert_eq!(atan2(-0.0, 1.0), -0.0);
+        assert_eq!(atan2(0.0, 1.0).to_bits(), 0.0f32.to_bits());
+        // The sign of a zero must survive: `0.0 == -0.0` is true, so the
+        // comparison has to be on the bits.
+        assert_eq!(atan2(-0.0, 1.0).to_bits(), (-0.0f32).to_bits());
         assert_eq!(atan2(1.0, 0.0), std::f32::consts::FRAC_PI_2);
         assert_eq!(atan2(-1.0, 0.0), -std::f32::consts::FRAC_PI_2);
         assert_eq!(atan2(0.0, -1.0), std::f32::consts::PI);

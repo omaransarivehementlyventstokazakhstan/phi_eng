@@ -101,7 +101,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v10 (loaders accept v3–v10; older unknown versions are rejected, never misparsed) |
+| Snapshot schema | v12 (loaders accept v3–v12; older unknown versions are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 
@@ -407,14 +407,16 @@ contact for that frame rather than a guessed depth.
   when the world holds no issues to correct; joint-less worlds step
   exactly as before (proven by unchanged determinism hashes).
 - **Snapshots:** save/load 2D and 3D worlds as JSON or versioned binary
-  (`snapshot.rs`, schema v8: v2 added convex-mesh shapes, v3 added fluid
+  (`snapshot.rs`, schema v12: v2 added convex-mesh shapes, v3 added fluid
   state, v4 added the gravity block + per-body scales, v5 added the
   ambient-force block + simulation clock + per-body ambient scales, v6
   added the CCD block, v7 added solver friction/restitution switches, v8
   added the thermal block + per-body temperature + broadphase-mode tag, v9
-  added the collision-tier block —
+  added the collision-tier block, v10 added the thermal sub-feature block
+  + the per-body expansion factor, v11 added the radiation model block,
+  v12 added the nuclear block + the per-body nuclear state —
   all conditional, so default worlds still write byte-identical older
-  schemas and loaders accept v3–v8).
+  schemas and loaders accept v3–v12).
   `Exact` mode restores warm-start caches, joint impulses,
   latched angles, and fluid particles for bit-identical continuation;
   `Fresh` mode restores structure + config with cold solver state.

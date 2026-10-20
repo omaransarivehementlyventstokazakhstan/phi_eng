@@ -103,6 +103,13 @@ public sealed class NuclearConfig
     /// </summary>
     public float FissionRate { get; set; } = 1.0f;
 
+    /// <summary>
+    /// The capture rate constant: how fast a unit flux over a unit
+    /// absorption cross-section captures a neutron (and turns the nuclide
+    /// into its daughter).
+    /// </summary>
+    public float ActivationRate { get; set; } = 1.0f;
+
     /// <summary>The fuel consumed per fission.</summary>
     public float FuelPerFission { get; set; } = 1e-6f;
 
@@ -154,6 +161,7 @@ public sealed class NuclearConfig
             || FissionEnergy != d.FissionEnergy
             || AmbientFlux != d.AmbientFlux
             || FissionRate != d.FissionRate
+            || ActivationRate != d.ActivationRate
             || FuelPerFission != d.FuelPerFission
             || NeutronRange != d.NeutronRange
             || DoseRange != d.DoseRange
@@ -220,6 +228,13 @@ public sealed class NuclearState
     public float Dose { get; set; }
 
     /// <summary>
+    /// The accumulated neutron-capture progress. A body with a daughter
+    /// nuclide captures a neutron when this reaches one, and then becomes
+    /// that daughter.
+    /// </summary>
+    public float CaptureProgress { get; set; }
+
+    /// <summary>
     /// True when every field still holds its default value.
     /// </summary>
     public bool IsDefault()
@@ -229,7 +244,8 @@ public sealed class NuclearState
             && Fuel == 0.0f
             && Neutrons == 0.0f
             && DelayedNeutrons == 0.0f
-            && Dose == 0.0f;
+            && Dose == 0.0f
+            && CaptureProgress == 0.0f;
     }
 }
 

@@ -683,6 +683,14 @@ fn is_default_nuclear_fission_rate(v: &f32) -> bool {
 }
 
 /// The default fuel consumed per fission.
+/// The default capture rate constant.
+fn default_nuclear_activation_rate() -> f32 {
+    1.0
+}
+fn is_default_nuclear_activation_rate(v: &f32) -> bool {
+    *v == default_nuclear_activation_rate()
+}
+
 fn default_nuclear_fuel_per_fission() -> f32 {
     1e-6
 }
@@ -1245,6 +1253,12 @@ impl Default for RadiationExtrasDto {
     }
 }
 
+/// The maximum number of nuclides a world may carry.
+///
+/// The writer refuses a longer table and the reader rejects one, so a
+/// save/load round-trip can never produce an unloadable file.
+const MAX_NUCLIDE_TABLE: usize = 4096;
+
 /// Schema v12 nuclear DTOs.
 ///
 /// The nuclide table and the per-body nuclear state live in their own
@@ -1320,6 +1334,12 @@ pub struct NuclearConfigDto {
         skip_serializing_if = "is_default_nuclear_fission_rate"
     )]
     pub fission_rate: f32,
+    /// The capture rate constant.
+    #[serde(
+        default = "default_nuclear_activation_rate",
+        skip_serializing_if = "is_default_nuclear_activation_rate"
+    )]
+    pub activation_rate: f32,
     /// The fuel consumed per fission.
     #[serde(
         default = "default_nuclear_fuel_per_fission",
@@ -1382,6 +1402,7 @@ impl NuclearConfigDto {
             && self.fission_energy == d.fission_energy
             && self.ambient_flux == d.ambient_flux
             && self.fission_rate == d.fission_rate
+            && self.activation_rate == d.activation_rate
             && self.fuel_per_fission == d.fuel_per_fission
             && self.neutron_range == d.neutron_range
             && self.dose_range == d.dose_range
@@ -1408,6 +1429,7 @@ impl Default for NuclearConfigDto {
             fission_energy: c.fission_energy,
             ambient_flux: c.ambient_flux,
             fission_rate: c.fission_rate,
+            activation_rate: c.activation_rate,
             fuel_per_fission: c.fuel_per_fission,
             neutron_range: c.neutron_range,
             dose_range: c.dose_range,
@@ -1455,6 +1477,9 @@ pub struct NuclearBodyDto {
     /// The accumulated ionizing dose.
     #[serde(default)]
     pub dose: f32,
+    /// The accumulated neutron-capture progress.
+    #[serde(default)]
+    pub capture_progress: f32,
 }
 
 impl NuclearBodyDto {
@@ -1467,6 +1492,7 @@ impl NuclearBodyDto {
             && self.neutrons == d.neutrons
             && self.delayed_neutrons == d.delayed_neutrons
             && self.dose == d.dose
+            && self.capture_progress == d.capture_progress
     }
 }
 
@@ -1480,6 +1506,7 @@ impl Default for NuclearBodyDto {
             neutrons: d.neutrons,
             delayed_neutrons: d.delayed_neutrons,
             dose: d.dose,
+            capture_progress: d.capture_progress,
         }
     }
 }
@@ -1492,6 +1519,7 @@ fn nuclear_config_dto(c: &super::nuclear::NuclearConfig) -> NuclearConfigDto {
         fission_energy: c.fission_energy,
         ambient_flux: c.ambient_flux,
         fission_rate: c.fission_rate,
+        activation_rate: c.activation_rate,
         fuel_per_fission: c.fuel_per_fission,
         neutron_range: c.neutron_range,
         dose_range: c.dose_range,
@@ -1539,6 +1567,7 @@ fn nuclear_config_from_dto(c: &NuclearConfigDto) -> super::nuclear::NuclearConfi
         fission_energy: c.fission_energy,
         ambient_flux: c.ambient_flux,
         fission_rate: c.fission_rate,
+        activation_rate: c.activation_rate,
         fuel_per_fission: c.fuel_per_fission,
         neutron_range: c.neutron_range,
         dose_range: c.dose_range,
@@ -1559,6 +1588,7 @@ fn nuclear_body_dto(n: &super::nuclear::NuclearState) -> NuclearBodyDto {
         neutrons: n.neutrons,
         delayed_neutrons: n.delayed_neutrons,
         dose: n.dose,
+        capture_progress: n.capture_progress,
     }
 }
 
@@ -1571,6 +1601,7 @@ fn nuclear_body_from_dto(d: &NuclearBodyDto) -> super::nuclear::NuclearState {
         neutrons: d.neutrons,
         delayed_neutrons: d.delayed_neutrons,
         dose: d.dose,
+        capture_progress: d.capture_progress,
     }
 }
 
@@ -4539,7 +4570,10 @@ fn decode_shape2(r: &mut Reader) -> Result<Option<Shape2Dto>, SnapshotError> {
             }
             Ok(Some(Shape2Dto::Polygon { vertices }))
         }
-        _ => Err(SnapshotError::Parse("unknown 2D shape tag".into())),
+        _ => Err(SnapshotError::Parse(format!(
+            "unknown 2D shape tag {tag} at byte {}",
+            r.pos - 1
+        ))),
     }
 }
 
@@ -4742,6 +4776,7 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.nuclear.fission_energy);
         write_f32(&mut p, dto.nuclear.ambient_flux);
         write_f32(&mut p, dto.nuclear.fission_rate);
+        write_f32(&mut p, dto.nuclear.activation_rate);
         write_f32(&mut p, dto.nuclear.fuel_per_fission);
         write_f32(&mut p, dto.nuclear.neutron_range);
         write_f32(&mut p, dto.nuclear.dose_range);
@@ -4750,6 +4785,15 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.nuclear.max_activity);
         write_f32(&mut p, dto.nuclear.dose_per_joule);
         write_f32(&mut p, dto.nuclear.max_dose);
+        // The reader rejects a table longer than this, so the writer
+        // must refuse it too: a save must never produce a file the same
+        // engine cannot load.
+        if dto.nuclear.isotopes.len() > MAX_NUCLIDE_TABLE {
+            return Err(SnapshotError::Corrupt(format!(
+                "nuclide table too long: {} entries (max {MAX_NUCLIDE_TABLE})",
+                dto.nuclear.isotopes.len()
+            )));
+        }
         write_u32(&mut p, dto.nuclear.isotopes.len() as u32);
         for iso in &dto.nuclear.isotopes {
             write_f32(&mut p, iso.half_life);
@@ -4813,6 +4857,7 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
             write_f32(&mut p, b.nuclear.neutrons);
             write_f32(&mut p, b.nuclear.delayed_neutrons);
             write_f32(&mut p, b.nuclear.dose);
+            write_f32(&mut p, b.nuclear.capture_progress);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -5877,6 +5922,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
             let fission_energy = r.read_f32()?;
             let ambient_flux = r.read_f32()?;
             let fission_rate = r.read_f32()?;
+            let activation_rate = r.read_f32()?;
             let fuel_per_fission = r.read_f32()?;
             let neutron_range = r.read_f32()?;
             let dose_range = r.read_f32()?;
@@ -5886,7 +5932,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
             let dose_per_joule = r.read_f32()?;
             let max_dose = r.read_f32()?;
             let count = r.read_u32()?;
-            if count > 4096 {
+            if count as usize > MAX_NUCLIDE_TABLE {
                 return Err(SnapshotError::Parse("nuclide table too long".into()));
             }
             let mut isotopes = Vec::with_capacity(count as usize);
@@ -5908,6 +5954,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                 fission_energy,
                 ambient_flux,
                 fission_rate,
+                activation_rate,
                 fuel_per_fission,
                 neutron_range,
                 dose_range,
@@ -5996,6 +6043,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                             neutrons: r.read_f32()?,
                             delayed_neutrons: r.read_f32()?,
                             dose: r.read_f32()?,
+                            capture_progress: r.read_f32()?,
                         }
                     } else {
                         NuclearBodyDto::default()
@@ -6149,6 +6197,7 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.nuclear.fission_energy);
         write_f32(&mut p, dto.nuclear.ambient_flux);
         write_f32(&mut p, dto.nuclear.fission_rate);
+        write_f32(&mut p, dto.nuclear.activation_rate);
         write_f32(&mut p, dto.nuclear.fuel_per_fission);
         write_f32(&mut p, dto.nuclear.neutron_range);
         write_f32(&mut p, dto.nuclear.dose_range);
@@ -6157,6 +6206,15 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         write_f32(&mut p, dto.nuclear.max_activity);
         write_f32(&mut p, dto.nuclear.dose_per_joule);
         write_f32(&mut p, dto.nuclear.max_dose);
+        // The reader rejects a table longer than this, so the writer
+        // must refuse it too: a save must never produce a file the same
+        // engine cannot load.
+        if dto.nuclear.isotopes.len() > MAX_NUCLIDE_TABLE {
+            return Err(SnapshotError::Corrupt(format!(
+                "nuclide table too long: {} entries (max {MAX_NUCLIDE_TABLE})",
+                dto.nuclear.isotopes.len()
+            )));
+        }
         write_u32(&mut p, dto.nuclear.isotopes.len() as u32);
         for iso in &dto.nuclear.isotopes {
             write_f32(&mut p, iso.half_life);
@@ -6223,6 +6281,7 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
             write_f32(&mut p, b.nuclear.neutrons);
             write_f32(&mut p, b.nuclear.delayed_neutrons);
             write_f32(&mut p, b.nuclear.dose);
+            write_f32(&mut p, b.nuclear.capture_progress);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -6338,6 +6397,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             let fission_energy = r.read_f32()?;
             let ambient_flux = r.read_f32()?;
             let fission_rate = r.read_f32()?;
+            let activation_rate = r.read_f32()?;
             let fuel_per_fission = r.read_f32()?;
             let neutron_range = r.read_f32()?;
             let dose_range = r.read_f32()?;
@@ -6347,7 +6407,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             let dose_per_joule = r.read_f32()?;
             let max_dose = r.read_f32()?;
             let count = r.read_u32()?;
-            if count > 4096 {
+            if count as usize > MAX_NUCLIDE_TABLE {
                 return Err(SnapshotError::Parse("nuclide table too long".into()));
             }
             let mut isotopes = Vec::with_capacity(count as usize);
@@ -6369,6 +6429,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                 fission_energy,
                 ambient_flux,
                 fission_rate,
+                activation_rate,
                 fuel_per_fission,
                 neutron_range,
                 dose_range,
@@ -6462,6 +6523,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                             neutrons: r.read_f32()?,
                             delayed_neutrons: r.read_f32()?,
                             dose: r.read_f32()?,
+                            capture_progress: r.read_f32()?,
                         }
                     } else {
                         NuclearBodyDto::default()

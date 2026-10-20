@@ -43,7 +43,12 @@ pub(crate) fn compute_radiation_2d(
     // (the default) the historical single-temperature exchange is used,
     // so the result stays bit-identical.
     let (t_sky, t_ground) = environment_temperatures(config);
-    let split_environment = t_sky != t_ground;
+    // The split applies whenever the configured temperatures differ from
+    // the ambient: a sky and a ground that are equal to *each other* but
+    // not to the ambient must still be honoured. When both resolve to
+    // the ambient, the historical single-temperature exchange is used and
+    // the result is bit-identical to it.
+    let split_environment = t_sky != t_ground || t_sky != t_amb;
     let t_sky_fourth = fourth_power(t_sky);
     let t_ground_fourth = fourth_power(t_ground);
 
@@ -279,7 +284,12 @@ pub(crate) fn compute_radiation_3d(
 
     // Sky / ground environment split (see the 2D counterpart).
     let (t_sky, t_ground) = environment_temperatures(config);
-    let split_environment = t_sky != t_ground;
+    // The split applies whenever the configured temperatures differ from
+    // the ambient: a sky and a ground that are equal to *each other* but
+    // not to the ambient must still be honoured. When both resolve to
+    // the ambient, the historical single-temperature exchange is used and
+    // the result is bit-identical to it.
+    let split_environment = t_sky != t_ground || t_sky != t_amb;
     let t_sky_fourth = fourth_power(t_sky);
     let t_ground_fourth = fourth_power(t_ground);
 

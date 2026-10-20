@@ -49,7 +49,12 @@ public static class RadiationIntegration
         // (the default) the historical single-temperature exchange is
         // used, so the result stays bit-identical.
         (float tSky, float tGround) = EnvironmentTemperatures(config);
-        bool splitEnvironment = tSky != tGround;
+        // The split applies whenever the configured temperatures differ
+        // from the ambient: a sky and a ground that are equal to *each
+        // other* but not to the ambient must still be honoured. When both
+        // resolve to the ambient, the historical single-temperature
+        // exchange is used and the result is bit-identical to it.
+        bool splitEnvironment = tSky != tGround || tSky != tAmb;
         float tSkyFourth = FourthPower(tSky);
         float tGroundFourth = FourthPower(tGround);
 
@@ -172,7 +177,12 @@ public static class RadiationIntegration
         // (the default) the historical single-temperature exchange is
         // used, so the result stays bit-identical.
         (float tSky, float tGround) = EnvironmentTemperatures(config);
-        bool splitEnvironment = tSky != tGround;
+        // The split applies whenever the configured temperatures differ
+        // from the ambient: a sky and a ground that are equal to *each
+        // other* but not to the ambient must still be honoured. When both
+        // resolve to the ambient, the historical single-temperature
+        // exchange is used and the result is bit-identical to it.
+        bool splitEnvironment = tSky != tGround || tSky != tAmb;
         float tSkyFourth = FourthPower(tSky);
         float tGroundFourth = FourthPower(tGround);
 

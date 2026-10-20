@@ -65,6 +65,10 @@ pub struct NuclearState {
     pub delayed_neutrons: f32,
     /// The accumulated ionizing dose.
     pub dose: f32,
+    /// The accumulated neutron-capture progress. A body with a daughter
+    /// nuclide captures a neutron when this reaches one, and then becomes
+    /// that daughter.
+    pub capture_progress: f32,
 }
 
 /// A nuclide the engine knows about.
@@ -84,7 +88,10 @@ pub struct Isotope {
     /// The neutron absorption cross-section, in barns
     /// (1 barn = 1e-28 m^2).
     pub absorption_cross_section: f32,
-    /// The fission cross-section, in barns.
+    /// The fission cross-section, in barns (1 barn = 1e-28 m^2).
+    ///
+    /// Used as a relative weight - see
+    /// [`Isotope::absorption_cross_section`].
     pub fission_cross_section: f32,
     /// The neutrons released per fission.
     pub neutron_yield: f32,
@@ -145,6 +152,10 @@ pub struct NuclearConfig {
     /// The fission rate constant: how fast a unit flux over a unit
     /// cross-section fissions a unit of fuel.
     pub fission_rate: f32,
+    /// The capture rate constant: how fast a unit flux over a unit
+    /// absorption cross-section captures a neutron (and turns the
+    /// nuclide into its daughter).
+    pub activation_rate: f32,
     /// The fuel consumed per fission.
     pub fuel_per_fission: f32,
     /// The range within which free neutrons are shared, in metres.
@@ -173,6 +184,7 @@ impl Default for NuclearConfig {
             fission_energy: 3.204e-11, // 200 MeV
             ambient_flux: 0.0,
             fission_rate: 1.0,
+            activation_rate: 1.0,
             fuel_per_fission: 1e-6,
             neutron_range: 1.0,
             dose_range: 1.0,
@@ -245,6 +257,59 @@ impl NuclearState2 {
     }
 }
 
+/// The minimum of two values, ignoring NaN.
+///
+/// This is Rust's `f32::min` (IEEE `minNum`), spelled out so the
+/// managed mirror can match it exactly: .NET's `Math.Min` *propagates*
+/// NaN instead, which would make the two engines disagree.
+#[inline]
+fn min_num(a: f32, b: f32) -> f32 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() {
+        a
+    } else {
+        a.min(b)
+    }
+}
+
+/// The maximum of two values, ignoring NaN.
+///
+/// The NaN-ignoring counterpart of [`min_num`]; .NET's `Math.Max`
+/// propagates NaN, which would make the two engines disagree.
+#[inline]
+fn max_num(a: f32, b: f32) -> f32 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() {
+        a
+    } else {
+        a.max(b)
+    }
+}
+
+/// The product of two values, saturated at `f32::MAX` instead of
+/// overflowing to infinity.
+///
+/// An infinite energy would turn into NaN in the heat/ionizing split
+/// (`infinity * 0.0`), and a NaN temperature poisons the body for good.
+#[inline]
+fn saturating_product(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    let product = a * b;
+    if product.is_infinite() {
+        if (a < 0.0) != (b < 0.0) {
+            f32::NEG_INFINITY
+        } else {
+            f32::MAX
+        }
+    } else {
+        product
+    }
+}
+
 /// The decay constant of a half-life, in 1/s.
 pub fn decay_constant(half_life: f32) -> f32 {
     if half_life <= 0.0 || !half_life.is_finite() {
@@ -264,14 +329,9 @@ pub fn step_nuclear_2d(
     scratch: &mut NuclearScratch,
     dt: f32,
 ) {
-    if !config.is_active() || dt <= 0.0 || bodies.is_empty() {
-        return;
-    }
-    let dt_nuclear = dt * config.time_scale;
-    if dt_nuclear <= 0.0 {
-        return;
-    }
-
+    // The scratch is cleared *before* the early returns: the world
+    // applies the heat budget after this call, and a stale budget would
+    // be re-applied every step (an unbounded temperature ramp).
     let n = bodies.len();
     if scratch.heat.len() != n {
         scratch.heat.resize(n, 0.0);
@@ -286,6 +346,14 @@ pub fn step_nuclear_2d(
     }
     for v in scratch.flux.iter_mut() {
         *v = 0.0;
+    }
+
+    if !config.is_active() || dt <= 0.0 || bodies.is_empty() {
+        return;
+    }
+    let dt_nuclear = dt * config.time_scale;
+    if dt_nuclear <= 0.0 {
+        return;
     }
 
     // 1. Decay: the activity falls and releases energy.
@@ -309,8 +377,18 @@ pub fn step_nuclear_2d(
 
         // The energy released in this step uses the start-of-step
         // activity (explicit, like the thermal phase).
-        let energy = ns.activity * iso.decay_energy * dt_nuclear;
-        let ionizing = energy * iso.ionization_fraction.clamp(0.0, 1.0);
+        //
+        // The product can overflow to infinity for extreme inputs, and
+        // `infinity * 0.0` is NaN - which would poison the body's
+        // temperature for good. The split is therefore computed on a
+        // saturated energy and with an explicit zero-ionizing branch.
+        let energy = saturating_product(ns.activity, iso.decay_energy) * dt_nuclear;
+        let fraction = iso.ionization_fraction.clamp(0.0, 1.0);
+        let ionizing = if fraction <= 0.0 {
+            0.0
+        } else {
+            energy * fraction
+        };
         scratch.heat[i] += energy - ionizing;
         scratch.radiation[i] += ionizing;
 
@@ -318,7 +396,7 @@ pub fn step_nuclear_2d(
         if !ns.activity.is_finite() || ns.activity < 0.0 {
             ns.activity = 0.0;
         }
-        ns.activity = ns.activity.min(config.max_activity);
+        ns.activity = min_num(ns.activity, config.max_activity);
     }
 
     // 2. Fission and the chain reaction.
@@ -384,12 +462,14 @@ fn step_fission_2d(
         if ns.delayed_neutrons <= 0.0 {
             continue;
         }
-        let delay = if config.delayed_neutron_delay > 0.0 {
-            config.delayed_neutron_delay
+        // A non-positive delay means "release everything now". The
+        // explicit branch avoids relying on `dt / f32::MIN_POSITIVE`
+        // overflowing to -inf.
+        let released = if config.delayed_neutron_delay > 0.0 {
+            ns.delayed_neutrons * (1.0 - exp(-dt_nuclear / config.delayed_neutron_delay))
         } else {
-            f32::MIN_POSITIVE
+            ns.delayed_neutrons
         };
-        let released = ns.delayed_neutrons * (1.0 - exp(-dt_nuclear / delay));
         ns.delayed_neutrons -= released;
         ns.neutrons += released;
     }
@@ -412,20 +492,61 @@ fn step_fission_2d(
             continue;
         }
         let rate = flux * iso.fission_cross_section * ns.fuel * config.fission_rate;
-        let fissions = rate * dt_nuclear;
+        let mut fissions = rate * dt_nuclear;
+        if fissions <= 0.0 {
+            continue;
+        }
+        // The fissions cannot exceed the fuel actually present: without
+        // this cap a body would keep producing heat and neutrons long
+        // after its fuel ran out.
+        if config.fuel_per_fission > 0.0 {
+            fissions = fissions.min(ns.fuel / config.fuel_per_fission);
+        }
         if fissions <= 0.0 {
             continue;
         }
 
         ns.fuel = (ns.fuel - fissions * config.fuel_per_fission).max(0.0);
 
-        let energy = fissions * config.fission_energy;
+        let energy = saturating_product(fissions, config.fission_energy);
         scratch.heat[i] += energy;
 
         let neutrons = fissions * iso.neutron_yield;
         let delayed = neutrons * config.delayed_neutron_fraction.clamp(0.0, 1.0);
         ns.delayed_neutrons += delayed;
         ns.neutrons += neutrons - delayed;
+    }
+
+    // 4. Capture: a body with a daughter nuclide absorbs the neutrons
+    //    in its flux and becomes that daughter. The capture is
+    //    mean-field (a rate, not a per-neutron coin flip), so it stays
+    //    deterministic without an RNG.
+    for (i, body) in bodies.iter_mut().enumerate() {
+        let ns = &mut body.nuclear;
+        if ns.isotope == 0 {
+            continue;
+        }
+        let Some(iso) = config.isotope(ns.isotope) else {
+            continue;
+        };
+        if iso.daughter == 0 || iso.absorption_cross_section <= 0.0 {
+            continue;
+        }
+        let flux = config.ambient_flux + scratch.flux[i];
+        if flux <= 0.0 {
+            continue;
+        }
+        let rate = flux * iso.absorption_cross_section * config.activation_rate;
+        if rate <= 0.0 {
+            continue;
+        }
+        ns.capture_progress += rate * dt_nuclear;
+        if ns.capture_progress >= 1.0 {
+            ns.isotope = iso.daughter;
+            ns.capture_progress = 0.0;
+            ns.activity = 0.0;
+            ns.fuel = 0.0;
+        }
     }
 }
 
@@ -436,14 +557,9 @@ pub fn step_nuclear_3d(
     scratch: &mut NuclearScratch,
     dt: f32,
 ) {
-    if !config.is_active() || dt <= 0.0 || bodies.is_empty() {
-        return;
-    }
-    let dt_nuclear = dt * config.time_scale;
-    if dt_nuclear <= 0.0 {
-        return;
-    }
-
+    // The scratch is cleared *before* the early returns: the world
+    // applies the heat budget after this call, and a stale budget would
+    // be re-applied every step (an unbounded temperature ramp).
     let n = bodies.len();
     if scratch.heat.len() != n {
         scratch.heat.resize(n, 0.0);
@@ -458,6 +574,14 @@ pub fn step_nuclear_3d(
     }
     for v in scratch.flux.iter_mut() {
         *v = 0.0;
+    }
+
+    if !config.is_active() || dt <= 0.0 || bodies.is_empty() {
+        return;
+    }
+    let dt_nuclear = dt * config.time_scale;
+    if dt_nuclear <= 0.0 {
+        return;
     }
 
     for (i, body) in bodies.iter_mut().enumerate() {
@@ -476,8 +600,13 @@ pub fn step_nuclear_3d(
         if iso.decay_energy <= 0.0 {
             continue;
         }
-        let energy = ns.activity * iso.decay_energy * dt_nuclear;
-        let ionizing = energy * iso.ionization_fraction.clamp(0.0, 1.0);
+        let energy = saturating_product(ns.activity, iso.decay_energy) * dt_nuclear;
+        let fraction = iso.ionization_fraction.clamp(0.0, 1.0);
+        let ionizing = if fraction <= 0.0 {
+            0.0
+        } else {
+            energy * fraction
+        };
         scratch.heat[i] += energy - ionizing;
         scratch.radiation[i] += ionizing;
 
@@ -485,7 +614,7 @@ pub fn step_nuclear_3d(
         if !ns.activity.is_finite() || ns.activity < 0.0 {
             ns.activity = 0.0;
         }
-        ns.activity = ns.activity.min(config.max_activity);
+        ns.activity = min_num(ns.activity, config.max_activity);
     }
 
     // 2. Fission and the chain reaction.
@@ -546,12 +675,14 @@ fn step_fission_3d(
         if ns.delayed_neutrons <= 0.0 {
             continue;
         }
-        let delay = if config.delayed_neutron_delay > 0.0 {
-            config.delayed_neutron_delay
+        // A non-positive delay means "release everything now". The
+        // explicit branch avoids relying on `dt / f32::MIN_POSITIVE`
+        // overflowing to -inf.
+        let released = if config.delayed_neutron_delay > 0.0 {
+            ns.delayed_neutrons * (1.0 - exp(-dt_nuclear / config.delayed_neutron_delay))
         } else {
-            f32::MIN_POSITIVE
+            ns.delayed_neutrons
         };
-        let released = ns.delayed_neutrons * (1.0 - exp(-dt_nuclear / delay));
         ns.delayed_neutrons -= released;
         ns.neutrons += released;
     }
@@ -573,16 +704,52 @@ fn step_fission_3d(
             continue;
         }
         let rate = flux * iso.fission_cross_section * ns.fuel * config.fission_rate;
-        let fissions = rate * dt_nuclear;
+        let mut fissions = rate * dt_nuclear;
+        if fissions <= 0.0 {
+            continue;
+        }
+        // The fissions cannot exceed the fuel actually present.
+        if config.fuel_per_fission > 0.0 {
+            fissions = fissions.min(ns.fuel / config.fuel_per_fission);
+        }
         if fissions <= 0.0 {
             continue;
         }
         ns.fuel = (ns.fuel - fissions * config.fuel_per_fission).max(0.0);
-        scratch.heat[i] += fissions * config.fission_energy;
+        scratch.heat[i] += saturating_product(fissions, config.fission_energy);
         let neutrons = fissions * iso.neutron_yield;
         let delayed = neutrons * config.delayed_neutron_fraction.clamp(0.0, 1.0);
         ns.delayed_neutrons += delayed;
         ns.neutrons += neutrons - delayed;
+    }
+
+    // 4. Capture (see the 2D counterpart).
+    for (i, body) in bodies.iter_mut().enumerate() {
+        let ns = &mut body.nuclear;
+        if ns.isotope == 0 {
+            continue;
+        }
+        let Some(iso) = config.isotope(ns.isotope) else {
+            continue;
+        };
+        if iso.daughter == 0 || iso.absorption_cross_section <= 0.0 {
+            continue;
+        }
+        let flux = config.ambient_flux + scratch.flux[i];
+        if flux <= 0.0 {
+            continue;
+        }
+        let rate = flux * iso.absorption_cross_section * config.activation_rate;
+        if rate <= 0.0 {
+            continue;
+        }
+        ns.capture_progress += rate * dt_nuclear;
+        if ns.capture_progress >= 1.0 {
+            ns.isotope = iso.daughter;
+            ns.capture_progress = 0.0;
+            ns.activity = 0.0;
+            ns.fuel = 0.0;
+        }
     }
 }
 
@@ -622,7 +789,7 @@ fn deposit_dose_2d(
             if d2 > range_sq {
                 continue;
             }
-            let w = 1.0 / d2.max(1e-6);
+            let w = 1.0 / max_num(d2, 1e-6);
             scratch.dose_weights[j] = w;
             total += w;
         }
@@ -641,7 +808,7 @@ fn deposit_dose_2d(
             if !ns.dose.is_finite() || ns.dose < 0.0 {
                 ns.dose = 0.0;
             }
-            ns.dose = ns.dose.min(config.max_dose);
+            ns.dose = min_num(ns.dose, config.max_dose);
         }
         for w in scratch.dose_weights.iter_mut() {
             *w = 0.0;
@@ -680,7 +847,7 @@ fn deposit_dose_3d(
             if d2 > range_sq {
                 continue;
             }
-            let w = 1.0 / d2.max(1e-6);
+            let w = 1.0 / max_num(d2, 1e-6);
             scratch.dose_weights[j] = w;
             total += w;
         }
@@ -698,7 +865,7 @@ fn deposit_dose_3d(
             if !ns.dose.is_finite() || ns.dose < 0.0 {
                 ns.dose = 0.0;
             }
-            ns.dose = ns.dose.min(config.max_dose);
+            ns.dose = min_num(ns.dose, config.max_dose);
         }
         for w in scratch.dose_weights.iter_mut() {
             *w = 0.0;

@@ -357,6 +357,13 @@ public static class ThermalGeometry
 public static class ThermalIntegration
 {
     /// <summary>
+    /// The f32 machine epsilon (2^-23), matching Rust's
+    /// <c>f32::EPSILON</c>. Note that C#'s <c>float.Epsilon</c> is the
+    /// smallest *subnormal*, not the machine epsilon.
+    /// </summary>
+    internal const float MachineEpsilon = 1.1920929e-7f;
+
+    /// <summary>
     /// Target linear scale factor for a body at <paramref name="temperature"/>,
     /// given the expansion coefficient and reference temperature.
     /// </summary>
@@ -530,7 +537,11 @@ public static class ThermalIntegration
             body.ExpansionScale = 1.0f;
             return;
         }
-        if (MathF.Abs(target - applied) <= float.Epsilon) return;
+        // float.Epsilon is the smallest *subnormal* (1.4e-45), NOT the
+        // machine epsilon (1.19e-7). The Rust code compares against
+        // f32::EPSILON, so this must use the same constant or the two
+        // engines would rescale the shape at different times.
+        if (MathF.Abs(target - applied) <= MachineEpsilon) return;
         if (body.Shape == null) return;
         float ratio = target / applied;
         if (!float.IsFinite(ratio) || ratio <= 0.0f) return;
@@ -696,7 +707,11 @@ public static class ThermalIntegration
             body.ExpansionScale = 1.0f;
             return;
         }
-        if (MathF.Abs(target - applied) <= float.Epsilon) return;
+        // float.Epsilon is the smallest *subnormal* (1.4e-45), NOT the
+        // machine epsilon (1.19e-7). The Rust code compares against
+        // f32::EPSILON, so this must use the same constant or the two
+        // engines would rescale the shape at different times.
+        if (MathF.Abs(target - applied) <= MachineEpsilon) return;
         if (body.Shape == null) return;
         float ratio = target / applied;
         if (!float.IsFinite(ratio) || ratio <= 0.0f) return;

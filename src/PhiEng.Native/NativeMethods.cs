@@ -287,6 +287,7 @@ public float OccluderTransmittance;
         public float FissionEnergy;
         public float AmbientFlux;
         public float FissionRate;
+        public float ActivationRate;
         public float FuelPerFission;
         public float NeutronRange;
         public float DoseRange;
@@ -327,6 +328,7 @@ public float OccluderTransmittance;
         public float Neutrons;
         public float DelayedNeutrons;
         public float Dose;
+        public float CaptureProgress;
     }
 
     // ---- Nuclear (mirrors the phieng_world_*_nuclear_* functions in ffi.rs) ----
@@ -365,6 +367,20 @@ public float OccluderTransmittance;
     /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
     [LibraryImport(LibraryName)]
     internal static unsafe partial int phieng_world3_set_isotope(
+        IntPtr world,
+        uint index,
+        IsotopeFfi* iso);
+
+    /// <returns>1 on success, 0 for null world/struct or an unknown nuclide.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_isotope(
+        IntPtr world,
+        uint index,
+        IsotopeFfi* iso);
+
+    /// <returns>1 on success, 0 for null world/struct or an unknown nuclide.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_isotope(
         IntPtr world,
         uint index,
         IsotopeFfi* iso);

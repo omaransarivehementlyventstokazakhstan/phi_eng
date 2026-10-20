@@ -170,7 +170,9 @@ public static class DeterministicTrig
         {
             if (x > 0.0f)
             {
-                return 0.0f;
+                // IEEE-754: atan2(+-0, +x) is +-0, preserving the sign
+                // of the zero. The platform libm does the same.
+                return yNegative ? -0.0f : 0.0f;
             }
             if (x < 0.0f)
             {

@@ -555,3 +555,102 @@ fn y23_the_nuclear_state_round_trips_through_a_snapshot() {
         world.nuclear.config.isotopes.len()
     );
 }
+
+/// Y25: an extreme activity must not poison the body's temperature.
+///
+/// The decay energy can overflow to infinity, and `infinity * 0.0` is
+/// NaN - which would leave the body with a NaN temperature forever.
+#[test]
+fn y25_extreme_activity_does_not_poison_the_temperature() {
+    let (mut world, id) = world_with(SHORT, 1e30);
+    // A decay energy that overflows when multiplied by the activity.
+    world.nuclear.config.isotopes[SHORT as usize].decay_energy = 1e30;
+
+    world.step(DT);
+    let temperature = world.bodies[id].temperature;
+    assert!(
+        temperature.is_finite(),
+        "the temperature must stay finite, got {temperature}"
+    );
+    assert!(
+        temperature >= world.thermal.config.min_temperature,
+        "the temperature must not fall below the clamp, got {temperature}"
+    );
+}
+
+/// Y26: the fissions cannot exceed the fuel actually present.
+///
+/// Without the cap a body keeps producing heat and neutrons long after
+/// its fuel ran out - free energy.
+#[test]
+fn y26_fission_cannot_exceed_the_available_fuel() {
+    let (mut world, id) = world_with(FISSILE, 0.0);
+    world.bodies[id].nuclear.fuel = 1.0;
+    world.nuclear.config.ambient_flux = 1.0;
+    world.nuclear.config.fission_rate = 1.0;
+    // One fission consumes the whole fuel.
+    world.nuclear.config.fuel_per_fission = 1.0;
+    world.nuclear.config.fission_energy = 1.0e6;
+
+    // One unit of fuel buys exactly one fission, so the whole run can
+    // release at most 1e6 J - no matter how many steps it takes.
+    let mut total_heat = 0.0f32;
+    for _ in 0..240 {
+        world.step(DT);
+        total_heat += world.nuclear.scratch.heat_at(id);
+    }
+    let fuel = world.bodies[id].nuclear.fuel;
+    assert!(fuel >= 0.0, "the fuel must not go negative, got {fuel}");
+    assert!(
+        total_heat <= 1.0e6 * 1.001,
+        "the heat must not exceed the fuel, got {total_heat}"
+    );
+    assert!(
+        total_heat > 0.0,
+        "the fission must have released heat, got {total_heat}"
+    );
+}
+
+/// Y27: a zero-length step must not re-apply the previous step's heat.
+///
+/// The nuclear phase computes a heat budget and the world applies it
+/// afterwards, so a stale budget would be applied again every step.
+#[test]
+fn y27_a_zero_length_step_does_not_reapply_the_heat() {
+    let (mut world, id) = world_with(SHORT, 1e6);
+    world.step(DT);
+    let after_one = world.bodies[id].temperature;
+    assert!(after_one > 293.15, "the decay must heat the body");
+
+    // A zero-length step: the budget must be cleared, not re-applied.
+    world.step(0.0);
+    let after_zero = world.bodies[id].temperature;
+    assert_eq!(
+        after_zero.to_bits(),
+        after_one.to_bits(),
+        "a zero-length step must not re-apply the previous heat"
+    );
+}
+
+/// Y28: a nuclide with a daughter captures a neutron and becomes it.
+///
+/// The capture is mean-field (a rate, not a coin flip), so it stays
+/// deterministic.
+#[test]
+fn y28_a_nuclide_with_a_daughter_captures_a_neutron() {
+    let (mut world, id) = world_with(SHORT, 0.0);
+    // The short nuclide absorbs neutrons and decays into the stable one.
+    world.nuclear.config.isotopes[SHORT as usize].absorption_cross_section = 1.0;
+    world.nuclear.config.ambient_flux = 1000.0;
+    world.nuclear.config.activation_rate = 1000.0;
+
+    let start_isotope = world.bodies[id].nuclear.isotope;
+    for _ in 0..10 {
+        world.step(DT);
+    }
+    assert_eq!(
+        world.bodies[id].nuclear.isotope,
+        world.nuclear.config.isotopes[start_isotope as usize].daughter,
+        "the body must become its daughter after capturing a neutron"
+    );
+}

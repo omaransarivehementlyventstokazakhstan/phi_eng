@@ -10,6 +10,10 @@
 //! Per-subsystem structs remain the source of truth; this facade only
 //! *applies* them. Worlds are not required to use it — direct field
 //! assignment still works and is bit-identical.
+//!
+//! The **nuclear** configuration is deliberately *not* in the facade:
+//! it owns the nuclide table, so it is not `Copy`, and this struct is.
+//! Set it directly on the world (`world.nuclear.config = ...`).
 
 use crate::ccd::CcdConfig;
 use crate::collision_tier::{CollisionTier, CollisionTierConfig};
