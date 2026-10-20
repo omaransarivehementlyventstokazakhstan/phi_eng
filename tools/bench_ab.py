@@ -155,9 +155,10 @@ def main():
         print("")
         print("%-22s %10s %10s %9s" % ("measure", "baseline", "now", "delta"))
         for label, v in values.items():
-            base = baseline.get(label)
-            if base is None:
+            base_entry = baseline.get(label)
+            if base_entry is None:
                 continue
+            base = base_entry["median"] if isinstance(base_entry, dict) else base_entry
             delta = 100.0 * (v["median"] - base) / base if base else 0.0
             flag = ""
             if delta < -3.0:

@@ -72,6 +72,16 @@ impl Broadphase2 {
             _ => 1.0,
         }
     }
+
+    /// How many cells the backing grid holds.
+    ///
+    /// Only the grid backend has cells; the other backends report 0.
+    pub fn cell_count(&self) -> usize {
+        match self {
+            Broadphase2::SpatialHash(h) => h.cell_count(),
+            _ => 0,
+        }
+    }
 }
 
 impl Default for Broadphase2 {

@@ -167,8 +167,11 @@ mod profiling {
             world.phase_timings(),
             wall_ms,
             &format!(
-                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs",
-                world.broadphase_pair_count()
+                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs, \
+{} grid cells for {} bodies",
+                world.broadphase_pair_count(),
+                world.broadphase_cell_count(),
+                world.bodies.len()
             ),
         );
     }
@@ -222,8 +225,11 @@ mod profiling {
             world.phase_timings(),
             wall_ms,
             &format!(
-                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs",
-                world.broadphase_pair_count()
+                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs, \
+{} grid cells for {} bodies",
+                world.broadphase_pair_count(),
+                world.broadphase_cell_count(),
+                world.bodies.len()
             ),
         );
     }
@@ -269,8 +275,11 @@ mod profiling {
             world.phase_timings(),
             wall_ms,
             &format!(
-                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs",
-                world.broadphase_pair_count()
+                "{pairs} cached pairs, {contacts} cached contacts, {} raw broadphase pairs, \
+{} grid cells for {} bodies",
+                world.broadphase_pair_count(),
+                world.broadphase_cell_count(),
+                world.bodies.len()
             ),
         );
     }
@@ -314,8 +323,10 @@ mod profiling {
             world.phase_timings(),
             wall_ms,
             &format!(
-                "{pairs} cached pairs, {} raw broadphase pairs",
-                world.broadphase_pair_count()
+                "{pairs} cached pairs, {} raw broadphase pairs, {} grid cells for {} bodies",
+                world.broadphase_pair_count(),
+                world.broadphase_cell_count(),
+                world.bodies.len()
             ),
         );
     }

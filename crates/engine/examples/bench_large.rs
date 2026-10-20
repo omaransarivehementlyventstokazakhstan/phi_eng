@@ -213,6 +213,10 @@ fn main() {
         println!("[phases]   gravity     {:>8.4} ms/step", t.gravity / steps);
         println!("[phases]   fluid       {:>8.4} ms/step", t.fluid / steps);
         println!(
+            "[phases]   bp:aabb     {:>8.4} ms/step",
+            t.broadphase_aabb / steps
+        );
+        println!(
             "[phases]   bp:rebuild  {:>8.4} ms/step",
             t.broadphase_rebuild / steps
         );

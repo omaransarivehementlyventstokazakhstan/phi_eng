@@ -24,8 +24,6 @@ pub struct SpatialHash2 {
     /// Number of inserted bodies (the grid owns no AABB copies; the
     /// world rebuilds it from live body positions every step).
     count: usize,
-    /// Steps since vacated cells were compacted (see [`SpatialHash2::clear`]).
-    clears_since_compact: u32,
     /// Recycled cell buffers. Vacated cells return their `Vec` here instead
     /// of freeing it; new cells draw from it, so re-appearing cells never
     /// re-allocate. Internal (the public API is unchanged).
@@ -65,7 +63,6 @@ impl SpatialHash2 {
             cell_size,
             grid: HashMap::new(),
             count: 0,
-            clears_since_compact: 0,
             pool: Vec::new(),
             all: Vec::new(),
             oversized: Vec::new(),
@@ -76,33 +73,43 @@ impl SpatialHash2 {
     ///
     /// `HashMap::clear` would drop each cell's `Vec` (with its buffer),
     /// forcing a reallocation per occupied cell on the very next insert.
-    /// Instead each cell list is cleared in place. Vacated cells leave
-    /// empty entries behind; they are compacted out every 256 clears so
-    /// roaming worlds cannot accumulate them unboundedly (amortized cost
-    /// ~zero).
+    /// Instead each cell's buffer is moved into the pool, where the next
+    /// insert picks it up again: nothing is allocated, and the map holds
+    /// only the cells that are actually in use.
+    ///
+    /// Keeping the vacated cells around instead (the old behaviour) grows
+    /// the map without bound between compactions, and a large map turns
+    /// every lookup into a cache miss: the insert pass costs ~650 ns per
+    /// body in a settled 1500-body pile, essentially all of it in the
+    /// hash lookup. Vacating the cells keeps the map at the size of the
+    /// current frame and the lookup back in cache.
+    /// Clear all bodies from the grid, keeping every allocation.
+    ///
+    /// One pass over the map: every cell is emptied in place, and the
+    /// cells that are now empty are dropped and their buffers recycled
+    /// through the pool.
+    ///
+    /// Dropping the empty cells is what keeps the map small. The cells
+    /// of a scene that sweeps its bodies across many positions pile up
+    /// otherwise - a settled 1500-body 2D pile held 3 327 878 cells for
+    /// 1501 bodies - and every lookup in a hash table with millions of
+    /// entries is a cache miss: the insert pass cost ~650 ns per body.
+    /// The cells that are still in use are kept, so the next insert
+    /// finds them instead of recreating them: no per-frame churn.
     pub fn clear(&mut self) {
-        for ids in self.grid.values_mut() {
-            ids.clear();
-        }
+        let pool = &mut self.pool;
+        self.grid.retain(|_, ids| {
+            if ids.is_empty() {
+                pool.push(std::mem::take(ids));
+                false
+            } else {
+                ids.clear();
+                true
+            }
+        });
         self.count = 0;
         self.all.clear();
         self.oversized.clear();
-        self.clears_since_compact += 1;
-        if self.clears_since_compact >= 256 {
-            self.clears_since_compact = 0;
-            // Drop vacated cells but recycle their buffers into the pool
-            // (not the allocator), so re-appearing cells never re-allocate.
-            let grid = &mut self.grid;
-            let pool = &mut self.pool;
-            grid.retain(|_, ids| {
-                if ids.is_empty() {
-                    pool.push(std::mem::take(ids));
-                    false
-                } else {
-                    true
-                }
-            });
-        }
     }
 
     /// Insert a body into the grid
@@ -187,6 +194,16 @@ impl SpatialHash2 {
         }
         out.sort_unstable();
         out.dedup();
+    }
+
+    /// How many cells the grid currently holds.
+    ///
+    /// A grid that holds many more cells than the scene has bodies is
+    /// bloated: the cells of a scene that swept its bodies across many
+    /// positions are still around, and every lookup in a large hash
+    /// table is a cache miss.
+    pub fn cell_count(&self) -> usize {
+        self.grid.len()
     }
 
     /// Get bodies in a cell
@@ -310,6 +327,68 @@ mod tests {
         assert!(hash.get_pairs().is_empty());
         assert!(hash.is_empty());
         assert_eq!(hash.len(), 0);
+    }
+
+    #[test]
+    fn test_spatial_hash_clear_reuses_buffers_without_leaking_ids() {
+        // A cleared cell's buffer goes back into the pool and is handed
+        // out again on the next insert. If the recycled buffer still held
+        // the previous frame's ids, the cell would report pairs that do
+        // not exist (and ids that are not in the scene at all).
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        hash.insert(1, Vec2::new(0.5, 0.5), Vec2::new(2.5, 2.5));
+        assert_eq!(hash.get_pairs().len(), 1);
+
+        hash.clear();
+
+        // A different body in the same cell must not inherit the old
+        // ids.
+        hash.insert(7, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        let pairs = hash.get_pairs();
+        assert!(
+            pairs.is_empty(),
+            "a recycled cell must not carry the previous frame's ids: {pairs:?}"
+        );
+        assert_eq!(hash.len(), 1);
+
+        // And the recycled buffer still works for a second body.
+        hash.insert(8, Vec2::new(0.5, 0.5), Vec2::new(2.5, 2.5));
+        assert_eq!(hash.get_pairs(), vec![(7, 8)]);
+    }
+
+    #[test]
+    fn test_spatial_hash_clear_empties_every_cell() {
+        // After a clear every cell must be empty: either the cell was
+        // dropped (a bloated table) or its list was cleared in place (a
+        // small table). No cell may still hold ids.
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0));
+        hash.insert(1, Vec2::new(100.0, 100.0), Vec2::new(101.0, 101.0));
+        hash.clear();
+        for (key, ids) in hash.grid.iter() {
+            assert!(
+                ids.is_empty(),
+                "cell {key:?} still holds ids after a clear: {ids:?}"
+            );
+        }
+        let mut pairs = Vec::new();
+        hash.collect_pairs(&mut pairs);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn test_spatial_hash_reinsert_after_clear_keeps_pairs() {
+        // The full cycle: clear, re-insert, and the pairs must be the
+        // same as they were before the clear.
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        hash.insert(1, Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0));
+        let before = hash.get_pairs();
+        hash.clear();
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        hash.insert(1, Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0));
+        assert_eq!(hash.get_pairs(), before);
     }
 
     #[test]

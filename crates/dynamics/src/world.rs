@@ -84,6 +84,10 @@ struct ScratchBuffers2D {
     verts_b: Vec<Vec2>,
     points: Vec<Vec2>,
     clip_tmp: Vec<Vec2>,
+    /// One AABB per body, computed in a separate pass before the
+    /// broad-phase insert so the insert loop reads a compact array
+    /// instead of chasing each body's shape. Pooled like the rest.
+    aabbs: Vec<(Vec2, Vec2)>,
     stale: Vec<(usize, usize)>,
 }
 
@@ -101,6 +105,7 @@ impl ScratchBuffers2D {
             verts_b: Vec::with_capacity(1024),
             points: Vec::with_capacity(512),
             clip_tmp: Vec::with_capacity(256),
+            aabbs: Vec::with_capacity(2048),
             stale: Vec::new(),
         }
     }
@@ -116,6 +121,7 @@ impl ScratchBuffers2D {
         self.verts_b.clear();
         self.points.clear();
         self.clip_tmp.clear();
+        self.aabbs.clear();
         self.stale.clear();
     }
 }
@@ -665,9 +671,13 @@ impl World2 {
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         // Reset scratch buffers (keeps capacity, including parallel slots).
-        timed!(timings.broadphase_rebuild, {
+        timed!(timings.broadphase_aabb, {
             self.scratch.reset();
-            self.update_broadphase();
+            self.compute_body_aabbs();
+        });
+        timed!(timings.broadphase_rebuild, {
+            self.broadphase.clear();
+            self.insert_body_aabbs();
         });
         timed!(timings.broadphase_pairs, {
             self.broadphase.collect_pairs(&mut self.scratch.pairs);
@@ -998,6 +1008,12 @@ impl World2 {
         self.scratch.pairs.len()
     }
 
+    /// How many cells the broad-phase grid currently holds.
+    #[cfg(feature = "phase-timing")]
+    pub fn broadphase_cell_count(&self) -> usize {
+        self.broadphase.cell_count()
+    }
+
     /// Wake a body and cascade through its contact partners and joint
     /// partners, transitively. The woken set is a fixpoint over
     /// idempotent flags, so map iteration order cannot affect the
@@ -1052,13 +1068,32 @@ impl World2 {
         }
     }
 
+    /// Compute every body's AABB into the pooled scratch buffer.
+    fn compute_body_aabbs(&mut self) {
+        // The buffer is moved out first so the AABB computation can
+        // borrow the world immutably while it fills it.
+        let mut aabbs = std::mem::take(&mut self.scratch.aabbs);
+        aabbs.clear();
+        for body in &self.bodies {
+            let (min, max) = self.get_body_aabb(body);
+            aabbs.push((min, max));
+        }
+        self.scratch.aabbs = aabbs;
+    }
+
+    /// Insert every body into the broad phase from the AABB buffer.
+    fn insert_body_aabbs(&mut self) {
+        let aabbs = &self.scratch.aabbs;
+        for (body, (min, max)) in self.bodies.iter().zip(aabbs.iter()) {
+            self.broadphase.insert(body.id, *min, *max);
+        }
+    }
+
     /// Update the broadphase with current body positions (2D)
     fn update_broadphase(&mut self) {
         self.broadphase.clear();
-        for body in &self.bodies {
-            let (min, max) = self.get_body_aabb(body);
-            self.broadphase.insert(body.id, min, max);
-        }
+        self.compute_body_aabbs();
+        self.insert_body_aabbs();
     }
 
     /// Get AABB for a 2D body
@@ -1567,6 +1602,9 @@ pub struct World3 {
     scratch_pairs: Vec<(usize, usize)>,
     scratch_points: Vec<Vec3>,
     scratch_clip_tmp: Vec<Vec3>,
+    /// One AABB per body, computed in a separate pass before the
+    /// broad-phase insert (see `World2::compute_body_aabbs`).
+    scratch_aabbs: Vec<(Vec3, Vec3)>,
     epa_buffers: phieng_collision::epa::EpaBuffers,
     /// Vanished contact pairs per step (for loss-of-contact wake).
     /// Reused buffer; never snapshotted.
@@ -1616,6 +1654,7 @@ impl World3 {
             scratch_pairs: Vec::new(),
             scratch_points: Vec::new(),
             scratch_clip_tmp: Vec::new(),
+            scratch_aabbs: Vec::with_capacity(1024),
             epa_buffers: phieng_collision::epa::EpaBuffers::new(),
             scratch_stale: Vec::new(),
         }
@@ -1866,8 +1905,12 @@ impl World3 {
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         let mut pairs = std::mem::take(&mut self.scratch_pairs);
+        timed!(timings.broadphase_aabb, {
+            self.compute_body_aabbs();
+        });
         timed!(timings.broadphase_rebuild, {
-            self.update_broadphase();
+            self.broadphase.clear();
+            self.insert_body_aabbs();
         });
         timed!(timings.broadphase_pairs, {
             pairs.clear();
@@ -2169,6 +2212,12 @@ impl World3 {
         self.scratch_pairs.len()
     }
 
+    /// How many cells the broad-phase grid currently holds.
+    #[cfg(feature = "phase-timing")]
+    pub fn broadphase_cell_count(&self) -> usize {
+        self.broadphase.cell_count()
+    }
+
     /// Resolve [`BroadphaseMode::Hybrid`] to a concrete 3D backend from the
     /// live body count (see [`World2::resolve_broadphase_mode`]).
     fn resolve_broadphase_mode(&mut self) {
@@ -2178,13 +2227,32 @@ impl World3 {
         }
     }
 
+    /// Compute every body's AABB into the pooled scratch buffer.
+    fn compute_body_aabbs(&mut self) {
+        // The buffer is moved out first so the AABB computation can
+        // borrow the world immutably while it fills it.
+        let mut aabbs = std::mem::take(&mut self.scratch_aabbs);
+        aabbs.clear();
+        for body in &self.bodies {
+            let (min, max) = self.get_body_aabb(body);
+            aabbs.push((min, max));
+        }
+        self.scratch_aabbs = aabbs;
+    }
+
+    /// Insert every body into the broad phase from the AABB buffer.
+    fn insert_body_aabbs(&mut self) {
+        let aabbs = &self.scratch_aabbs;
+        for (body, (min, max)) in self.bodies.iter().zip(aabbs.iter()) {
+            self.broadphase.insert(body.id, *min, *max);
+        }
+    }
+
     /// Update the broadphase with current body positions (3D)
     fn update_broadphase(&mut self) {
         self.broadphase.clear();
-        for body in &self.bodies {
-            let (min, max) = self.get_body_aabb(body);
-            self.broadphase.insert(body.id, min, max);
-        }
+        self.compute_body_aabbs();
+        self.insert_body_aabbs();
     }
 
     /// Get AABB for a body (exact for rotated boxes)

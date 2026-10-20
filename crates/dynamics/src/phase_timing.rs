@@ -32,6 +32,8 @@ pub struct PhaseTimings {
     pub gravity: f64,
     /// The SPH fluid phase (zero when the fluid holds no particles).
     pub fluid: f64,
+    /// Broad-phase AABB computation (one AABB per body).
+    pub broadphase_aabb: f64,
     /// Broad-phase backend rebuild (clear + re-insert every body).
     pub broadphase_rebuild: f64,
     /// Broad-phase pair generation (the cell scan, the sort and the
@@ -62,6 +64,7 @@ impl PhaseTimings {
     pub fn total_ms(&self) -> f64 {
         self.gravity
             + self.fluid
+            + self.broadphase_aabb
             + self.broadphase_rebuild
             + self.broadphase_pairs
             + self.narrowphase
@@ -85,6 +88,7 @@ impl PhaseTimings {
     pub(crate) fn merge(&mut self, other: PhaseTimings) {
         self.gravity += other.gravity;
         self.fluid += other.fluid;
+        self.broadphase_aabb += other.broadphase_aabb;
         self.broadphase_rebuild += other.broadphase_rebuild;
         self.broadphase_pairs += other.broadphase_pairs;
         self.narrowphase += other.narrowphase;
