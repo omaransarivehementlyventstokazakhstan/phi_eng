@@ -7,6 +7,38 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Added
+- **Four new absolute-stress suites, with readings.** The thermal,
+  nuclear, snapshot-loader and tier systems had no absolute-stress
+  coverage at all; they are now measured, not just asserted. Each suite
+  is Rust-only (the names deliberately avoid the parity-ID pattern, so
+  no C# mirrors are required) and each test prints one readings line
+  that lands in `absolute_stress_tests.md`:
+  - `crates/engine/tests/thermal_stress.rs` (9 tests): the conduction
+    exchange against an exponential (fitted log-slope −0.5584, τ =
+    1.791 s), convective cooling against the analytic exponential
+    (492.354 K analytic vs 492.323 K measured), thermal expansion
+    against the closed form (1.706850), radiative-exchange
+    antisymmetry (bit-identical when the bodies are swapped), the
+    sky/ground split (300.0000 K uniform vs 309.5192 K with a 100 K
+    sky and a 400 K ground), a 549.9 MJ thermal shock that converges to
+    a 0.0663 K gap, the stiffness of the radiative rate cap, and the
+    5000 K clamp.
+  - `crates/engine/tests/nuclear_stress.rs` (7 tests): the half-life law
+    (100 Bq → 1.5625 Bq over six half-lives), the decay-energy split
+    (734.970 J heat + 734.970 J ionizing = 1469.940 J released), the
+    fission scaling law (linear in the fuel), a runaway that burns its
+    fuel out instead of exploding, the capture chain, dose clamping and
+    finite behaviour at an activity of 1.5625e28.
+  - `crates/engine/tests/snapshot_fuzz.rs` (6 tests): 13 848 single-bit
+    flips, 1731 truncations, 2000 random buffers, 2008 malformed JSON
+    documents and 127 doctored length fields — all refused, and never
+    parsed into a *different* world.
+  - `crates/engine/tests/tier_sweep.rs` (3 tests): what the four
+    broad-phase backends, the five collision tiers and the five solver
+    quality tiers actually cost, and the assertion that all four
+    broad-phase backends agree bit-for-bit.
+
 ### Fixed
 - **Rigid-body trajectories are now platform-independent.** The rotation
   integration used the platform math library, and `sinf`/`cosf`/`atan2f`

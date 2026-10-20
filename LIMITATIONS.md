@@ -385,6 +385,18 @@ occlusion, forced convection, and thermal expansion. Documented gaps:
   original vertex count and winding are preserved but its tessellation
   is not refined), and a body that changes shape mid-step has its
   broad-phase bounds refreshed on the next step.
+- **The symmetric view-factor model changes results for mixed-size
+  scenes.** `ViewFactorModel::Symmetric` (the default) computes a
+  symmetric pair exchange; the legacy model is order-dependent and
+  *size-blind* — it returns the same exchange for a pair of equal bodies
+  and for a pair of unequal ones. For equal bodies the two models agree
+  to six decimals, so symmetric scenes are unaffected; for a pair with a
+  1:2 radius ratio the symmetric model returns ~50 % more exchange
+  (0.033112 vs 0.022064 in the stress suite). That difference is the
+  point of the change — the legacy number was wrong for unequal bodies —
+  but it means a scene that mixes body sizes sees different thermal
+  results after the upgrade. Pinned by
+  `thermal_symmetric_view_factor_matches_legacy`.
 - **Static bodies are thermal reservoirs.** A static body's temperature
   never changes (infinite heat capacity); it can supply or absorb
   unlimited heat without temperature drift. This is intentional for
@@ -409,5 +421,31 @@ occlusion, forced convection, and thermal expansion. Documented gaps:
   implementations, so thermal trajectories agree on the qualitative
   outcome (which way the heat flowed) rather than bit-for-bit.
 
+## The snapshot envelope does not checksum its header
 
+The binary snapshot envelope is `magic | version | kind | length |
+payload | crc32`, and the CRC32 covers the **payload only** — not the
+magic, not the version, not the kind, not the length. Consequences:
 
+- **A single-bit corruption is always caught.** A bit flip either lands
+  in the payload (the CRC fails) or in the header (the magic/kind
+  checks fail, or the version lands outside the readable range and is
+  refused). All 13 848 single-bit flips of a 1731-byte snapshot are
+  rejected, and so is every one of its 1731 prefixes.
+- **A crafted version field inside the readable range is accepted.**
+  Version 3 can be written over a version-12 header: the CRC still
+  matches (the payload did not change), the version passes the range
+  check, and the payload is then parsed **under the v3 layout** — a
+  silently different world. The loader never guesses a version outside
+  the readable range 3..=12 (all 300 probed out-of-range versions are
+  refused), but inside the range the layout is taken on trust.
+- **Fixing it means changing the format.** Either the CRC covers the
+  header (every existing file stops loading — a format break) or the
+  reader self-checks the layout it just parsed (e.g. that the body
+  count and the trailing bytes are consistent) and refuses a payload
+  that does not fit the version it was given. The second option is
+  backward compatible and is the planned fix.
+
+Pinned by `fuzz_unknown_schema_version_rejected` (the out-of-range
+rejection is asserted; the in-range exposure is measured and reported in
+the readings) and `fuzz_bit_flips_never_misparse`.

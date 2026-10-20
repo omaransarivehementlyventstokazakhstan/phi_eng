@@ -43,6 +43,9 @@ Thumbs.db
 *.pem
 *.key
 
+# Smoke-test artifacts (written by the host sample)
+world_snapshot.json
+
 # Local scratch / tool outputs
 *.pyc
 __pycache__/

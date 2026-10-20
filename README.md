@@ -587,3 +587,17 @@ chase-dominated stalls — not on speculation.
   obstacle, droplet, sloshing, channel flow). Gaps (no-slip walls,
   Martin–Moyce √t, penalty-floor hydrostatic overshoot) are pinned in
   `LIMITATIONS.md`; readings in `absolute_stress_tests.md`.
+- Thermal, nuclear, fuzz and tier stress suites (Rust-only):
+  `crates/engine/tests/thermal_stress.rs` (9 tests: conduction and
+  convection against closed forms, radiative antisymmetry, the sky/ground
+  split, thermal shock, expansion, clamp boundedness),
+  `crates/engine/tests/nuclear_stress.rs` (7 tests: the half-life law,
+  the energy split, the fission scaling law, runaway boundedness, the
+  capture chain, dose clamping),
+  `crates/engine/tests/snapshot_fuzz.rs` (6 tests: 20 000+ mutated
+  snapshots that must be refused or must reproduce the same world) and
+  `crates/engine/tests/tier_sweep.rs` (3 tests: what the broad-phase
+  backends, the collision tiers and the solver-quality tiers cost).
+  Each prints a `THERMAL/NUCLEAR/FUZZ/TIER ...` readings line; all
+  readings are in `absolute_stress_tests.md`. Names deliberately avoid
+  the parity-ID pattern, so no C# mirrors are required.
