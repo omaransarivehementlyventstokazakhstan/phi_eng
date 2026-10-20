@@ -14,6 +14,7 @@ pub mod material;
 pub mod noise;
 pub mod physics_config;
 pub mod pool;
+pub mod radiation;
 pub mod snapshot;
 pub mod solver;
 pub mod solver3d;

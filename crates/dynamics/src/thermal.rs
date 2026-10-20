@@ -190,7 +190,12 @@ pub fn step_thermal_2d(
     }
 
     if config.radiation_enabled {
-        compute_radiation_2d(bodies, config, state);
+        super::radiation::compute_radiation_2d(
+            bodies,
+            config,
+            &mut state.heat_flux,
+            &state.surface_area,
+        );
     }
 
     if config.convection_enabled {
@@ -244,177 +249,6 @@ fn compute_conduction_2d(
         state.heat_flux[a] -= q_dot;
         state.heat_flux[b] += q_dot;
     }
-}
-
-fn compute_radiation_2d(
-    bodies: &[RigidBody2],
-    config: &ThermalConfig2D,
-    state: &mut ThermalState2,
-) {
-    let sigma = config.stefan_boltzmann;
-    let t_amb = config.ambient_temperature;
-    let t_amb_sq = t_amb * t_amb;
-    let t_amb_fourth = t_amb_sq * t_amb_sq;
-    let cutoff_factor = config.radiation_radius_factor;
-
-    for (i, body_i) in bodies.iter().enumerate() {
-        let Some(_) = &body_i.shape else {
-            continue;
-        };
-
-        let eps_i = body_i.material.emissivity.clamp(0.0, 1.0);
-        if eps_i <= 0.0 {
-            continue;
-        }
-
-        let a_surf = state.surface_area[i];
-        if a_surf <= 0.0 {
-            continue;
-        }
-
-        let t_i = body_i.temperature.clamp(0.0, config.max_temperature);
-        let t_i_sq = t_i * t_i;
-        let t_i_fourth = t_i_sq * t_i_sq;
-
-        // q_env is the radiative *loss* (positive when hotter than ambient),
-        // but heat_flux accumulates heat *gained*, so subtract it.
-        let q_env = eps_i * sigma * a_surf * (t_i_fourth - t_amb_fourth);
-        state.heat_flux[i] -= q_env;
-
-        let r_i = body_i
-            .shape
-            .as_ref()
-            .map(|s| s.bounding_radius())
-            .unwrap_or(0.0);
-        let l_i = body_i
-            .shape
-            .as_ref()
-            .map(|s| s.characteristic_length())
-            .unwrap_or(0.0);
-
-        for (j, body_j) in bodies.iter().enumerate().skip(i + 1) {
-            if body_j.shape.is_none() {
-                continue;
-            }
-
-            let eps_j = body_j.material.emissivity.clamp(0.0, 1.0);
-            if eps_j <= 0.0 {
-                continue;
-            }
-
-            let r_j = body_j
-                .shape
-                .as_ref()
-                .map(|s| s.bounding_radius())
-                .unwrap_or(0.0);
-            let dist = (body_i.transform.position - body_j.transform.position).length();
-            let cutoff = cutoff_factor * (r_i + r_j);
-            if dist > cutoff || dist <= 0.0 {
-                continue;
-            }
-
-            let eps_eff = 1.0 / (1.0 / eps_i + 1.0 / eps_j - 1.0);
-            if eps_eff <= 0.0 {
-                continue;
-            }
-
-            let t_j = body_j.temperature.clamp(0.0, config.max_temperature);
-            let t_j_sq = t_j * t_j;
-            let t_j_fourth = t_j_sq * t_j_sq;
-
-            let view_factor = (r_j / dist).powi(2).min(1.0);
-
-            // Occlusion: a third body between the pair blocks the line of
-            // sight, so the pair exchanges no radiative heat. Opt-in: it
-            // costs an O(n) scan per pair.
-            if config.radiation_occlusion && is_occluded_2d(bodies, i, j) {
-                continue;
-            }
-
-            let q_rad = eps_eff * sigma * l_i * view_factor * (t_i_fourth - t_j_fourth);
-
-            state.heat_flux[i] -= q_rad;
-            state.heat_flux[j] += q_rad;
-        }
-    }
-}
-
-/// True when a third body lies between bodies `a` and `b` (2D), blocking
-/// the line of sight. The blocker must be *between* them along the
-/// segment and strictly closer to the midpoint (so the endpoints
-/// themselves never block each other).
-fn is_occluded_2d(bodies: &[RigidBody2], a: usize, b: usize) -> bool {
-    let pa = bodies[a].transform.position;
-    let pb = bodies[b].transform.position;
-    let ab = pb - pa;
-    let len_sq = ab.length_squared();
-    if len_sq <= 0.0 {
-        return false;
-    }
-    let mid = (pa + pb) * 0.5;
-    let half = len_sq.sqrt() * 0.5;
-
-    for (idx, body) in bodies.iter().enumerate() {
-        if idx == a || idx == b || body.shape.is_none() {
-            continue;
-        }
-        let p = body.transform.position;
-        // Parameter along the segment; must be strictly inside.
-        let t = (p - pa).dot(ab) / len_sq;
-        if !(0.0 < t && t < 1.0) {
-            continue;
-        }
-        // Distance from the segment.
-        let closest = pa + ab * t;
-        let d = (p - closest).length();
-        let radius = body
-            .shape
-            .as_ref()
-            .map(|s| s.bounding_radius())
-            .unwrap_or(0.0);
-        // The blocker must reach the line (within its radius) and sit
-        // closer to the midpoint than the endpoints do.
-        if d <= radius && (p - mid).length() < half {
-            return true;
-        }
-    }
-    false
-}
-
-/// True when a third body lies between bodies `a` and `b` (3D), blocking
-/// the line of sight. 3D counterpart of [`is_occluded_2d`].
-fn is_occluded_3d(bodies: &[RigidBody3], a: usize, b: usize) -> bool {
-    let pa = bodies[a].transform.position;
-    let pb = bodies[b].transform.position;
-    let ab = pb - pa;
-    let len_sq = ab.length_squared();
-    if len_sq <= 0.0 {
-        return false;
-    }
-    let mid = (pa + pb) * 0.5;
-    let half = len_sq.sqrt() * 0.5;
-
-    for (idx, body) in bodies.iter().enumerate() {
-        if idx == a || idx == b || body.shape.is_none() {
-            continue;
-        }
-        let p = body.transform.position;
-        let t = (p - pa).dot(ab) / len_sq;
-        if !(0.0 < t && t < 1.0) {
-            continue;
-        }
-        let closest = pa + ab * t;
-        let d = (p - closest).length();
-        let radius = body
-            .shape
-            .as_ref()
-            .map(|s| s.bounding_radius())
-            .unwrap_or(0.0);
-        if d <= radius && (p - mid).length() < half {
-            return true;
-        }
-    }
-    false
 }
 
 fn compute_convection_2d(
@@ -606,7 +440,12 @@ pub fn step_thermal_3d(
     }
 
     if config.radiation_enabled {
-        compute_radiation_3d(bodies, config, state);
+        super::radiation::compute_radiation_3d(
+            bodies,
+            config,
+            &mut state.heat_flux,
+            &state.surface_area,
+        );
     }
 
     if config.convection_enabled {
@@ -663,92 +502,6 @@ fn compute_conduction_3d(
 
         state.heat_flux[a] -= q_dot;
         state.heat_flux[b] += q_dot;
-    }
-}
-
-fn compute_radiation_3d(
-    bodies: &[RigidBody3],
-    config: &ThermalConfig3D,
-    state: &mut ThermalState3,
-) {
-    let sigma = config.stefan_boltzmann;
-    let t_amb = config.ambient_temperature;
-    let t_amb_sq = t_amb * t_amb;
-    let t_amb_fourth = t_amb_sq * t_amb_sq;
-    let cutoff_factor = config.radiation_radius_factor;
-
-    for (i, body_i) in bodies.iter().enumerate() {
-        if body_i.shape.is_none() {
-            continue;
-        }
-
-        let eps_i = body_i.material.emissivity.clamp(0.0, 1.0);
-        if eps_i <= 0.0 {
-            continue;
-        }
-
-        let a_surf = state.surface_area[i];
-        if a_surf <= 0.0 {
-            continue;
-        }
-
-        let t_i = body_i.temperature.clamp(0.0, config.max_temperature);
-        let t_i_sq = t_i * t_i;
-        let t_i_fourth = t_i_sq * t_i_sq;
-
-        // q_env is the radiative *loss* (positive when hotter than ambient),
-        // but heat_flux accumulates heat *gained*, so subtract it.
-        let q_env = eps_i * sigma * a_surf * (t_i_fourth - t_amb_fourth);
-        state.heat_flux[i] -= q_env;
-
-        let r_i = body_i
-            .shape
-            .as_ref()
-            .map(|s| s.bounding_radius())
-            .unwrap_or(0.0);
-
-        for (j, body_j) in bodies.iter().enumerate().skip(i + 1) {
-            if body_j.shape.is_none() {
-                continue;
-            }
-
-            let eps_j = body_j.material.emissivity.clamp(0.0, 1.0);
-            if eps_j <= 0.0 {
-                continue;
-            }
-
-            let r_j = body_j
-                .shape
-                .as_ref()
-                .map(|s| s.bounding_radius())
-                .unwrap_or(0.0);
-            let dist = (body_i.transform.position - body_j.transform.position).length();
-            let cutoff = cutoff_factor * (r_i + r_j);
-            if dist > cutoff || dist <= 0.0 {
-                continue;
-            }
-
-            let eps_eff = 1.0 / (1.0 / eps_i + 1.0 / eps_j - 1.0);
-            if eps_eff <= 0.0 {
-                continue;
-            }
-
-            let t_j = body_j.temperature.clamp(0.0, config.max_temperature);
-            let t_j_sq = t_j * t_j;
-            let t_j_fourth = t_j_sq * t_j_sq;
-
-            let view_factor = (r_j / dist).powi(2).min(1.0);
-
-            // Occlusion (3D): see `is_occluded_2d`.
-            if config.radiation_occlusion && is_occluded_3d(bodies, i, j) {
-                continue;
-            }
-
-            let q_rad = eps_eff * sigma * a_surf * view_factor * (t_i_fourth - t_j_fourth);
-
-            state.heat_flux[i] -= q_rad;
-            state.heat_flux[j] += q_rad;
-        }
     }
 }
 
