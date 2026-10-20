@@ -43,7 +43,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,
              default-off bit-identical, snapshot round-trip)
     K31-K44  3D joint constraints (mirrored both languages: distance,
-             hinge, prismatic, fixed)
+              hinge, prismatic, fixed)
+    R01-R03  deterministic trigonometry (mirrored both languages: pinned
+              cos/sin bit patterns, pinned atan2 bit patterns, and the
+              engine's own 2D rotation integration pinned to exact bits
+              - the property that makes rigid-body trajectories
+              platform-independent and Rust/C#-identical)
 """
 
 import re

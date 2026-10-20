@@ -290,7 +290,12 @@ public class RigidBody3
             // Angular velocity is world-space, so the increment composes
             // on the left (mirrors the Rust integrate).
             var axis = angularVelocity / angSpeed;
-            var dq = Quaternion.CreateFromAxisAngle(axis, angSpeed * dt);
+            // Built from the deterministic sine and cosine rather than
+            // Quaternion.CreateFromAxisAngle, which uses the platform math
+            // library and therefore differs between Windows and Linux in
+            // the last ULP. See PhiEng.Math.DeterministicTrig.
+            var (cosHalf, sinHalf) = DeterministicTrig.ComputeCosSin(angSpeed * dt * 0.5f);
+            var dq = new Quaternion(axis.X * sinHalf, axis.Y * sinHalf, axis.Z * sinHalf, cosHalf);
             return Quaternion.Normalize(Quaternion.Multiply(dq, rotation));
         }
         return rotation;

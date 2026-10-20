@@ -19,7 +19,12 @@ public struct Transform2
     public Transform2(Vector2 position, float angle)
     {
         Position = position;
-        Rotation = Matrix3x2.CreateRotation(angle);
+        // Built from the deterministic sine and cosine rather than
+        // Matrix3x2.CreateRotation, which uses the platform math library
+        // and therefore differs between Windows and Linux in the last
+        // ULP. See DeterministicTrig for why that matters.
+        var (cos, sin) = DeterministicTrig.ComputeCosSin(angle);
+        Rotation = new Matrix3x2(cos, sin, -sin, cos, 0.0f, 0.0f);
     }
 
     public Vector2 TransformPoint(Vector2 point)

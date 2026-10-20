@@ -920,7 +920,8 @@ impl FixedJoint {
 fn rotation_angle_of(body: &RigidBody2) -> f32 {
     let m00 = body.transform.rotation.x_axis.x;
     let m10 = body.transform.rotation.y_axis.x;
-    (-m10).atan2(m00)
+    // Deterministic atan2: see `phieng_math::trig`.
+    phieng_math::trig::atan2(-m10, m00)
 }
 
 /// Wrap an angle to [-π, π].

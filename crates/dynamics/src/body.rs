@@ -506,14 +506,23 @@ impl RigidBody2 {
     /// `atan2(-y_axis.x, x_axis.x)` convention (the negation matters:
     /// plain `atan2(y_axis.x, x_axis.x)` returns `-angle` and makes
     /// bodies ping-pong every frame).
+    ///
+    /// The trigonometry goes through [`phieng_math::trig`], not the
+    /// platform libm: `atan2` and `sin`/`cos` disagree between glibc
+    /// and the Microsoft CRT in the last ULP, and that single ULP is
+    /// enough to send a 240-step trajectory in two different
+    /// directions. See the module docs of `phieng_math::trig`.
     fn integrate_rotation(&mut self, dt: f32) {
         // Mat2::from_angle(a) has x_axis=(cos a, sin a), y_axis=(-sin a, cos a),
         // so the angle is atan2(-y_axis.x, x_axis.x).
         let m00 = self.transform.rotation.x_axis.x;
         let m10 = self.transform.rotation.y_axis.x;
-        let current_angle = (-m10).atan2(m00);
+        let current_angle = phieng_math::trig::atan2(-m10, m00);
         let new_angle = current_angle + self.angular_velocity * dt;
-        self.transform.rotation = Mat2::from_angle(new_angle);
+        // Same layout as `Mat2::from_angle`, built from the
+        // deterministic sine and cosine.
+        let (cos, sin) = phieng_math::trig::compute_cos_sin(new_angle);
+        self.transform.rotation = Mat2::from_cols(Vec2::new(cos, sin), Vec2::new(-sin, cos));
     }
 
     /// Integrate motion (semi-implicit Euler)
@@ -559,7 +568,7 @@ impl RigidBody2 {
     pub fn rotation_angle(&self) -> f32 {
         let m00 = self.transform.rotation.x_axis.x;
         let m10 = self.transform.rotation.y_axis.x;
-        (-m10).atan2(m00)
+        phieng_math::trig::atan2(-m10, m00)
     }
 
     /// Compute kinetic energy: 0.5 * m * v^2 + 0.5 * I * ω^2
@@ -1118,14 +1127,18 @@ impl RigidBody3 {
     /// [`Self::integrate_drift`]: quaternion increment from world-space
     /// angular velocity, composed on the LEFT (`q' = dq_world * q`;
     /// right-multiplying would integrate omega as if body-frame).
+    ///
+    /// The half-angle sine and cosine come from
+    /// [`phieng_math::trig`] rather than the platform libm, so the
+    /// 3D trajectory is bit-identical across platforms for the same
+    /// reason the 2D one is.
     fn integrate_rotation(&mut self, dt: f32) {
         let w = self.angular_velocity;
         let angle = w.length() * dt;
         if angle > 1e-6 {
             let axis = w / w.length();
             let half_angle = angle * 0.5;
-            let sin_half = half_angle.sin();
-            let cos_half = half_angle.cos();
+            let (cos_half, sin_half) = phieng_math::trig::compute_cos_sin(half_angle);
             let delta_quat = glam::Quat::from_xyzw(
                 axis.x * sin_half,
                 axis.y * sin_half,

@@ -544,7 +544,8 @@ public static class Joint3Math
     public static float TwistAbout(Quaternion qRel, Vector3 axis)
     {
         var q = ShortestPath(qRel);
-        float tw = 2.0f * MathF.Atan2(q.X * axis.X + q.Y * axis.Y + q.Z * axis.Z, q.W);
+        // Deterministic Atan2: see PhiEng.Math.DeterministicTrig.
+        float tw = 2.0f * DeterministicTrig.Atan2(q.X * axis.X + q.Y * axis.Y + q.Z * axis.Z, q.W);
         return WrapAngle(tw);
     }
 

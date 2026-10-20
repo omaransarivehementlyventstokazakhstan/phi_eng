@@ -972,7 +972,8 @@ fn orientation_error(q_rel: Quat) -> Vec3 {
 #[inline]
 fn twist_about(q_rel: Quat, axis: Vec3) -> f32 {
     let q = shortest_path(q_rel);
-    let tw = 2.0 * q.xyz().dot(axis).atan2(q.w);
+    // Deterministic atan2: see `phieng_math::trig`.
+    let tw = 2.0 * phieng_math::trig::atan2(q.xyz().dot(axis), q.w);
     wrap_angle(tw)
 }
 

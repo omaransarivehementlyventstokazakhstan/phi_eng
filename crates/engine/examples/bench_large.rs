@@ -96,10 +96,10 @@ fn median_ms<F: FnMut()>(frames: usize, mut step_fn: F) -> f64 {
 /// a deliberate act: if it changes, the physics moved. If the change
 /// was intended, update it here AND in README.md, and say so in the
 /// CHANGELOG. Never silence it by loosening the comparison.
-const HASH_PILE_2D: u64 = 0x8619b41d69ad35ee;
+const HASH_PILE_2D: u64 = 0xc509c18cd50043b4;
 
 /// Pinned trajectory hash of the 8-stack island scene (serial solve).
-const HASH_ISLANDS: u64 = 0xdb0f2a0fff8b7820;
+const HASH_ISLANDS: u64 = 0xd4a3a56f185c13b2;
 
 /// Pinned trajectory hash of the 3D pile scene.
 const HASH_PILE_3D: u64 = 0x66ae94fb463de60;

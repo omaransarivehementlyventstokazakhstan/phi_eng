@@ -293,7 +293,12 @@ public class RigidBody2
         // Matrix3x2.CreateRotation(a) has M11=cos(a), M21=-sin(a), so the
         // angle is Atan2(-M21, M11). (Plain Atan2(M21, M11) returns -angle
         // and makes bodies ping-pong between +angle and -angle every frame.)
-        float currentAngle = MathF.Atan2(-Transform.Rotation.M21, Transform.Rotation.M11);
+        //
+        // The deterministic Atan2 replaces MathF.Atan2: the platform math
+        // library differs between Windows and Linux in the last ULP, and
+        // that single ULP is enough to send a trajectory in two different
+        // directions. See PhiEng.Math.DeterministicTrig.
+        float currentAngle = DeterministicTrig.Atan2(-Transform.Rotation.M21, Transform.Rotation.M11);
         return currentAngle + AngularVelocity * dt;
     }
 
@@ -317,7 +322,7 @@ public class RigidBody2
     }
 
     /// <summary>Current rotation angle in radians.</summary>
-    public float RotationAngle => MathF.Atan2(-Transform.Rotation.M21, Transform.Rotation.M11);
+    public float RotationAngle => DeterministicTrig.Atan2(-Transform.Rotation.M21, Transform.Rotation.M11);
 
     /// <summary>Whether the body is slow enough to sleep.</summary>
     public bool ShouldSleep(float linearThreshold, float angularThreshold)
