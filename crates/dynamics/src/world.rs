@@ -17,6 +17,29 @@ use glam::{Vec2, Vec3};
 use phieng_broadphase::{Broadphase2, Broadphase3, BroadphaseMode};
 use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
 
+/// Time a block and add the elapsed milliseconds to `$acc`.
+///
+/// With the `phase-timing` feature off the macro expands to the block
+/// alone: no clock read, no branch, no accumulator. With the feature on
+/// the accumulator expression is only ever expanded in the timing build,
+/// so the default build does not even name it.
+#[cfg(feature = "phase-timing")]
+macro_rules! timed {
+    ($acc:expr, $body:block) => {{
+        let __phase_start = ::std::time::Instant::now();
+        let __phase_out = $body;
+        $acc += __phase_start.elapsed().as_secs_f64() * 1000.0;
+        __phase_out
+    }};
+}
+
+#[cfg(not(feature = "phase-timing"))]
+macro_rules! timed {
+    ($acc:expr, $body:block) => {{
+        $body
+    }};
+}
+
 /// Cached contact impulses from the previous frame, used for warm starting.
 /// Matched to new contacts by proximity of the contact point; the stored
 /// normal guards against reusing impulses after the contact flips.
@@ -173,6 +196,11 @@ pub struct World2 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Per-phase wall-clock accumulators. Only present with the
+    /// `phase-timing` feature; the default build has no such field, so
+    /// the struct's layout and public API are unchanged.
+    #[cfg(feature = "phase-timing")]
+    phase_timings: super::phase_timing::PhaseTimings,
     /// Scratch buffers reused every step so the per-frame narrowphase
     /// performs no allocations in the steady state.
     scratch: ScratchBuffers2D,
@@ -205,6 +233,8 @@ impl World2 {
             fluid: super::fluid::FluidState2::new(),
             thermal: super::thermal::ThermalState2::new(),
             nuclear: super::nuclear::NuclearState2::new(),
+            #[cfg(feature = "phase-timing")]
+            phase_timings: super::phase_timing::PhaseTimings::default(),
             scratch: ScratchBuffers2D::new(),
         }
     }
@@ -594,6 +624,9 @@ impl World2 {
     }
 
     fn step_inner(&mut self, dt: f32) {
+        #[cfg(feature = "phase-timing")]
+        let mut timings = super::phase_timing::PhaseTimings::default();
+
         // 0. Resolve a Hybrid broadphase request before any broadphase
         // work, so the backend in use for THIS step is decided by this
         // step's body count (not last step's).
@@ -605,73 +638,83 @@ impl World2 {
         // damping riding as symmetric drag).
         let verlet = self.gravity_config.integrator == super::gravity::Integrator::VelocityVerlet;
         let h = if verlet { dt * 0.5 } else { dt };
-        super::gravity::gravity_kick_2(
-            &mut self.bodies,
-            &self.gravity_config,
-            self.gravity,
-            h,
-            verlet,
-        );
+        timed!(timings.gravity, {
+            super::gravity::gravity_kick_2(
+                &mut self.bodies,
+                &self.gravity_config,
+                self.gravity,
+                h,
+                verlet,
+            );
 
-        // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
-        // and same Verlet split as the gravity kick above: a pure velocity
-        // kick pre-solve. A no-op when no sub-field is enabled.
-        if self.ambient.is_active() {
-            super::ambient::ambient_kick_2(&mut self.bodies, &self.ambient, self.time, h);
-        }
+            // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
+            // and same Verlet split as the gravity kick above: a pure velocity
+            // kick pre-solve. A no-op when no sub-field is enabled.
+            if self.ambient.is_active() {
+                super::ambient::ambient_kick_2(&mut self.bodies, &self.ambient, self.time, h);
+            }
+        });
 
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
-        self.fluid
-            .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
+        timed!(timings.fluid, {
+            self.fluid
+                .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
+        });
 
         // 2. Broad phase - find potential collision pairs (into scratch).
         // Reset scratch buffers (keeps capacity, including parallel slots).
-        self.scratch.reset();
-        self.update_broadphase();
-        self.broadphase.collect_pairs(&mut self.scratch.pairs);
+        timed!(timings.broadphase_rebuild, {
+            self.scratch.reset();
+            self.update_broadphase();
+        });
+        timed!(timings.broadphase_pairs, {
+            self.broadphase.collect_pairs(&mut self.scratch.pairs);
+        });
 
         // 3. Narrow phase - test actual collisions (into scratch).
-        for &(a, b) in &self.scratch.pairs {
-            // Static-static pairs can never produce an impulse (zero
-            // effective mass in every direction), so skip the narrowphase
-            // for them entirely. Bit-identical: their constraints would
-            // solve to zero and warm-start zeros are no-ops.
-            if self.bodies[a].is_static && self.bodies[b].is_static {
-                continue;
+        timed!(timings.narrowphase, {
+            for &(a, b) in &self.scratch.pairs {
+                // Static-static pairs can never produce an impulse (zero
+                // effective mass in every direction), so skip the narrowphase
+                // for them entirely. Bit-identical: their constraints would
+                // solve to zero and warm-start zeros are no-ops.
+                if self.bodies[a].is_static && self.bodies[b].is_static {
+                    continue;
+                }
+                // Narrowphase tier gate: see `World2::test_collisions_into`.
+                if self.collision_tier.is_active() {
+                    let max_tier = self.collision_tier.max_tier;
+                    let tier_enabled = true;
+                    Self::test_collisions_into(
+                        &self.bodies,
+                        a,
+                        b,
+                        &mut self.scratch.constraints,
+                        &mut self.scratch.verts_a,
+                        &mut self.scratch.verts_b,
+                        &mut self.scratch.points,
+                        &mut self.scratch.clip_tmp,
+                        max_tier,
+                        tier_enabled,
+                    );
+                } else {
+                    Self::test_collisions_into(
+                        &self.bodies,
+                        a,
+                        b,
+                        &mut self.scratch.constraints,
+                        &mut self.scratch.verts_a,
+                        &mut self.scratch.verts_b,
+                        &mut self.scratch.points,
+                        &mut self.scratch.clip_tmp,
+                        super::collision_tier::CollisionTier::Tier5_GJK_EPA,
+                        false,
+                    );
+                }
             }
-            // Narrowphase tier gate: see `World2::test_collisions_into`.
-            if self.collision_tier.is_active() {
-                let max_tier = self.collision_tier.max_tier;
-                let tier_enabled = true;
-                Self::test_collisions_into(
-                    &self.bodies,
-                    a,
-                    b,
-                    &mut self.scratch.constraints,
-                    &mut self.scratch.verts_a,
-                    &mut self.scratch.verts_b,
-                    &mut self.scratch.points,
-                    &mut self.scratch.clip_tmp,
-                    max_tier,
-                    tier_enabled,
-                );
-            } else {
-                Self::test_collisions_into(
-                    &self.bodies,
-                    a,
-                    b,
-                    &mut self.scratch.constraints,
-                    &mut self.scratch.verts_a,
-                    &mut self.scratch.verts_b,
-                    &mut self.scratch.points,
-                    &mut self.scratch.clip_tmp,
-                    super::collision_tier::CollisionTier::Tier5_GJK_EPA,
-                    false,
-                );
-            }
-        }
+        });
 
         // 3b. Warm-start: seed each constraint with cached impulses from the
         // previous frame (matched by contact-point proximity + normal agreement).
@@ -679,165 +722,171 @@ impl World2 {
         // wakes (with cascade) so it can respond to the newcomer. Settled
         // pairs stay cached and keep sleeping. Every constrained body is
         // marked touched (sleep-support tracking for step 6+7).
-        if self.contact_touch.len() != self.bodies.len() {
-            self.contact_touch.resize(self.bodies.len(), false);
-        }
-        for t in self.contact_touch.iter_mut() {
-            *t = false;
-        }
-        // Index loop (not iter_mut): `wake_body` needs `&mut self`
-        // while constraints borrow `self.scratch`.
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..self.scratch.constraints.len() {
-            let (a, b) = {
-                let c = &self.scratch.constraints[i];
-                (c.body_a, c.body_b)
-            };
-            self.contact_touch[a] = true;
-            self.contact_touch[b] = true;
-            if !self.contact_cache.contains_key(&(a, b))
-                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
-            {
-                self.wake_body(a);
-                self.wake_body(b);
+        timed!(timings.cache, {
+            if self.contact_touch.len() != self.bodies.len() {
+                self.contact_touch.resize(self.bodies.len(), false);
             }
-            let constraint = &mut self.scratch.constraints[i];
-            if let Some(entries) = self.contact_cache.get(&(a, b)) {
-                let mut best: Option<&CachedContact> = None;
-                let mut best_dist = CONTACT_MATCH_DIST_SQ;
-                for entry in entries {
-                    // Skip entries whose contact flipped (impulses would push the wrong way).
-                    if entry.normal.dot(constraint.normal) <= 0.0 {
-                        continue;
+            for t in self.contact_touch.iter_mut() {
+                *t = false;
+            }
+            // Index loop (not iter_mut): `wake_body` needs `&mut self`
+            // while constraints borrow `self.scratch`.
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..self.scratch.constraints.len() {
+                let (a, b) = {
+                    let c = &self.scratch.constraints[i];
+                    (c.body_a, c.body_b)
+                };
+                self.contact_touch[a] = true;
+                self.contact_touch[b] = true;
+                if !self.contact_cache.contains_key(&(a, b))
+                    && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+                {
+                    self.wake_body(a);
+                    self.wake_body(b);
+                }
+                let constraint = &mut self.scratch.constraints[i];
+                if let Some(entries) = self.contact_cache.get(&(a, b)) {
+                    let mut best: Option<&CachedContact> = None;
+                    let mut best_dist = CONTACT_MATCH_DIST_SQ;
+                    for entry in entries {
+                        // Skip entries whose contact flipped (impulses would push the wrong way).
+                        if entry.normal.dot(constraint.normal) <= 0.0 {
+                            continue;
+                        }
+                        let d = (entry.point - constraint.point).length_squared();
+                        if d < best_dist {
+                            best_dist = d;
+                            best = Some(entry);
+                        }
                     }
-                    let d = (entry.point - constraint.point).length_squared();
-                    if d < best_dist {
-                        best_dist = d;
-                        best = Some(entry);
+                    if let Some(entry) = best {
+                        constraint.normal_impulse = entry.normal_impulse;
+                        constraint.tangent_impulse = entry.tangent_impulse;
                     }
                 }
-                if let Some(entry) = best {
-                    constraint.normal_impulse = entry.normal_impulse;
-                    constraint.tangent_impulse = entry.tangent_impulse;
-                }
             }
-        }
 
-        // Validate constraints before solving
-        let constraint_report = validate_constraints_2d(
-            &self.bodies,
-            &mut self.scratch.constraints,
-            &self.validation,
-        );
-        self.validation_report.merge(constraint_report);
+            // Validate constraints before solving
+            let constraint_report = validate_constraints_2d(
+                &self.bodies,
+                &mut self.scratch.constraints,
+                &self.validation,
+            );
+            self.validation_report.merge(constraint_report);
+        });
 
         // 4. Solve contacts, then joints (after contacts, same iteration
         // budget). The parallel solver path is used only when requested;
         // it falls back to the exact serial implementation for 0-1 islands.
-        if self.solver.parallel {
-            self.solve_parallel_path(dt);
-        } else {
-            self.solver
-                .solve(&mut self.bodies, &mut self.scratch.constraints, dt);
-            if !self.joints.is_empty() {
-                for joint in self.joints.iter() {
-                    joint.warm_start(&mut self.bodies);
-                }
-                let iters = self.solver.iterations;
-                for _ in 0..iters {
-                    for joint in self.joints.iter_mut() {
-                        joint.solve(&mut self.bodies, dt);
+        timed!(timings.solver, {
+            if self.solver.parallel {
+                self.solve_parallel_path(dt);
+            } else {
+                self.solver
+                    .solve(&mut self.bodies, &mut self.scratch.constraints, dt);
+                if !self.joints.is_empty() {
+                    for joint in self.joints.iter() {
+                        joint.warm_start(&mut self.bodies);
+                    }
+                    let iters = self.solver.iterations;
+                    for _ in 0..iters {
+                        for joint in self.joints.iter_mut() {
+                            joint.solve(&mut self.bodies, dt);
+                        }
                     }
                 }
             }
-        }
 
-        // 4b. Write back accumulated impulses for next frame's warm start.
-        // Disjoint field borrows: the cache map and its buffer pool.
-        let cache = &mut self.contact_cache;
-        let pool = &mut self.contact_cache_pool;
-        for list in cache.values_mut() {
-            list.clear();
-        }
-        for constraint in &self.scratch.constraints {
-            let key = (constraint.body_a, constraint.body_b);
-            cache
-                .entry(key)
-                .or_insert_with(|| pool.pop().unwrap_or_default())
-                .push(CachedContact {
-                    point: constraint.point,
-                    normal: constraint.normal,
-                    normal_impulse: constraint.normal_impulse,
-                    tangent_impulse: constraint.tangent_impulse,
-                });
-        }
-        // Drop vacated entries every frame (so `contact_cache.len()` keeps
-        // its exact meaning — number of live pairs) but RECYCLE their
-        // buffers into the pool instead of freeing them. New keys draw
-        // from the pool, so the cache reaches zero steady-state allocation
-        // even as pairs flicker. Memory-only; trajectories bit-identical.
-        // A vanished pair is lost contact: wake any sleeping party (loss
-        // of support must re-evaluate sleep). Idempotent flags, so the
-        // drain order cannot affect determinism.
-        let cache = &mut self.contact_cache;
-        let pool = &mut self.contact_cache_pool;
-        let stale = &mut self.scratch.stale;
-        stale.clear();
-        cache.retain(|key, list| {
-            if list.is_empty() {
-                stale.push(*key);
-                pool.push(std::mem::take(list));
-                false
-            } else {
-                true
+            // 4b. Write back accumulated impulses for next frame's warm start.
+            // Disjoint field borrows: the cache map and its buffer pool.
+            let cache = &mut self.contact_cache;
+            let pool = &mut self.contact_cache_pool;
+            for list in cache.values_mut() {
+                list.clear();
+            }
+            for constraint in &self.scratch.constraints {
+                let key = (constraint.body_a, constraint.body_b);
+                cache
+                    .entry(key)
+                    .or_insert_with(|| pool.pop().unwrap_or_default())
+                    .push(CachedContact {
+                        point: constraint.point,
+                        normal: constraint.normal,
+                        normal_impulse: constraint.normal_impulse,
+                        tangent_impulse: constraint.tangent_impulse,
+                    });
+            }
+            // Drop vacated entries every frame (so `contact_cache.len()` keeps
+            // its exact meaning — number of live pairs) but RECYCLE their
+            // buffers into the pool instead of freeing them. New keys draw
+            // from the pool, so the cache reaches zero steady-state allocation
+            // even as pairs flicker. Memory-only; trajectories bit-identical.
+            // A vanished pair is lost contact: wake any sleeping party (loss
+            // of support must re-evaluate sleep). Idempotent flags, so the
+            // drain order cannot affect determinism.
+            let cache = &mut self.contact_cache;
+            let pool = &mut self.contact_cache_pool;
+            let stale = &mut self.scratch.stale;
+            stale.clear();
+            cache.retain(|key, list| {
+                if list.is_empty() {
+                    stale.push(*key);
+                    pool.push(std::mem::take(list));
+                    false
+                } else {
+                    true
+                }
+            });
+            // Pop from the end (LIFO): the woken set is order-independent.
+            while let Some((a, b)) = self.scratch.stale.pop() {
+                if a < self.bodies.len()
+                    && b < self.bodies.len()
+                    && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+                {
+                    self.wake_body(a);
+                    self.wake_body(b);
+                }
             }
         });
-        // Pop from the end (LIFO): the woken set is order-independent.
-        while let Some((a, b)) = self.scratch.stale.pop() {
-            if a < self.bodies.len()
-                && b < self.bodies.len()
-                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
-            {
-                self.wake_body(a);
-                self.wake_body(b);
-            }
-        }
 
-        if verlet {
-            // 5v. Verlet drift (positions only — no linear damping) plus
-            // the second half-kick with forces recomputed at the new
-            // positions. The contact solver above ran unchanged.
-            // Sleeping bodies are skipped: frozen until woken.
-            for body in self.bodies.iter_mut() {
-                if body.is_sleeping {
-                    continue;
+        timed!(timings.integrate, {
+            if verlet {
+                // 5v. Verlet drift (positions only — no linear damping) plus
+                // the second half-kick with forces recomputed at the new
+                // positions. The contact solver above ran unchanged.
+                // Sleeping bodies are skipped: frozen until woken.
+                for body in self.bodies.iter_mut() {
+                    if body.is_sleeping {
+                        continue;
+                    }
+                    body.integrate_drift(dt);
                 }
-                body.integrate_drift(dt);
-            }
-            super::gravity::gravity_kick_2(
-                &mut self.bodies,
-                &self.gravity_config,
-                self.gravity,
-                dt * 0.5,
-                true,
-            );
-            if self.ambient.is_active() {
-                super::ambient::ambient_kick_2(
+                super::gravity::gravity_kick_2(
                     &mut self.bodies,
-                    &self.ambient,
-                    self.time,
+                    &self.gravity_config,
+                    self.gravity,
                     dt * 0.5,
+                    true,
                 );
-            }
-        } else {
-            // 5. Integrate motion (sleeping bodies are frozen until woken).
-            for body in self.bodies.iter_mut() {
-                if body.is_sleeping {
-                    continue;
+                if self.ambient.is_active() {
+                    super::ambient::ambient_kick_2(
+                        &mut self.bodies,
+                        &self.ambient,
+                        self.time,
+                        dt * 0.5,
+                    );
                 }
-                body.integrate(dt);
+            } else {
+                // 5. Integrate motion (sleeping bodies are frozen until woken).
+                for body in self.bodies.iter_mut() {
+                    if body.is_sleeping {
+                        continue;
+                    }
+                    body.integrate(dt);
+                }
             }
-        }
+        });
 
         // 5c. Nuclear decay and fission: fills a per-body heat budget
         // (and an ionizing-radiation budget) from the nuclides the
@@ -845,39 +894,46 @@ impl World2 {
         // radiation sees the heat in the same step. It modifies
         // temperature only (no velocity change), so it neither wakes nor
         // is gated by sleep.
-        if self.nuclear.config.is_active() {
-            let nuclear_config = &self.nuclear.config;
-            let nuclear_scratch = &mut self.nuclear.scratch;
-            super::nuclear::step_nuclear_2d(&mut self.bodies, nuclear_config, nuclear_scratch, dt);
-            // 5c-2. The nuclear heat raises the body temperatures. The
-            // clamps come from the thermal configuration, so the bounds
-            // are the same ones the thermal phase enforces; the rate
-            // clamp is deliberately not applied, because a nuclear
-            // source has a physical rate.
-            let thermal_config = self.thermal.config;
-            super::nuclear::apply_nuclear_heat_2d(
-                &mut self.bodies,
-                &self.nuclear.scratch,
-                &thermal_config,
-            );
-        }
+        timed!(timings.thermal, {
+            if self.nuclear.config.is_active() {
+                let nuclear_config = &self.nuclear.config;
+                let nuclear_scratch = &mut self.nuclear.scratch;
+                super::nuclear::step_nuclear_2d(
+                    &mut self.bodies,
+                    nuclear_config,
+                    nuclear_scratch,
+                    dt,
+                );
+                // 5c-2. The nuclear heat raises the body temperatures. The
+                // clamps come from the thermal configuration, so the bounds
+                // are the same ones the thermal phase enforces; the rate
+                // clamp is deliberately not applied, because a nuclear
+                // source has a physical rate.
+                let thermal_config = self.thermal.config;
+                super::nuclear::apply_nuclear_heat_2d(
+                    &mut self.bodies,
+                    &self.nuclear.scratch,
+                    &thermal_config,
+                );
+            }
 
-        // 5d. Thermal transfer: conduction, radiation, convection. Runs
-        // after integrate so it sees final positions; modifies temperature
-        // only (no velocity change), so it neither wakes nor is gated by
-        // sleep. Reads contact data from the narrowphase pass above.
-        let thermal_config = self.thermal.config;
-        super::thermal::step_thermal_2d(
-            &mut self.bodies,
-            &self.scratch.constraints,
-            &thermal_config,
-            &mut self.thermal,
-            dt,
-        );
-        // 5d. Thermal expansion: rescale shapes by their expansion factor
-        // and refresh mass/inertia. No-op unless the coefficient is
-        // non-zero (the default), so trajectories stay bit-identical.
-        super::thermal::apply_expansion_2d(&mut self.bodies, &thermal_config);
+            // 5d. Thermal transfer: conduction, radiation, convection. Runs
+            // after integrate so it sees final positions; modifies temperature
+            // only (no velocity change), so it neither wakes nor is gated by
+            // sleep. Reads contact data from the narrowphase pass above.
+            let thermal_config = self.thermal.config;
+            super::thermal::step_thermal_2d(
+                &mut self.bodies,
+                &self.scratch.constraints,
+                &thermal_config,
+                &mut self.thermal,
+                dt,
+            );
+            // 5d. Thermal expansion: rescale shapes by their expansion factor
+            // and refresh mass/inertia. No-op unless the coefficient is
+            // non-zero (the default), so trajectories stay bit-identical.
+            super::thermal::apply_expansion_2d(&mut self.bodies, &thermal_config);
+        });
 
         // 6+7. Validate bodies + update sleep in a single fused sweep.
         // Sleep needs slowness AND support (a current contact, tracked
@@ -890,23 +946,56 @@ impl World2 {
         // since integrate skips sleepers.
         let lin = self.linear_sleep_threshold;
         let ang = self.angular_sleep_threshold;
-        for (i, body) in self.bodies.iter_mut().enumerate() {
-            let report = validate_body_2d(body, &self.validation);
-            self.validation_report.merge(report);
-            if body.is_static {
-                continue;
+        timed!(timings.sleep, {
+            for (i, body) in self.bodies.iter_mut().enumerate() {
+                let report = validate_body_2d(body, &self.validation);
+                self.validation_report.merge(report);
+                if body.is_static {
+                    continue;
+                }
+                if body.is_sleeping {
+                    body.velocity = Vec2::ZERO;
+                    body.angular_velocity = 0.0;
+                    continue;
+                }
+                if body.should_sleep(lin, ang) && self.contact_touch[i] {
+                    body.is_sleeping = true;
+                    body.velocity = Vec2::ZERO;
+                    body.angular_velocity = 0.0;
+                }
             }
-            if body.is_sleeping {
-                body.velocity = Vec2::ZERO;
-                body.angular_velocity = 0.0;
-                continue;
-            }
-            if body.should_sleep(lin, ang) && self.contact_touch[i] {
-                body.is_sleeping = true;
-                body.velocity = Vec2::ZERO;
-                body.angular_velocity = 0.0;
-            }
+        });
+
+        #[cfg(feature = "phase-timing")]
+        {
+            timings.steps = 1;
+            self.phase_timings.merge(timings);
         }
+    }
+
+    /// The per-phase wall-clock accumulators.
+    ///
+    /// Only available with the `phase-timing` feature; the default build
+    /// has no timers and no accumulator, and its public API is unchanged.
+    #[cfg(feature = "phase-timing")]
+    pub fn phase_timings(&self) -> &super::phase_timing::PhaseTimings {
+        &self.phase_timings
+    }
+
+    /// Forget everything measured so far.
+    #[cfg(feature = "phase-timing")]
+    pub fn reset_phase_timings(&mut self) {
+        self.phase_timings.reset();
+    }
+
+    /// How many candidate pairs the broad phase produced on the last step.
+    ///
+    /// This is the *raw* count, before the narrow phase filters it: the
+    /// difference between this and the contact-cache size is the work the
+    /// narrow phase throws away.
+    #[cfg(feature = "phase-timing")]
+    pub fn broadphase_pair_count(&self) -> usize {
+        self.scratch.pairs.len()
     }
 
     /// Wake a body and cascade through its contact partners and joint
@@ -1463,6 +1552,11 @@ pub struct World3 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Per-phase wall-clock accumulators. Only present with the
+    /// `phase-timing` feature; the default build has no such field, so
+    /// the struct's layout and public API are unchanged.
+    #[cfg(feature = "phase-timing")]
+    phase_timings: super::phase_timing::PhaseTimings,
     /// Runtime validation configuration
     pub validation: ValidationConfig,
     /// Last validation report
@@ -1514,6 +1608,8 @@ impl World3 {
             fluid: super::fluid3::FluidState3::new(),
             thermal: super::thermal::ThermalState3::new(),
             nuclear: super::nuclear::NuclearState2::new(),
+            #[cfg(feature = "phase-timing")]
+            phase_timings: super::phase_timing::PhaseTimings::default(),
             validation: ValidationConfig::default(),
             validation_report: ValidationReport::default(),
             scratch_constraints: Vec::new(),
@@ -1732,6 +1828,9 @@ impl World3 {
     }
 
     fn step_inner(&mut self, dt: f32) {
+        #[cfg(feature = "phase-timing")]
+        let mut timings = super::phase_timing::PhaseTimings::default();
+
         // 0. Resolve a Hybrid broadphase request (see World2::step_inner).
         self.resolve_broadphase_mode();
 
@@ -1741,31 +1840,39 @@ impl World3 {
         // linear damping riding as symmetric drag).
         let verlet = self.gravity_config.integrator == super::gravity::Integrator::VelocityVerlet;
         let h = if verlet { dt * 0.5 } else { dt };
-        super::gravity::gravity_kick_3(
-            &mut self.bodies,
-            &self.gravity_config,
-            self.gravity,
-            h,
-            verlet,
-        );
+        timed!(timings.gravity, {
+            super::gravity::gravity_kick_3(
+                &mut self.bodies,
+                &self.gravity_config,
+                self.gravity,
+                h,
+                verlet,
+            );
 
-        // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
-        // and same Verlet split as the gravity kick above.
-        if self.ambient.is_active() {
-            super::ambient::ambient_kick_3(&mut self.bodies, &self.ambient, self.time, h);
-        }
+            // 1a. Ambient forces (spring/SHM, air drag, turbulence). Same slot
+            // and same Verlet split as the gravity kick above.
+            if self.ambient.is_active() {
+                super::ambient::ambient_kick_3(&mut self.bodies, &self.ambient, self.time, h);
+            }
+        });
 
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
-        self.fluid
-            .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
+        timed!(timings.fluid, {
+            self.fluid
+                .step_fluid(&mut self.bodies, self.gravity, &self.ambient, self.time, dt);
+        });
 
         // 2. Broad phase - find potential collision pairs (into scratch).
-        self.update_broadphase();
         let mut pairs = std::mem::take(&mut self.scratch_pairs);
-        pairs.clear();
-        self.broadphase.collect_pairs(&mut pairs);
+        timed!(timings.broadphase_rebuild, {
+            self.update_broadphase();
+        });
+        timed!(timings.broadphase_pairs, {
+            pairs.clear();
+            self.broadphase.collect_pairs(&mut pairs);
+        });
 
         // 3. Narrow phase - test actual collisions (into scratch).
         let mut constraints = std::mem::take(&mut self.scratch_constraints);
@@ -1773,212 +1880,227 @@ impl World3 {
         let mut points = std::mem::take(&mut self.scratch_points);
         let mut clip_tmp = std::mem::take(&mut self.scratch_clip_tmp);
         let mut epa_buffers = std::mem::take(&mut self.epa_buffers);
-        for &(a, b) in &pairs {
-            // Static-static pairs can never produce an impulse (zero
-            // effective mass in every direction); skip the narrowphase.
-            // Bit-identical: their constraints would solve to zero.
-            if self.bodies[a].is_static && self.bodies[b].is_static {
-                continue;
+        timed!(timings.narrowphase, {
+            for &(a, b) in &pairs {
+                // Static-static pairs can never produce an impulse (zero
+                // effective mass in every direction); skip the narrowphase.
+                // Bit-identical: their constraints would solve to zero.
+                if self.bodies[a].is_static && self.bodies[b].is_static {
+                    continue;
+                }
+                if self.collision_tier.is_active() {
+                    Self::test_collisions_3d_into(
+                        &self.bodies,
+                        a,
+                        b,
+                        &mut constraints,
+                        &mut points,
+                        &mut clip_tmp,
+                        &mut epa_buffers,
+                        self.collision_tier.max_tier,
+                        true,
+                    );
+                } else {
+                    Self::test_collisions_3d_into(
+                        &self.bodies,
+                        a,
+                        b,
+                        &mut constraints,
+                        &mut points,
+                        &mut clip_tmp,
+                        &mut epa_buffers,
+                        super::collision_tier::CollisionTier::Tier5_GJK_EPA,
+                        false,
+                    );
+                }
             }
-            if self.collision_tier.is_active() {
-                Self::test_collisions_3d_into(
-                    &self.bodies,
-                    a,
-                    b,
-                    &mut constraints,
-                    &mut points,
-                    &mut clip_tmp,
-                    &mut epa_buffers,
-                    self.collision_tier.max_tier,
-                    true,
-                );
-            } else {
-                Self::test_collisions_3d_into(
-                    &self.bodies,
-                    a,
-                    b,
-                    &mut constraints,
-                    &mut points,
-                    &mut clip_tmp,
-                    &mut epa_buffers,
-                    super::collision_tier::CollisionTier::Tier5_GJK_EPA,
-                    false,
-                );
-            }
-        }
+        });
 
         // 3b. Warm-start from cached impulses. A pair with no cache
         // entry is a NEW contact: any sleeping party wakes (with
         // cascade) so it can respond to the newcomer. Every constrained
         // body is marked touched (sleep-support tracking for step 6+7).
-        if self.contact_touch.len() != self.bodies.len() {
-            self.contact_touch.resize(self.bodies.len(), false);
-        }
-        for t in self.contact_touch.iter_mut() {
-            *t = false;
-        }
-        for constraint in constraints.iter_mut() {
-            let (a, b) = (constraint.body_a, constraint.body_b);
-            self.contact_touch[a] = true;
-            self.contact_touch[b] = true;
-            if !self.contact_cache.contains_key(&(a, b))
-                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
-            {
-                self.wake_body(a);
-                self.wake_body(b);
+        timed!(timings.cache, {
+            if self.contact_touch.len() != self.bodies.len() {
+                self.contact_touch.resize(self.bodies.len(), false);
             }
-            if let Some(entries) = self.contact_cache.get(&(a, b)) {
-                let mut best: Option<&CachedContact3D> = None;
-                let mut best_dist = 0.04f32;
-                for entry in entries {
-                    if entry.normal.dot(constraint.normal) <= 0.0 {
-                        continue;
+            for t in self.contact_touch.iter_mut() {
+                *t = false;
+            }
+            for constraint in constraints.iter_mut() {
+                let (a, b) = (constraint.body_a, constraint.body_b);
+                self.contact_touch[a] = true;
+                self.contact_touch[b] = true;
+                if !self.contact_cache.contains_key(&(a, b))
+                    && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+                {
+                    self.wake_body(a);
+                    self.wake_body(b);
+                }
+                if let Some(entries) = self.contact_cache.get(&(a, b)) {
+                    let mut best: Option<&CachedContact3D> = None;
+                    let mut best_dist = 0.04f32;
+                    for entry in entries {
+                        if entry.normal.dot(constraint.normal) <= 0.0 {
+                            continue;
+                        }
+                        let d = (entry.point - constraint.point).length_squared();
+                        if d < best_dist {
+                            best_dist = d;
+                            best = Some(entry);
+                        }
                     }
-                    let d = (entry.point - constraint.point).length_squared();
-                    if d < best_dist {
-                        best_dist = d;
-                        best = Some(entry);
+                    if let Some(entry) = best {
+                        constraint.normal_impulse = entry.normal_impulse;
+                        constraint.tangent1_impulse = entry.tangent1_impulse;
+                        constraint.tangent2_impulse = entry.tangent2_impulse;
                     }
                 }
-                if let Some(entry) = best {
-                    constraint.normal_impulse = entry.normal_impulse;
-                    constraint.tangent1_impulse = entry.tangent1_impulse;
-                    constraint.tangent2_impulse = entry.tangent2_impulse;
-                }
             }
-        }
 
-        // Validate constraints before solving
-        let constraint_report =
-            validate_constraints_3d(&self.bodies, &mut constraints, &self.validation);
-        self.validation_report.merge(constraint_report);
+            // Validate constraints before solving
+            let constraint_report =
+                validate_constraints_3d(&self.bodies, &mut constraints, &self.validation);
+            self.validation_report.merge(constraint_report);
+        });
 
         // 4. Solve constraints
-        self.solver.solve(&mut self.bodies, &mut constraints, dt);
+        timed!(timings.solver, {
+            self.solver.solve(&mut self.bodies, &mut constraints, dt);
 
-        // 4b. Solve joints (after contacts, same iteration budget).
-        // Joints own their impulses, so warm starting is direct.
-        // Skipped entirely when the world holds no joints (zero cost).
-        // Serial only (see `crate::joint3`).
-        if !self.joints.is_empty() {
-            for joint in self.joints.iter() {
-                joint.warm_start(&mut self.bodies);
-            }
-            let iters = self.solver.iterations;
-            for _ in 0..iters {
-                for joint in self.joints.iter_mut() {
-                    joint.solve(&mut self.bodies, dt);
+            // 4b. Solve joints (after contacts, same iteration budget).
+            // Joints own their impulses, so warm starting is direct.
+            // Skipped entirely when the world holds no joints (zero cost).
+            // Serial only (see `crate::joint3`).
+            if !self.joints.is_empty() {
+                for joint in self.joints.iter() {
+                    joint.warm_start(&mut self.bodies);
+                }
+                let iters = self.solver.iterations;
+                for _ in 0..iters {
+                    for joint in self.joints.iter_mut() {
+                        joint.solve(&mut self.bodies, dt);
+                    }
                 }
             }
-        }
 
-        // 4b. Write back accumulated impulses for next frame's warm
-        // start. Entry vectors are cleared in place and reused; vacated
-        // entries are dropped (keeping `contact_cache.len()` exact) but
-        // their buffers are recycled via the pool. Zero steady-state
-        // allocation; trajectories bit-identical.
-        let cache = &mut self.contact_cache;
-        let pool = &mut self.contact_cache_pool;
-        for list in cache.values_mut() {
-            list.clear();
-        }
-        for constraint in &constraints {
-            let key = (constraint.body_a, constraint.body_b);
-            cache
-                .entry(key)
-                .or_insert_with(|| pool.pop().unwrap_or_default())
-                .push(CachedContact3D {
-                    point: constraint.point,
-                    normal: constraint.normal,
-                    normal_impulse: constraint.normal_impulse,
-                    tangent1_impulse: constraint.tangent1_impulse,
-                    tangent2_impulse: constraint.tangent2_impulse,
-                });
-        }
-        // A vanished pair is lost contact: wake any sleeping party
-        // (loss of support must re-evaluate sleep; see World2).
-        // Idempotent flags: drain order cannot affect determinism.
-        self.scratch_stale.clear();
-        let stale = &mut self.scratch_stale;
-        cache.retain(|key, list| {
-            if list.is_empty() {
-                stale.push(*key);
-                pool.push(std::mem::take(list));
-                false
-            } else {
-                true
+            // 4b. Write back accumulated impulses for next frame's warm
+            // start. Entry vectors are cleared in place and reused; vacated
+            // entries are dropped (keeping `contact_cache.len()` exact) but
+            // their buffers are recycled via the pool. Zero steady-state
+            // allocation; trajectories bit-identical.
+            let cache = &mut self.contact_cache;
+            let pool = &mut self.contact_cache_pool;
+            for list in cache.values_mut() {
+                list.clear();
+            }
+            for constraint in &constraints {
+                let key = (constraint.body_a, constraint.body_b);
+                cache
+                    .entry(key)
+                    .or_insert_with(|| pool.pop().unwrap_or_default())
+                    .push(CachedContact3D {
+                        point: constraint.point,
+                        normal: constraint.normal,
+                        normal_impulse: constraint.normal_impulse,
+                        tangent1_impulse: constraint.tangent1_impulse,
+                        tangent2_impulse: constraint.tangent2_impulse,
+                    });
+            }
+            // A vanished pair is lost contact: wake any sleeping party
+            // (loss of support must re-evaluate sleep; see World2).
+            // Idempotent flags: drain order cannot affect determinism.
+            self.scratch_stale.clear();
+            let stale = &mut self.scratch_stale;
+            cache.retain(|key, list| {
+                if list.is_empty() {
+                    stale.push(*key);
+                    pool.push(std::mem::take(list));
+                    false
+                } else {
+                    true
+                }
+            });
+            // Pop from the end (LIFO): the woken set is order-independent.
+            while let Some((a, b)) = self.scratch_stale.pop() {
+                if a < self.bodies.len()
+                    && b < self.bodies.len()
+                    && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
+                {
+                    self.wake_body(a);
+                    self.wake_body(b);
+                }
             }
         });
-        // Pop from the end (LIFO): the woken set is order-independent.
-        while let Some((a, b)) = self.scratch_stale.pop() {
-            if a < self.bodies.len()
-                && b < self.bodies.len()
-                && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
-            {
-                self.wake_body(a);
-                self.wake_body(b);
-            }
-        }
 
-        if verlet {
-            // 5v. Verlet drift (positions only — no linear damping) plus
-            // the second half-kick with forces recomputed at the new
-            // positions. The contact solver above ran unchanged.
-            for body in self.bodies.iter_mut() {
-                if body.is_sleeping {
-                    continue;
+        timed!(timings.integrate, {
+            if verlet {
+                // 5v. Verlet drift (positions only — no linear damping) plus
+                // the second half-kick with forces recomputed at the new
+                // positions. The contact solver above ran unchanged.
+                for body in self.bodies.iter_mut() {
+                    if body.is_sleeping {
+                        continue;
+                    }
+                    body.integrate_drift(dt);
                 }
-                body.integrate_drift(dt);
-            }
-            super::gravity::gravity_kick_3(
-                &mut self.bodies,
-                &self.gravity_config,
-                self.gravity,
-                dt * 0.5,
-                true,
-            );
-            if self.ambient.is_active() {
-                super::ambient::ambient_kick_3(
+                super::gravity::gravity_kick_3(
                     &mut self.bodies,
-                    &self.ambient,
-                    self.time,
+                    &self.gravity_config,
+                    self.gravity,
                     dt * 0.5,
+                    true,
                 );
-            }
-        } else {
-            // 5. Integrate motion (sleeping bodies are frozen until woken).
-            for body in self.bodies.iter_mut() {
-                if body.is_sleeping {
-                    continue;
+                if self.ambient.is_active() {
+                    super::ambient::ambient_kick_3(
+                        &mut self.bodies,
+                        &self.ambient,
+                        self.time,
+                        dt * 0.5,
+                    );
                 }
-                body.integrate(dt);
+            } else {
+                // 5. Integrate motion (sleeping bodies are frozen until woken).
+                for body in self.bodies.iter_mut() {
+                    if body.is_sleeping {
+                        continue;
+                    }
+                    body.integrate(dt);
+                }
             }
-        }
+        });
 
         // 5c. Nuclear decay and fission (see World2::step_inner phase 5c).
-        if self.nuclear.config.is_active() {
-            let nuclear_config = &self.nuclear.config;
-            let nuclear_scratch = &mut self.nuclear.scratch;
-            super::nuclear::step_nuclear_3d(&mut self.bodies, nuclear_config, nuclear_scratch, dt);
-            let thermal_config = self.thermal.config;
-            super::nuclear::apply_nuclear_heat_3d(
-                &mut self.bodies,
-                &self.nuclear.scratch,
-                &thermal_config,
-            );
-        }
+        timed!(timings.thermal, {
+            if self.nuclear.config.is_active() {
+                let nuclear_config = &self.nuclear.config;
+                let nuclear_scratch = &mut self.nuclear.scratch;
+                super::nuclear::step_nuclear_3d(
+                    &mut self.bodies,
+                    nuclear_config,
+                    nuclear_scratch,
+                    dt,
+                );
+                let thermal_config = self.thermal.config;
+                super::nuclear::apply_nuclear_heat_3d(
+                    &mut self.bodies,
+                    &self.nuclear.scratch,
+                    &thermal_config,
+                );
+            }
 
-        // 5d. Thermal transfer (see World2::step_inner phase 5d).
-        let thermal_config = self.thermal.config;
-        super::thermal::step_thermal_3d(
-            &mut self.bodies,
-            &constraints,
-            &thermal_config,
-            &mut self.thermal,
-            dt,
-        );
-        // 5d. Thermal expansion (see World2::step_inner).
-        super::thermal::apply_expansion_3d(&mut self.bodies, &thermal_config);
+            // 5d. Thermal transfer (see World2::step_inner phase 5d).
+            let thermal_config = self.thermal.config;
+            super::thermal::step_thermal_3d(
+                &mut self.bodies,
+                &constraints,
+                &thermal_config,
+                &mut self.thermal,
+                dt,
+            );
+            // 5d. Thermal expansion (see World2::step_inner).
+            super::thermal::apply_expansion_3d(&mut self.bodies, &thermal_config);
+        });
 
         // 6+7. Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; see World2).
@@ -1988,22 +2110,30 @@ impl World3 {
         // velocities are re-zeroed every step (see World2).
         let lin = self.linear_sleep_threshold;
         let ang = self.angular_sleep_threshold;
-        for (i, body) in self.bodies.iter_mut().enumerate() {
-            let report = validate_body_3d(body, &self.validation);
-            self.validation_report.merge(report);
-            if body.is_static {
-                continue;
+        timed!(timings.sleep, {
+            for (i, body) in self.bodies.iter_mut().enumerate() {
+                let report = validate_body_3d(body, &self.validation);
+                self.validation_report.merge(report);
+                if body.is_static {
+                    continue;
+                }
+                if body.is_sleeping {
+                    body.velocity = Vec3::ZERO;
+                    body.angular_velocity = Vec3::ZERO;
+                    continue;
+                }
+                if body.should_sleep(lin, ang) && self.contact_touch[i] {
+                    body.is_sleeping = true;
+                    body.velocity = Vec3::ZERO;
+                    body.angular_velocity = Vec3::ZERO;
+                }
             }
-            if body.is_sleeping {
-                body.velocity = Vec3::ZERO;
-                body.angular_velocity = Vec3::ZERO;
-                continue;
-            }
-            if body.should_sleep(lin, ang) && self.contact_touch[i] {
-                body.is_sleeping = true;
-                body.velocity = Vec3::ZERO;
-                body.angular_velocity = Vec3::ZERO;
-            }
+        });
+
+        #[cfg(feature = "phase-timing")]
+        {
+            timings.steps = 1;
+            self.phase_timings.merge(timings);
         }
 
         // Return scratch buffers for the next step.
@@ -2012,6 +2142,31 @@ impl World3 {
         self.scratch_points = points;
         self.scratch_clip_tmp = clip_tmp;
         self.epa_buffers = epa_buffers;
+    }
+
+    /// The per-phase wall-clock accumulators.
+    ///
+    /// Only available with the `phase-timing` feature; the default build
+    /// has no timers and no accumulator, and its public API is unchanged.
+    #[cfg(feature = "phase-timing")]
+    pub fn phase_timings(&self) -> &super::phase_timing::PhaseTimings {
+        &self.phase_timings
+    }
+
+    /// Forget everything measured so far.
+    #[cfg(feature = "phase-timing")]
+    pub fn reset_phase_timings(&mut self) {
+        self.phase_timings.reset();
+    }
+
+    /// How many candidate pairs the broad phase produced on the last step.
+    ///
+    /// This is the *raw* count, before the narrow phase filters it: the
+    /// difference between this and the contact-cache size is the work the
+    /// narrow phase throws away.
+    #[cfg(feature = "phase-timing")]
+    pub fn broadphase_pair_count(&self) -> usize {
+        self.scratch_pairs.len()
     }
 
     /// Resolve [`BroadphaseMode::Hybrid`] to a concrete 3D backend from the

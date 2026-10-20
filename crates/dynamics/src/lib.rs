@@ -13,6 +13,8 @@ pub mod joint3;
 pub mod material;
 pub mod noise;
 pub mod nuclear;
+#[cfg(feature = "phase-timing")]
+pub mod phase_timing;
 pub mod physics_config;
 pub mod pool;
 pub mod radiation;
@@ -41,6 +43,8 @@ pub use joint::*;
 pub use joint3::*;
 pub use material::*;
 pub use noise::*;
+#[cfg(feature = "phase-timing")]
+pub use phase_timing::*;
 pub use physics_config::*;
 pub use pool::*;
 pub use snapshot::*;

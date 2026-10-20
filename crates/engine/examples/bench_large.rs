@@ -202,6 +202,39 @@ fn main() {
     let pile_hash = final_hash(&world);
     check_hash("pile 2D", pile_hash, HASH_PILE_2D);
 
+    // With the `phase-timing` feature enabled, report where the step
+    // time goes. The feature is off by default, so the CI bench-smoke
+    // job is unaffected.
+    #[cfg(feature = "phase-timing")]
+    {
+        let t = world.phase_timings();
+        let steps = t.steps.max(1) as f64;
+        println!("[phases] pile 2D");
+        println!("[phases]   gravity     {:>8.4} ms/step", t.gravity / steps);
+        println!("[phases]   fluid       {:>8.4} ms/step", t.fluid / steps);
+        println!(
+            "[phases]   bp:rebuild  {:>8.4} ms/step",
+            t.broadphase_rebuild / steps
+        );
+        println!(
+            "[phases]   bp:pairs    {:>8.4} ms/step",
+            t.broadphase_pairs / steps
+        );
+        println!(
+            "[phases]   narrowphase {:>8.4} ms/step",
+            t.narrowphase / steps
+        );
+        println!("[phases]   cache       {:>8.4} ms/step", t.cache / steps);
+        println!("[phases]   solver      {:>8.4} ms/step", t.solver / steps);
+        println!(
+            "[phases]   integrate   {:>8.4} ms/step",
+            t.integrate / steps
+        );
+        println!("[phases]   thermal     {:>8.4} ms/step", t.thermal / steps);
+        println!("[phases]   sleep       {:>8.4} ms/step", t.sleep / steps);
+        println!("[phases]   TOTAL       {:>8.4} ms/step", t.ms_per_step());
+    }
+
     println!("bodies: {}", world.bodies.len());
     println!("frames: {FRAMES}");
     println!(

@@ -20,3 +20,16 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 crc32fast = "1.4"
+
+[features]
+default = []
+# Per-phase wall-clock instrumentation for the benchmark harness.
+#
+# Off by default: without it the step pipeline contains no clock reads
+# and no branches, and the public API is byte-for-byte the same as the
+# default build. With it, `World2`/`World3` accumulate per-phase
+# timings that `World2::phase_timings` / `World3::phase_timings` expose.
+#
+# The instrumentation never touches the simulation state, so the
+# trajectory hashes are identical with the feature on and off.
+phase-timing = []
