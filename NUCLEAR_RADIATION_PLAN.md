@@ -26,7 +26,7 @@ The status column is the state of the tree, not an aspiration.
 | 0 | Deterministic `exp`/`ln` (`phieng-math` + `PhiEng.Math`) | **Done** — R04–R07 |
 | 1 | Extract the radiation model into its own module (a pure move) | **Done** — the pinned hashes did not move, which is the proof it was pure |
 | 2 | Radiation model expansion: symmetric view factors, sky/ground split, transparent occluders, the occlusion fix | **Done** — U01–U12, schema v11 |
-| 3 | Nuclear foundations: the nuclide table, the decay, the energy budget, the thermal coupling | **Done** — Y01–Y24 |
+| 3 | Nuclear foundations: the nuclide table, the decay, the energy budget, the thermal coupling | **Done** — Y01–Y28 |
 | 4 | Fission and the rate-based chain reaction, the delayed neutrons | **Done** — Y09–Y14 |
 | 5 | The dose: depositing the ionizing energy into the bodies in range | **Done** — Y21–Y22 |
 | 6 | The snapshot (schema v12), the FFI, the managed mirror | **Done** — Y23–Y24, F40 |

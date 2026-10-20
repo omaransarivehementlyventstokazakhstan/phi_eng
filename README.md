@@ -364,7 +364,7 @@ contact for that frame rather than a guessed depth.
   Crosses FFI (`phieng_world[_3]_set/get_nuclear_config`,
   `phieng_world[_3]_set_isotope`,
   `phieng_world[_3]_set/get_body_nuclear_state`) and persists in schema
-  v12. Mirrored in both languages (Y01–Y24).
+  v12. Mirrored in both languages (Y01–Y28).
 - **Broad-phase tiers (2D and 3D, both languages):** `BroadphaseMode`
   (`BruteForce` / `SpatialHash` / `DynamicAABBTree` / `Hybrid`), a
   dynamic AABB tree backend for 2D and 3D, and an explicit O(n²) brute

@@ -63,7 +63,7 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               endpoint), a partial occluder attenuates it, a fully
               transparent one does not block, determinism plus parallel
               == serial, and a snapshot round-trip)
-    Y01-Y24  nuclear physics (mirrored both languages: a disabled
+    Y01-Y28  nuclear physics (mirrored both languages: a disabled
               config is a no-op, the activity halves after a half-life,
               decay heats the body, the temperature respects the thermal
               clamps, the activity is clamped, the energy budget

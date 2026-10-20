@@ -146,7 +146,7 @@ This project follows [Semantic Versioning](https://semver.org/) and
   managed `ThermalConfig2Ffi` mirror was extended to match.
 
 ### Tests
-- **Nuclear parity block Y01-Y24** (mirrored Rust↔C#): a disabled
+- **Nuclear parity block Y01-Y28** (mirrored Rust↔C#): a disabled
   config is a no-op, the activity halves after a half-life, decay heats
   the body, the temperature respects the thermal clamps, the activity
   is clamped, the energy budget balances, a stable nuclide never decays,

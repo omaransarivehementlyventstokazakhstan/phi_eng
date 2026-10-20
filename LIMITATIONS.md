@@ -11,9 +11,10 @@ V01–V11 validation, J31–J44 joints, E01–E07 snapshots, F34–F36 native
 snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
 Q01–Q05 solver quality, T01–T24 thermal, B01–B06 broadphase tiers,
 K31–K44 3D joints,
-H01–H05 collision tiers, R01–R03 deterministic trigonometry).
+H01–H05 collision tiers, R01–R07 deterministic trigonometry,
+U01–U12 radiation expansion, Y01–Y28 nuclear physics).
 
-## The nuclear model is game-scale, not reactor-scale (Y01–Y24)
+## The nuclear model is game-scale, not reactor-scale (Y01–Y28)
 
 The nuclear subsystem is a **rate-based** model, not a transport solve:
 
