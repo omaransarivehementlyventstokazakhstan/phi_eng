@@ -34,6 +34,11 @@ pub struct CachedContact {
 
 /// Maximum squared distance for matching a new contact to a cached one
 /// ((0.2 units)^2) — shared with all other crates via `phieng_math`.
+/// Minimum number of island constraints before the parallel solver path
+/// is worth its worker threads. Below this the serial path is faster (and
+/// allocation-free) and produces the identical result.
+const PARALLEL_MIN_CONSTRAINTS: usize = 256;
+
 /// Pre-allocated scratch buffers for zero-allocation narrowphase.
 ///
 /// All buffers are pre-allocated with sufficient capacity and reused
@@ -43,6 +48,14 @@ pub struct CachedContact {
 struct ScratchBuffers2D {
     constraints: Vec<ContactConstraint>,
     island_max: Vec<f32>,
+    /// Pooled island-partition scratch (see `crate::island::IslandScratch`).
+    /// The partition is rebuilt every step; pooling its buffers keeps
+    /// the parallel solver path allocation-free in the steady state.
+    islands: super::island::IslandScratch,
+    /// Pooled contact endpoint pairs (derived from `constraints`).
+    contact_pairs: Vec<(usize, usize)>,
+    /// Pooled joint endpoint pairs.
+    joint_pairs: Vec<(usize, usize)>,
     pairs: Vec<(usize, usize)>,
     verts_a: Vec<Vec2>,
     verts_b: Vec<Vec2>,
@@ -57,6 +70,9 @@ impl ScratchBuffers2D {
         Self {
             constraints: Vec::with_capacity(8192),
             island_max: Vec::with_capacity(256),
+            islands: super::island::IslandScratch::new(),
+            contact_pairs: Vec::with_capacity(8192),
+            joint_pairs: Vec::with_capacity(256),
             pairs: Vec::with_capacity(16384),
             verts_a: Vec::with_capacity(1024),
             verts_b: Vec::with_capacity(1024),
@@ -70,6 +86,8 @@ impl ScratchBuffers2D {
     fn reset(&mut self) {
         self.constraints.clear();
         self.island_max.clear();
+        self.contact_pairs.clear();
+        self.joint_pairs.clear();
         self.pairs.clear();
         self.verts_a.clear();
         self.verts_b.clear();
@@ -325,8 +343,6 @@ impl World2 {
     /// Single-island (or empty) steps delegate to the exact serial
     /// implementation.
     fn solve_parallel_path(&mut self, dt: f32) {
-        use super::island::{assign_constraints, build_islands, island_index_map};
-
         // Nothing to solve: skip island building entirely (the serial
         // path runs one empty iteration here — observably identical).
         if self.scratch.constraints.is_empty() && self.joints.is_empty() {
@@ -339,20 +355,49 @@ impl World2 {
         // serial. Only joint warm-start repeats below, matching the
         // serial path's position after `Solver::solve`.
 
-        #[cfg(debug_assertions)]
-        use super::island::debug_verify_disjoint;
+        // The island partition is rebuilt from scratch every step (bodies
+        // are added, removed and reindexed), so its buffers are pooled:
+        // the steady-state allocation count of this path stays at zero
+        // instead of O(bodies). The partition is also built even when it
+        // turns out to hold a single island, so pooling matters most
+        // exactly there (the work is then handed back to the serial
+        // solver, but the build has already happened).
+        let mut island_scratch = std::mem::take(&mut self.scratch.islands);
+        let mut contact_pairs = std::mem::take(&mut self.scratch.contact_pairs);
+        let mut joint_pairs = std::mem::take(&mut self.scratch.joint_pairs);
+        // `reserve` before the loop: the buffer is pooled and only grows,
+        // so the steady state costs no allocation at all. (`extend` over a
+        // mapped iterator grows it one element at a time.)
+        contact_pairs.clear();
+        contact_pairs.reserve(self.scratch.constraints.len());
+        for c in &self.scratch.constraints {
+            contact_pairs.push((c.body_a, c.body_b));
+        }
+        joint_pairs.clear();
+        joint_pairs.reserve(self.joints.len());
+        for j in &self.joints {
+            joint_pairs.push(j.bodies());
+        }
+        island_scratch.build(self.bodies.len(), &contact_pairs, &joint_pairs);
+        let island_count = island_scratch.island_count;
 
-        let contact_pairs: Vec<(usize, usize)> = self
-            .scratch
-            .constraints
+        // The parallel path only pays off when there is enough work to
+        // amortise the worker threads: a handful of islands with a
+        // handful of constraints each is faster (and allocation-free) on
+        // the serial path. The serial path is the exact same computation
+        // (the islands are body-disjoint), so the result is unchanged.
+        let island_work: usize = island_scratch
+            .island_constraints
             .iter()
-            .map(|c| (c.body_a, c.body_b))
-            .collect();
-        let joint_pairs: Vec<(usize, usize)> = self.joints.iter().map(|j| j.bodies()).collect();
-        let islands = build_islands(self.bodies.len(), &contact_pairs, &joint_pairs);
+            .map(|l| l.len())
+            .sum();
+        let use_parallel = island_count > 1 && island_work >= PARALLEL_MIN_CONSTRAINTS;
 
-        if islands.len() <= 1 {
+        if !use_parallel {
             // Degenerate case: exact serial behavior, no thread overhead.
+            self.scratch.islands = island_scratch;
+            self.scratch.contact_pairs = contact_pairs;
+            self.scratch.joint_pairs = joint_pairs;
             self.solver
                 .solve(&mut self.bodies, &mut self.scratch.constraints, dt);
             if !self.joints.is_empty() {
@@ -370,20 +415,12 @@ impl World2 {
         }
 
         #[cfg(debug_assertions)]
-        debug_verify_disjoint(&islands, self.bodies.len());
+        super::island::debug_verify_disjoint_scratch(&island_scratch, self.bodies.len());
 
-        let map = island_index_map(&islands, self.bodies.len());
-        let island_constraints = assign_constraints(&islands, &contact_pairs, &map);
-
-        // Per-island joint index lists (stable: joints vec order).
-        let mut island_joints: Vec<Vec<usize>> = vec![Vec::new(); islands.len()];
-        for (ji, joint) in self.joints.iter().enumerate() {
-            let (a, b) = joint.bodies();
-            if a < map.len() && b < map.len() && map[a] != usize::MAX {
-                debug_assert_eq!(map[a], map[b], "joint endpoints split across islands");
-                island_joints[map[a]].push(ji);
-            }
-        }
+        // Per-island constraint and joint index lists (stable: input
+        // order within an island).
+        island_scratch.assign_constraints(&contact_pairs);
+        island_scratch.assign_joints(&joint_pairs);
 
         // Joint warm-start stays serial (joints vec order, as serial path).
         for joint in self.joints.iter() {
@@ -394,16 +431,13 @@ impl World2 {
         // resized (only grows) and reused across steps — no per-step
         // allocation in the steady state. The solver sizes it to two
         // slots per island (double-buffered generations).
-        let island_bodies: Vec<Vec<usize>> = islands.iter().map(|isl| isl.bodies.clone()).collect();
-        self.scratch
-            .island_max
-            .resize(island_bodies.len().max(1), 0.0);
+        self.scratch.island_max.resize(island_count.max(1), 0.0);
         let mut max_slots = std::mem::take(&mut self.scratch.island_max);
         self.solver.solve_parallel(
             &mut self.bodies,
             &mut self.scratch.constraints,
-            &island_bodies,
-            &island_constraints,
+            &island_scratch.island_bodies,
+            &island_scratch.island_constraints,
             &mut max_slots,
             dt,
         );
@@ -418,13 +452,22 @@ impl World2 {
         let bodies_len = self.bodies.len();
         let joints_addr = self.joints.as_mut_ptr() as usize;
         let joints_len = self.joints.len();
+        // Same fixed worker pool as the contact phase: islands are dealt
+        // round-robin, so each island's joints are still solved by exactly
+        // one worker (and the islands are body-disjoint, so the result is
+        // unchanged).
+        let island_joints = std::mem::take(&mut island_scratch.island_joints);
+        let island_count = island_joints.len();
+        let worker_count = super::solver::Solver::worker_count_for(island_count);
         std::thread::scope(|scope| {
-            for list in &island_joints {
+            for worker in 0..worker_count {
+                let lists = &island_joints;
                 scope.spawn(move || {
-                    // SAFETY: `list` holds joint indices exclusive to this
-                    // island; joint endpoints lie in this island's disjoint
-                    // body set (verified above in debug). Bodies and joints
-                    // are addressed at disjoint indices across threads.
+                    // SAFETY: the island lists hold joint indices
+                    // exclusive to their island; joint endpoints lie in
+                    // this island's disjoint body set (verified above in
+                    // debug). Bodies and joints are addressed at disjoint
+                    // indices across threads.
                     let bodies = unsafe {
                         std::slice::from_raw_parts_mut(bodies_addr as *mut RigidBody2, bodies_len)
                     };
@@ -432,13 +475,24 @@ impl World2 {
                         std::slice::from_raw_parts_mut(joints_addr as *mut Joint2, joints_len)
                     };
                     for _ in 0..iters {
-                        for &ji in list.iter() {
-                            joints[ji].solve(bodies, dt);
+                        for (ii, list) in lists.iter().enumerate() {
+                            if ii % worker_count != worker {
+                                continue;
+                            }
+                            for &ji in list.iter() {
+                                joints[ji].solve(bodies, dt);
+                            }
                         }
                     }
                 });
             }
         });
+
+        // Hand the pooled buffers back for the next step.
+        island_scratch.island_joints = island_joints;
+        self.scratch.islands = island_scratch;
+        self.scratch.contact_pairs = contact_pairs;
+        self.scratch.joint_pairs = joint_pairs;
     }
 
     /// Step the physics simulation

@@ -328,12 +328,101 @@ fn main() {
     }
     let parallel_ms = median_ms(FRAMES, || parallel.step(dt));
     let parallel_hash = final_hash(&parallel);
+    // Allocation probe for the parallel path: the island partition and
+    // the per-island index lists are rebuilt every step, so this is the
+    // number of heap allocations the parallel solver costs per step.
+    reset_counters();
+    for _ in 0..FRAMES {
+        parallel.step(dt);
+    }
+    let island_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
+
+    // The same probe at scale: the island partition is O(bodies), so the
+    // per-step allocation count must not scale with the body count.
+    fn build_pile(n: usize) -> World2 {
+        let mut world = World2::new();
+        world.gravity = Vec2::new(0.0, -9.81);
+        world
+            .add_static_body(
+                Vec2::new(0.0, -1.0),
+                Shape2::Box {
+                    half_extents: Vec2::new(30.0, 0.5),
+                },
+            )
+            .expect("valid shape");
+        for i in 0..n {
+            let x = -14.0 + (i as f32 % 30.0) * 0.95;
+            let y = 2.0 + (i as f32 / 30.0) * 0.75;
+            world
+                .add_dynamic_body(Vec2::new(x, y), Shape2::Circle { radius: 0.3 }, 1.0)
+                .expect("valid shape");
+        }
+        world
+    }
+    let mut big_parallel = build_pile(1500);
+    big_parallel.solver.parallel = true;
+    for _ in 0..900 {
+        big_parallel.step(dt);
+    }
+    reset_counters();
+    for _ in 0..FRAMES {
+        big_parallel.step(dt);
+    }
+    let big_parallel_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
+
+    // Control: the identical world with the serial solver. The
+    // difference between the two numbers is what the parallel path
+    // costs.
+    let mut big_serial = build_pile(1500);
+    for _ in 0..900 {
+        big_serial.step(dt);
+    }
+    reset_counters();
+    for _ in 0..FRAMES {
+        big_serial.step(dt);
+    }
+    let big_serial_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
+
     println!(
         "[islands] serial={serial_ms:.4} ms/step parallel={parallel_ms:.4} ms/step \
-         speedup={:.2}x identical={} serial={serial_hash:#x} parallel={parallel_hash:#x}",
+         speedup={:.2}x identical={} serial={serial_hash:#x} parallel={parallel_hash:#x} \
+         parallel_allocs/step={:.1} pile_parallel_allocs/step={:.1} pile_serial_allocs/step={:.1}",
         serial_ms / parallel_ms,
         serial_hash == parallel_hash,
+        island_allocs as f64 / FRAMES as f64,
+        big_parallel_allocs as f64 / FRAMES as f64,
+        big_serial_allocs as f64 / FRAMES as f64,
     );
+
+    // Direct probe of the island partition build: it is the only part of
+    // the parallel path that scales with the body count.
+    {
+        use phieng_dynamics::island::IslandScratch;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for i in 0..1500usize {
+            pairs.push((i, (i + 1) % 1500));
+        }
+        let mut scratch = IslandScratch::new();
+        // Warm up: grow every buffer to its steady-state capacity.
+        for _ in 0..5 {
+            scratch.build(1500, &pairs, &pairs);
+        }
+        reset_counters();
+        for _ in 0..FRAMES {
+            scratch.build(1500, &pairs, &pairs);
+        }
+        let build_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
+        let build_bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
+        println!(
+            "[islands] build_allocs/step={:.1} build_bytes/alloc={:.0}",
+            build_allocs as f64 / FRAMES as f64,
+            if build_allocs > 0 {
+                build_bytes as f64 / build_allocs as f64
+            } else {
+                0.0
+            },
+        );
+    }
 
     // 3D pile: 400 bodies (20 x 10 x 2 grid of boxes/spheres) over a
     // static floor. 3D was never benched at scale; this is the control

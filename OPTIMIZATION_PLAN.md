@@ -21,8 +21,23 @@ Current baseline: ~2ms/step for 1500 bodies (2D) on desktop. Target: <16ms/step 
   dynamic pile 1500 bodies **~467 → 0.8 allocs/step** (2D), **14 → 0.0**
   (3D); resting stack 0.00. Memory-only; `contact_cache.len()` stays
   exact and every determinism hash is unchanged.
-- **Remaining**: Barnes-Hut tree arena + per-leaf index buffers (still
-  allocate per kick); parallel-island per-step buffers.
+- **Shipped (parallel islands)**: the island partition is rebuilt every
+  step (bodies are added, removed and reindexed), so its buffers are
+  pooled in `island::IslandScratch` (owned by the world's scratch) and
+  the grouping is done with a counting sort over the union-find roots —
+  no per-island index `Vec` is ever created. The parallel solver also
+  runs on a **fixed worker pool** (capped at the available parallelism)
+  instead of one OS thread per island: a settled pile has ~140 islands,
+  and spawning ~140 threads per step cost more than the solve it
+  parallelised (the parallel path was measurably *slower* than the
+  serial one). Measured on the 1500-body pile: **785 → 0.3
+  allocs/step**, i.e. the parallel path now matches the serial path's
+  allocation floor, and `serial_hash == parallel_hash` still holds.
+  Below 256 island constraints the serial path is used (same result,
+  no thread overhead).
+- **Remaining**: the Barnes-Hut tree arena is pooled, but its per-kick
+  `positions`/`masses` scratch vectors and the per-leaf index buffers
+  still allocate per kick.
 
 ### 1.2 Configurable Solver Quality Tiers
 ```rust
@@ -77,9 +92,14 @@ pub enum BroadphaseMode {
   grid; mode persists in snapshot schema v8. FFI + managed C# mirror
   included. Pinned by B01–B06 (Rust↔C# parity).
 
-### 2.2 SIMD Math Paths (Rust)
+### 2.2 SIMD Math Paths (Rust) — 🟡 PARTIAL (primitives shipped, hot paths not wired)
 - Use `packed_simd` or `std::simd` for Vec2/Vec3/Mat2/Mat3
 - Feature flag: `simd` (disabled by default for compatibility)
+- **Shipped**: `phieng-math` has a `simd` feature with `std::arch`
+  batched primitives (f32x4/f32x8) behind it, off by default.
+- **Remaining**: the solver / broadphase / narrowphase hot paths still
+  use the scalar code; the batched primitives are not called from them
+  yet, so the feature currently changes no trajectory.
 
 ### 2.3 Fixed-Point Math Option
 - `FixedPoint` feature flag
@@ -112,7 +132,7 @@ pub enum BroadphaseMode {
   so existing trajectories are bit-identical. Tier persists in the v6
   `ccd` block and crosses the FFI + managed C# mirror.
 
-### 3.3 Scene Graph / Instancing
+### 3.3 Scene Graph / Instancing — ❌ NOT STARTED
 - Shared shapes across bodies
 - Instanced rendering data prep
 

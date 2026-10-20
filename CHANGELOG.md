@@ -133,6 +133,22 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Managed C# solver mirrors the same scheme.
 
 ### Added
+- **Pooled parallel-island partition + fixed worker pool (Rust)**: the
+  island partition is rebuilt every step (bodies are added, removed and
+  reindexed), so its buffers are now pooled in a new
+  `island::IslandScratch` owned by the world's scratch. The grouping is
+  done with a counting sort over the union-find roots, so no per-island
+  index `Vec` is ever created. The parallel solver also runs on a fixed
+  worker pool (capped at the available parallelism) instead of one OS
+  thread per island — a settled pile has ~140 islands, and spawning
+  ~140 threads per step cost more than the solve it was parallelising
+  (the parallel path was measurably *slower* than the serial one).
+  Measured on the 1500-body pile: **785 → 0.3 allocations per step**,
+  i.e. the parallel path now matches the serial path's allocation
+  floor. `serial_hash == parallel_hash` still holds: the islands are
+  body-disjoint, so the per-island computation, the max-slot layout and
+  the per-generation barrier are unchanged. Below 256 island constraints
+  the serial path is used (identical result, no thread overhead).
 - **Managed C# thermal mirror**: `PhiEng.Dynamics` `World2/3` now step
   the same thermal subsystem as the Rust core — conduction, radiation,
   convection, plus the three opt-in sub-features (radiation occlusion,

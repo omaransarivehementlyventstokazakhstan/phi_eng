@@ -333,6 +333,22 @@ impl Solver {
         ran
     }
 
+    /// Number of worker threads to use for `island_count` islands.
+    ///
+    /// One thread per island is wasteful: a settled pile has hundreds of
+    /// islands, and spawning hundreds of OS threads per step costs more than
+    /// the solve itself. The pool is capped at the available parallelism,
+    /// with at least one worker (and never more workers than islands).
+    pub(crate) fn worker_count_for(island_count: usize) -> usize {
+        if island_count <= 1 {
+            return 1;
+        }
+        let available = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        available.clamp(1, island_count)
+    }
+
     /// Parallel island solve over a pre-partitioned constraint index map.
     ///
     /// `island_bodies[i]` / `island_constraints[i]` hold the body and
@@ -468,11 +484,24 @@ impl Solver {
             *slot = 0.0;
         }
 
-        let barrier = TimeoutBarrier::new(island_constraints.len(), BARRIER_TIMEOUT);
+        // A fixed worker pool, not one thread per island: a settled pile
+        // has hundreds of islands, and spawning hundreds of OS threads
+        // every step costs far more than the solve it parallelises (the
+        // parallel path was measurably SLOWER than the serial one).
+        //
+        // Islands are dealt round-robin to the workers, so each island is
+        // still solved by exactly one worker and writes only its own max
+        // slot. The islands are body-disjoint, so the result is
+        // bit-identical to the one-thread-per-island version: the
+        // per-island computation, the slot layout and the per-generation
+        // barrier are unchanged.
+        let island_count = island_constraints.len();
+        let worker_count = Self::worker_count_for(island_count);
+        let barrier = TimeoutBarrier::new(worker_count, BARRIER_TIMEOUT);
 
         std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(island_constraints.len());
-            for (ii, list) in island_constraints.iter().enumerate() {
+            let mut handles = Vec::with_capacity(worker_count);
+            for worker in 0..worker_count {
                 // Shared by reference: `&TimeoutBarrier` is `Send`
                 // (`TimeoutBarrier: Sync`).
                 let barrier = &barrier;
@@ -480,10 +509,10 @@ impl Solver {
                     // SAFETY: per-island exclusive indices (verified above
                     // in debug; partitioner-guaranteed in release) plus a
                     // barrier happens-before between iterations, so the
-                    // shared max slots are data-race-free: each thread
-                    // writes only its own slot (and only the buffer the
-                    // current generation owns), and reads all slots only
-                    // after the rendezvous.
+                    // shared max slots are data-race-free: each worker
+                    // writes only the slots of the islands it owns (and
+                    // only the buffer the current generation owns), and
+                    // reads all slots only after the rendezvous.
                     let bodies = unsafe {
                         std::slice::from_raw_parts_mut(bodies_addr as *mut RigidBody2, bodies_len)
                     };
@@ -497,35 +526,40 @@ impl Solver {
                     for gen in 0..iters {
                         ran += 1;
                         let buf = gen % SLOT_BUFFERS;
-                        let mut local_max: f32 = 0.0;
-                        for &ci in list.iter() {
-                            let c = &mut constraints[ci];
-                            if both_frozen(bodies, c.body_a, c.body_b) {
+                        for (ii, list) in island_constraints.iter().enumerate() {
+                            if ii % worker_count != worker {
                                 continue;
                             }
-                            local_max = local_max.max(this.solve_normal(bodies, c, dt));
-                        }
-                        if friction {
+                            let mut island_max: f32 = 0.0;
                             for &ci in list.iter() {
                                 let c = &mut constraints[ci];
                                 if both_frozen(bodies, c.body_a, c.body_b) {
                                     continue;
                                 }
-                                local_max = local_max.max(Self::solve_friction(bodies, c));
+                                island_max = island_max.max(this.solve_normal(bodies, c, dt));
                             }
-                        }
-                        unsafe {
-                            *(max_addr as *mut f32).add(ii * SLOT_BUFFERS + buf) = local_max;
+                            if friction {
+                                for &ci in list.iter() {
+                                    let c = &mut constraints[ci];
+                                    if both_frozen(bodies, c.body_a, c.body_b) {
+                                        continue;
+                                    }
+                                    island_max = island_max.max(Self::solve_friction(bodies, c));
+                                }
+                            }
+                            unsafe {
+                                *(max_addr as *mut f32).add(ii * SLOT_BUFFERS + buf) = island_max;
+                            }
                         }
                         if !barrier.wait() {
                             panic!(
-                                "parallel solver desync: island {ii} timed out after \
-                                 {gen} iterations (islands disagreed on the \
+                                "parallel solver desync: worker {worker} timed out after \
+                                 {gen} iterations (workers disagreed on the \
                                  early-exit decision)"
                             );
                         }
                         let mut global_max: f32 = 0.0;
-                        for k in 0..island_constraints.len() {
+                        for k in 0..island_count {
                             global_max = global_max.max(unsafe {
                                 *(max_addr as *const f32).add(k * SLOT_BUFFERS + buf)
                             });
