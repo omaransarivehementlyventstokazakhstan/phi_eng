@@ -216,6 +216,18 @@ pub enum BroadphaseMode {
   is unchanged. Measured with the same harness: the pair phase **−18 %
   to −20 %**, the whole step **−3 % to −7 %**, every other phase inside
   the noise band.
+- **Shipped (static-cell skip)**: two statics never touch, so every
+  candidate pair in a cell that holds nothing but static bodies was
+  walked and then dropped one by one. In a level full of static
+  geometry that walk is nearly all of the pair phase — the
+  static-heavy scene held **5 376** static-static candidates to end up
+  with **18** live pairs, and the pair phase was 49 % of that scene's
+  step. The grid now drops such a cell without looking at its pairs.
+  The pair set is unchanged, so every pinned hash is unchanged.
+  Measured with the same harness: the static-heavy scene's pair phase
+  **−88 %** and its whole step **−46 %** (a 1.9x faster step), with
+  the 1500-body pile unchanged — every one of its cells holds a dynamic
+  body, so there is nothing to skip.
 - **Shipped (grid hashing)**: the contact cache already used FxHash —
   a single multiply-rotate per word — because its keys are internal
   `(body_a, body_b)` pairs. The broad-phase grid had the same kind of

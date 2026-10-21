@@ -66,6 +66,14 @@ pub struct SpatialHash3 {
     /// the pair loop.
     #[cfg(feature = "phase-timing")]
     pub owned_pairs: bool,
+    /// Skip a cell that holds nothing but static bodies.
+    ///
+    /// Profiling switch only (`phase-timing` feature): turning it off
+    /// restores the behaviour of walking every candidate pair in every
+    /// cell and dropping the static-static ones one by one, so the two
+    /// can be A/B measured inside one binary.
+    #[cfg(feature = "phase-timing")]
+    pub skip_static_cells: bool,
     /// The AABB of every body, indexed by body id. Used only by
     /// [`Self::collect_overlapping_pairs`] to drop candidate pairs whose
     /// AABBs are disjoint before they are pushed, sorted and deduplicated.
@@ -102,6 +110,8 @@ impl SpatialHash3 {
             cell_min: Vec::new(),
             #[cfg(feature = "phase-timing")]
             owned_pairs: true,
+            #[cfg(feature = "phase-timing")]
+            skip_static_cells: true,
             aabbs: Vec::new(),
         }
     }
@@ -235,6 +245,10 @@ impl SpatialHash3 {
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for (key, cell_ids) in &self.grid {
+            // A cell of nothing but statics cannot produce a pair.
+            if !self.cell_can_pair(cell_ids) {
+                continue;
+            }
             for i in 0..cell_ids.len() {
                 for j in (i + 1)..cell_ids.len() {
                     let a = cell_ids[i];
@@ -284,6 +298,23 @@ impl SpatialHash3 {
         }
     }
 
+    /// Whether a cell can produce a pair at all.
+    ///
+    /// A cell that holds only static bodies cannot: two statics never
+    /// touch, so every candidate pair in it would be dropped anyway.
+    /// Skipping the cell whole is what keeps a static-heavy scene from
+    /// walking its quadratic number of static-static candidates.
+    #[inline]
+    fn cell_can_pair(&self, cell_ids: &[usize]) -> bool {
+        // The profiling build can turn the rule off to measure the
+        // behaviour it replaced.
+        #[cfg(feature = "phase-timing")]
+        if !self.skip_static_cells {
+            return true;
+        }
+        !cell_ids.iter().all(|&id| self.is_static(id))
+    }
+
     /// Whether cell `(cx, cy, cz)` is the single owner of the pair
     /// `(a, b)`.
     ///
@@ -323,6 +354,10 @@ impl SpatialHash3 {
     pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for (key, cell_ids) in &self.grid {
+            // A cell of nothing but statics cannot produce a pair.
+            if !self.cell_can_pair(cell_ids) {
+                continue;
+            }
             for i in 0..cell_ids.len() {
                 for j in (i + 1)..cell_ids.len() {
                     let a = cell_ids[i];

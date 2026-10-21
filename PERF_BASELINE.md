@@ -218,6 +218,30 @@ Every other phase stayed inside the noise band, as it must: the rule
 only changes how many times a pair is *examined*, not which pairs exist.
 The pair set is identical, so all hashes are bit-identical.
 
+## The static-cell skip (shipped)
+
+Two statics never touch, so every candidate pair in a cell that holds
+nothing but static bodies was walked and then dropped one by one. In a
+level full of static geometry that walk is nearly all of the pair
+phase: the static-heavy scene held **5 376** static-static candidates
+to end up with **18** live pairs, and the pair phase was **49 %** of
+that scene's step. The grid now drops such a cell without looking at
+its pairs.
+
+Measured with the same harness (the skip toggled between segments,
+everything else held fixed):
+
+| Scene | Measure | Skipping | Walking | Delta |
+| ----- | ------- | -------- | ------- | ----- |
+| statics (420 bodies) | broadphase: pairs | 1.07 ms | 9.16 ms | **−88 %** |
+| statics (420 bodies) | TOTAL (wall clock) | 9.74 ms | 18.10 ms | **−46 %** |
+| pile 2D (1500 bodies) | broadphase: pairs | 65.0 ms | 65.2 ms | −0.4 % |
+| pile 2D (1500 bodies) | TOTAL (wall clock) | 494 ms | 499 ms | −1.0 % |
+
+The pile is untouched because every one of its cells holds a dynamic
+body — there is nothing to skip. The pair set is identical either way,
+so all hashes are bit-identical.
+
 ## The overhaul, end to end
 
 Interleaved A/B of the pre-overhaul build (commit `7c9b842`) against the

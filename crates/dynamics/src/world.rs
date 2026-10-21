@@ -1042,6 +1042,17 @@ impl World2 {
         self.broadphase.set_owned_pairs(owned);
     }
 
+    /// Profiling only: turn the grid's static-cell skip on or off.
+    ///
+    /// The skip drops a cell that holds nothing but static bodies
+    /// without walking its candidate pairs. The pair set is the same
+    /// either way, so the trajectory does not change; only the amount
+    /// of candidate work does.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_skip_static_cells(&mut self, skip: bool) {
+        self.broadphase.set_skip_static_cells(skip);
+    }
+
     /// Wake a body and cascade through its contact partners and joint
     /// partners, transitively. The woken set is a fixpoint over
     /// idempotent flags, so map iteration order cannot affect the

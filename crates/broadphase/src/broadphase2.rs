@@ -95,6 +95,18 @@ impl Broadphase2 {
         }
     }
 
+    /// Profiling only: turn the grid's static-cell skip on or off.
+    ///
+    /// The skip drops a cell that holds nothing but static bodies
+    /// without walking its candidate pairs. The pair set is the same
+    /// either way; only the amount of candidate work differs.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_skip_static_cells(&mut self, skip: bool) {
+        if let Broadphase2::SpatialHash(h) = self {
+            h.skip_static_cells = skip;
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Broadphase2::SpatialHash(h) => h.len(),

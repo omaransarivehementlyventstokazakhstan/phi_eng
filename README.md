@@ -569,6 +569,20 @@ exactly once.
 | whole 2D pile step | **−3 % to −7 %** | same repeats |
 | every pinned hash | **bit-identical** | the pair set is unchanged |
 
+## Baseline matrix 1e (static-cell skip, 2026-10-21)
+
+Two statics never touch, so every candidate pair in a cell that holds
+nothing but static bodies was walked and then dropped one by one. In a
+level full of static geometry that walk is nearly all of the pair
+phase. The grid now drops such a cell whole.
+
+| Measure | Value | Notes |
+|---|---|---|
+| static scene pair phase | **−88 %** | 5 376 static-static candidates → none walked |
+| static scene step | **−46 %** | 1.9x faster; 0.062 → 0.033 ms/step |
+| 1500-body pile | **unchanged** | every cell holds a dynamic body |
+| every pinned hash | **bit-identical** | the pair set is unchanged |
+
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead
 dominates (0.50x Rust scoped-threads, 0.56x C# threadpool this run;

@@ -75,6 +75,14 @@ pub struct SpatialHash2 {
     /// the pair loop.
     #[cfg(feature = "phase-timing")]
     pub owned_pairs: bool,
+    /// Skip a cell that holds nothing but static bodies.
+    ///
+    /// Profiling switch only (`phase-timing` feature): turning it off
+    /// restores the behaviour of walking every candidate pair in every
+    /// cell and dropping the static-static ones one by one, so the two
+    /// can be A/B measured inside one binary.
+    #[cfg(feature = "phase-timing")]
+    pub skip_static_cells: bool,
 }
 
 impl SpatialHash2 {
@@ -110,6 +118,8 @@ impl SpatialHash2 {
             cell_min: Vec::new(),
             #[cfg(feature = "phase-timing")]
             owned_pairs: true,
+            #[cfg(feature = "phase-timing")]
+            skip_static_cells: true,
         }
     }
 
@@ -246,6 +256,25 @@ impl SpatialHash2 {
         }
     }
 
+    /// Whether a cell can produce a pair at all.
+    ///
+    /// A cell that holds only static bodies cannot: two statics never
+    /// touch, so every candidate pair in it would be dropped anyway.
+    /// Skipping the cell whole is what keeps a static-heavy scene from
+    /// walking its quadratic number of static-static candidates — the
+    /// per-pair check below still has to *look* at every candidate, and
+    /// in a level full of static geometry that is nearly all of them.
+    #[inline]
+    fn cell_can_pair(&self, cell_ids: &[usize]) -> bool {
+        // The profiling build can turn the rule off to measure the
+        // behaviour it replaced.
+        #[cfg(feature = "phase-timing")]
+        if !self.skip_static_cells {
+            return true;
+        }
+        !cell_ids.iter().all(|&id| self.is_static(id))
+    }
+
     /// Whether cell `(cx, cy)` is the single owner of the pair `(a, b)`.
     ///
     /// The owner is the lowest cell both bodies span, so a pair that
@@ -281,6 +310,10 @@ impl SpatialHash2 {
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for (key, cell_ids) in &self.grid {
+            // A cell of nothing but statics cannot produce a pair.
+            if !self.cell_can_pair(cell_ids) {
+                continue;
+            }
             for i in 0..cell_ids.len() {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
@@ -334,6 +367,10 @@ impl SpatialHash2 {
     pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for (key, cell_ids) in &self.grid {
+            // A cell of nothing but statics cannot produce a pair.
+            if !self.cell_can_pair(cell_ids) {
+                continue;
+            }
             for i in 0..cell_ids.len() {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
@@ -471,6 +508,33 @@ mod tests {
             candidates > out.len(),
             "expected duplicated candidates: {candidates} candidates, {} pairs",
             out.len()
+        );
+    }
+
+    #[test]
+    fn a_cell_of_statics_produces_no_pairs() {
+        // Statics never touch each other, so a grid of nothing but
+        // statics must produce no pairs at all -- and must not have to
+        // walk its candidate pairs to find that out.
+        let mut hash = SpatialHash2::new(1.0);
+        for i in 0..32usize {
+            let x = (i % 8) as f32 * 0.5;
+            let y = (i / 8) as f32 * 0.5;
+            hash.insert_static(i, Vec2::new(x, y), Vec2::new(x + 0.6, y + 0.6));
+        }
+        let mut out = Vec::new();
+        hash.collect_overlapping_pairs(&mut out);
+        assert!(out.is_empty(), "statics must not pair with each other");
+
+        // A dynamic body in the middle still pairs with the statics
+        // around it.
+        hash.insert(32, Vec2::new(1.0, 1.0), Vec2::new(1.6, 1.6));
+        let mut out = Vec::new();
+        hash.collect_overlapping_pairs(&mut out);
+        assert!(!out.is_empty(), "a dynamic body must pair with the statics");
+        assert!(
+            out.iter().all(|&(a, b)| a == 32 || b == 32),
+            "only the dynamic body may pair: {out:?}"
         );
     }
 

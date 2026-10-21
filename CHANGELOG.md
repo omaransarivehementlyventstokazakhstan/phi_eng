@@ -107,6 +107,20 @@ This project follows [Semantic Versioning](https://semver.org/) and
   segments, everything else held fixed): the pair phase **−18 % to
   −20 %** and the whole step **−3 % to −7 %** over four independent
   repeats, with every other phase inside the noise band.
+- **A cell of nothing but statics is skipped whole.** Two statics never
+  touch, so every candidate pair in such a cell was walked and then
+  dropped one by one. In a level full of static geometry that walk is
+  nearly all of the pair phase: the static-heavy scene held **5 376**
+  static-static candidates to end up with **18** live pairs, and the
+  pair phase was **49 %** of that scene's step. The grid now drops such
+  a cell without looking at its pairs.
+
+  The pair set is unchanged, so every pinned hash is bit-identical.
+
+  Measured with the same harness: the static-heavy scene's pair phase
+  **−88 %** and its whole step **−46 %** (a 1.9x faster step), with
+  the 1500-body pile unchanged (every one of its cells holds a dynamic
+  body, so there is nothing to skip).
 
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,

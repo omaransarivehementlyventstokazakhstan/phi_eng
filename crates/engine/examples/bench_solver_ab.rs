@@ -62,6 +62,12 @@ mod harness {
         /// The broad-phase grid's old behaviour: the pair is generated
         /// in every cell the two bodies share.
         UnownedPairs,
+        /// The broad-phase grid's static-cell skip (the shipped one).
+        SkipStaticCells,
+        /// The broad-phase grid's old behaviour: every candidate pair in
+        /// every cell is walked, and the static-static ones are dropped
+        /// one by one.
+        WalkStaticCells,
     }
 
     impl Variant {
@@ -72,23 +78,33 @@ mod harness {
                 Variant::DirectSolver => "direct",
                 Variant::OwnedPairs => "owned",
                 Variant::UnownedPairs => "unowned",
+                Variant::SkipStaticCells => "skip",
+                Variant::WalkStaticCells => "walk",
             }
         }
 
         /// Select this variant in the world.
         fn apply(self, world: &mut World2) {
             match self {
-                Variant::PackedSolver | Variant::OwnedPairs => {
+                Variant::PackedSolver | Variant::OwnedPairs | Variant::SkipStaticCells => {
                     world.solver.packed = true;
                     world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(true);
                 }
                 Variant::DirectSolver => {
                     world.solver.packed = false;
                     world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(true);
                 }
                 Variant::UnownedPairs => {
                     world.solver.packed = true;
                     world.set_broadphase_owned_pairs(false);
+                    world.set_broadphase_skip_static_cells(true);
+                }
+                Variant::WalkStaticCells => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(false);
                 }
             }
         }
@@ -118,7 +134,12 @@ mod harness {
     /// several scene sizes: the packed view's whole point is that its
     /// working set is 32 bytes per body, so the wider the scene, the
     /// more the direct view's fat bodies should hurt.
-    fn build_pile(bodies: usize) -> World2 {
+    ///
+    /// `shape_mix` selects the shapes: 0 is the benchmark's mix (every
+    /// third body a box), 1 is all circles, 2 is all boxes. The mix
+    /// decides which narrowphase path each pair takes, so the three
+    /// scenes price the circle-circle, circle-box and box-box paths.
+    fn build_pile(bodies: usize, shape_mix: u8) -> World2 {
         let mut world = World2::new();
         world.gravity = Vec2::new(0.0, -9.81);
         world
@@ -132,7 +153,12 @@ mod harness {
         for i in 0..bodies {
             let x = -14.0 + (i as f32 % 30.0) * 0.95;
             let y = 2.0 + (i as f32 / 30.0) * 0.75;
-            if i % 3 == 0 {
+            let is_box = match shape_mix {
+                1 => false,
+                2 => true,
+                _ => i % 3 == 0,
+            };
+            if is_box {
                 world
                     .add_dynamic_body(
                         Vec2::new(x, y),
@@ -147,6 +173,36 @@ mod harness {
                     .add_dynamic_body(Vec2::new(x, y), Shape2::Circle { radius: 0.3 }, 1.0)
                     .expect("valid shape");
             }
+        }
+        world
+    }
+
+    /// The static-heavy scene: 400 static boxes and 20 dynamic circles.
+    ///
+    /// The statics overlap heavily and each spans several cells, so the
+    /// grid holds a quadratic number of static-static candidate pairs —
+    /// none of which can ever produce an impulse.
+    fn build_statics() -> World2 {
+        let mut world = World2::new();
+        world.gravity = Vec2::new(0.0, -9.81);
+        for i in 0..400 {
+            world
+                .add_static_body(
+                    Vec2::new(-5.0 + (i % 20) as f32 * 0.5, (i / 20) as f32 * 0.5),
+                    Shape2::Box {
+                        half_extents: Vec2::new(0.9, 0.9),
+                    },
+                )
+                .expect("valid shape");
+        }
+        for i in 0..20 {
+            world
+                .add_dynamic_body(
+                    Vec2::new(-5.0 + i as f32 * 0.5, 12.0),
+                    Shape2::Circle { radius: 0.3 },
+                    1.0,
+                )
+                .expect("valid shape");
         }
         world
     }
@@ -204,9 +260,22 @@ mod harness {
 
     /// The definitive A/B: ONE world, ONE heap layout, the two variants
     /// alternating segment by segment.
-    pub fn run_alternating(a: Variant, b: Variant, bodies: usize) {
-        let mut world = build_pile(bodies);
-        settle(&mut world);
+    ///
+    /// `scene` picks the world: 0 is the 1500-body pile, 1 is the
+    /// static-heavy scene.
+    pub fn run_alternating(a: Variant, b: Variant, bodies: usize, shape_mix: u8, scene: u8) {
+        let mut world = if scene == 1 {
+            build_statics()
+        } else {
+            build_pile(bodies, shape_mix)
+        };
+        if scene == 1 {
+            for _ in 0..60 {
+                world.step(DT);
+            }
+        } else {
+            settle(&mut world);
+        }
 
         // Any scratch a variant allocates must already be allocated
         // before the measured segments, or the first segment of that
@@ -283,11 +352,14 @@ fn main() {
         use harness::Variant;
         let comparison = args.first().map(String::as_str).unwrap_or("solver");
         let bodies: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1500);
+        let shape_mix: u8 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
         let (a, b) = match comparison {
             "pairs" => (Variant::OwnedPairs, Variant::UnownedPairs),
+            "statics" => (Variant::SkipStaticCells, Variant::WalkStaticCells),
             _ => (Variant::PackedSolver, Variant::DirectSolver),
         };
-        harness::run_alternating(a, b, bodies);
+        let scene: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+        harness::run_alternating(a, b, bodies, shape_mix, scene);
     }
     #[cfg(not(feature = "phase-timing"))]
     {
