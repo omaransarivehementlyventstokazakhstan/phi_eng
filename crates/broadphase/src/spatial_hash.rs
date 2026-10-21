@@ -1,5 +1,5 @@
 use glam::Vec2;
-use std::collections::HashMap;
+use phieng_math::fxhash::FxHashMap;
 
 /// Cell key for the spatial hash grid
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,7 +20,7 @@ pub struct SpatialHash2 {
     /// Cell size for the hash grid
     pub cell_size: f32,
     /// Map from cell key to body IDs
-    grid: HashMap<CellKey, Vec<usize>>,
+    grid: FxHashMap<CellKey, Vec<usize>>,
     /// Number of inserted bodies (the grid owns no AABB copies; the
     /// world rebuilds it from live body positions every step).
     count: usize,
@@ -69,7 +69,7 @@ impl SpatialHash2 {
         };
         Self {
             cell_size,
-            grid: HashMap::new(),
+            grid: FxHashMap::default(),
             count: 0,
             pool: Vec::new(),
             all: Vec::new(),

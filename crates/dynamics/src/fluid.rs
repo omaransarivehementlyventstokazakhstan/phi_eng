@@ -18,9 +18,9 @@
 //! bodies may sleep exactly like resting contacts.
 
 use super::body::{RigidBody2, Shape2};
-use crate::fxhash::FxHashMap;
 use crate::noise::{curl_2, fbm_2};
 use glam::Vec2;
+use phieng_math::fxhash::FxHashMap;
 use phieng_math::{EPS, EPS_SQ};
 use std::collections::HashMap;
 

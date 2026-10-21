@@ -3,7 +3,6 @@ use super::body::{
     ShapeError,
 };
 use super::ccd::{swept_aabb_overlap, swept_aabb_overlap_3, CcdTier};
-use super::fxhash::FxHashMap;
 use super::joint::{Joint2, JointError};
 use super::joint3::Joint3;
 use super::material::PhysicsMaterial;
@@ -15,6 +14,7 @@ use super::validation::{
 };
 use glam::{Vec2, Vec3};
 use phieng_broadphase::{Broadphase2, Broadphase3, BroadphaseMode};
+use phieng_math::fxhash::FxHashMap;
 use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
 
 /// Time a block and add the elapsed milliseconds to `$acc`.

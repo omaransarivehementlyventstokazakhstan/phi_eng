@@ -17,9 +17,9 @@
 //! are impulse-coupled only.
 
 use super::body::{RigidBody3, Shape3};
-use crate::fxhash::FxHashMap;
 use crate::noise::{curl_3, fbm_3};
 use glam::Vec3;
+use phieng_math::fxhash::FxHashMap;
 use phieng_math::{EPS, EPS_SQ};
 use std::collections::HashMap;
 

@@ -5,7 +5,6 @@ pub mod ccd;
 pub mod collision_tier;
 pub mod fluid;
 pub mod fluid3;
-pub(crate) mod fxhash;
 pub mod gravity;
 pub mod island;
 pub mod joint;

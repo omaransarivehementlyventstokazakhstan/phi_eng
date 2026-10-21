@@ -1,5 +1,5 @@
 use glam::Vec3;
-use std::collections::HashMap;
+use phieng_math::fxhash::FxHashMap;
 
 /// Cell key for the 3D spatial hash grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,7 +27,7 @@ pub struct SpatialHash3 {
     /// Cell size for the hash grid.
     pub cell_size: f32,
     /// Map from cell key to body IDs.
-    grid: HashMap<CellKey3, Vec<usize>>,
+    grid: FxHashMap<CellKey3, Vec<usize>>,
     /// Number of inserted bodies.
     count: usize,
     /// Steps since vacated cells were compacted.
@@ -64,7 +64,7 @@ impl SpatialHash3 {
         };
         Self {
             cell_size,
-            grid: HashMap::new(),
+            grid: FxHashMap::default(),
             count: 0,
             pool: Vec::new(),
             all: Vec::new(),
