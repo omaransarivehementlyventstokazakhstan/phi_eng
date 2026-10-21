@@ -568,6 +568,10 @@ public class World3
         // Static-static pairs can never produce an impulse; skip the
         // narrowphase. Bit-identical (their constraints would solve to zero).
         if (bodyA.IsStatic && bodyB.IsStatic) return;
+        // Collision layers: each body must accept the other's
+        // layer. The default filter accepts everything, so an
+        // unconfigured scene is unaffected.
+        if (!CollisionFilter.Allows(bodyA, bodyB)) return;
         float friction = PhysicsMaterial.CombineFriction(bodyA.Material.Friction, bodyB.Material.Friction);
         float restitution = PhysicsMaterial.CombineRestitution(bodyA.Material.Restitution, bodyB.Material.Restitution);
 

@@ -5,6 +5,31 @@ use phieng_math::{InertiaTensor3, Transform2, Transform3};
 use super::nuclear::NuclearState;
 use std::collections::HashSet;
 
+/// The collision layer a body belongs to unless it is configured
+/// otherwise.
+///
+/// Layer 1 is the default so that a body nobody configured shares a
+/// layer with every other unconfigured body, and the default mask
+/// accepts every layer: an unconfigured scene collides exactly as it
+/// did before layers existed.
+pub const DEFAULT_COLLISION_GROUP: u32 = 1;
+
+/// The collision mask a body carries unless it is configured otherwise:
+/// every layer is accepted.
+pub const DEFAULT_COLLISION_MASK: u32 = u32::MAX;
+
+/// Whether two bodies with the given filters may collide.
+///
+/// The rule is the one every layered physics engine uses (Box2D,
+/// Bullet): each body must accept the other's layer. A body that
+/// accepts everything therefore collides with everything, and a body
+/// that accepts one layer collides only with the bodies on it — one
+/// side is enough to veto the pair.
+#[inline]
+pub const fn collision_filter_allows(group_a: u32, mask_a: u32, group_b: u32, mask_b: u32) -> bool {
+    (group_a & mask_b) != 0 && (group_b & mask_a) != 0
+}
+
 /// Rigid body type in 2D
 ///
 /// Field order is hot-first for cache locality: the per-step hot loop
@@ -54,6 +79,18 @@ pub struct RigidBody2 {
     /// "none", so a body takes no part in the nuclear phase until it is
     /// given one.
     pub nuclear: NuclearState,
+    /// Collision layer this body belongs to (warm: narrowphase pair
+    /// filter). A pair collides only when each body accepts the
+    /// other's layer.
+    ///
+    /// The default is [`DEFAULT_COLLISION_GROUP`], and the default mask
+    /// accepts every layer, so a body that is never configured collides
+    /// with everything — the behaviour every scene had before layers
+    /// existed.
+    pub collision_group: u32,
+    /// Collision layers this body accepts (warm: narrowphase pair
+    /// filter). See [`collision_filter_allows`].
+    pub collision_mask: u32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -433,6 +470,8 @@ impl RigidBody2 {
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
             nuclear: NuclearState::default(),
+            collision_group: DEFAULT_COLLISION_GROUP,
+            collision_mask: DEFAULT_COLLISION_MASK,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -773,6 +812,12 @@ pub struct RigidBody3 {
     pub expansion_scale: f32,
     /// Nuclear state (cold: nuclear phase). See `RigidBody2::nuclear`.
     pub nuclear: NuclearState,
+    /// Collision layer this body belongs to (warm: narrowphase pair
+    /// filter). See `RigidBody2::collision_group`.
+    pub collision_group: u32,
+    /// Collision layers this body accepts (warm: narrowphase pair
+    /// filter). See `RigidBody2::collision_mask`.
+    pub collision_mask: u32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -1070,6 +1115,8 @@ impl RigidBody3 {
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
             nuclear: NuclearState::default(),
+            collision_group: DEFAULT_COLLISION_GROUP,
+            collision_mask: DEFAULT_COLLISION_MASK,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,

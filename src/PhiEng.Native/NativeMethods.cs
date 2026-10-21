@@ -128,6 +128,42 @@ internal static partial class NativeMethods
         uint bodyId,
         float scale);
 
+    /// <summary>Sets a body's collision filter (layer and mask).</summary>
+    /// <returns>1 on success, 0 for null world or unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_collision_filter(
+        IntPtr world,
+        uint bodyId,
+        uint group,
+        uint mask);
+
+    /// <summary>Reads a body's collision filter (layer and mask).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_collision_filter(
+        IntPtr world,
+        uint bodyId,
+        uint* outGroup,
+        uint* outMask);
+
+    /// <summary>Sets a 3D body's collision filter (layer and mask).</summary>
+    /// <returns>1 on success, 0 for null world or unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_collision_filter(
+        IntPtr world,
+        uint bodyId,
+        uint group,
+        uint mask);
+
+    /// <summary>Reads a 3D body's collision filter (layer and mask).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_collision_filter(
+        IntPtr world,
+        uint bodyId,
+        uint* outGroup,
+        uint* outMask);
+
     /// <summary>Reads a body's gravitational coupling multiplier.</summary>
     /// <returns>1 on success, 0 on any invalid input.</returns>
     [LibraryImport(LibraryName)]

@@ -49,7 +49,7 @@ public static class Snapshot
     /// Rust writer's, so a file written by either engine loads in the
     /// other.
     /// </summary>
-    public const uint SchemaVersion = 12;
+    public const uint SchemaVersion = 13;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -104,6 +104,10 @@ public static class Snapshot
     /// Must match Rust <c>SNAPSHOT_SCHEMA_NUCLEAR</c>.
     /// </summary>
     public const uint NuclearSchemaVersion = 12;
+
+    /// <summary>Schema that introduced the per-body collision filter (v13).
+    /// Bodies without one keep the default layer and mask.</summary>
+    public const uint CollisionFiltersSchemaVersion = 13;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -504,6 +508,12 @@ public static class Snapshot
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
 
         [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
+        /// <summary>Collision layer the body belongs to (schema v13).</summary>
+        [JsonPropertyName("collision_group")]
+        public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
+        /// <summary>Collision layers the body accepts (schema v13).</summary>
+        [JsonPropertyName("collision_mask")]
+        public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
     }
 
     private sealed class Body3Dto
@@ -529,6 +539,12 @@ public static class Snapshot
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
 
         [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
+        /// <summary>Collision layer the body belongs to (schema v13).</summary>
+        [JsonPropertyName("collision_group")]
+        public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
+        /// <summary>Collision layers the body accepts (schema v13).</summary>
+        [JsonPropertyName("collision_mask")]
+        public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
     }
 
     private sealed class Joint2Dto
@@ -925,7 +941,14 @@ public static class Snapshot
             // would be silently dropped on save.
             bool hasNuclear = !w.Nuclear.Config.IsDefault()
                 || w.Bodies.Any(b => !b.Nuclear.IsDefault());
-            uint schema = hasThermal || hasRadiationExtras || hasNuclear ? NuclearSchemaVersion
+            // Schema v13: a body with a non-default collision filter
+            // needs the v13 record, or its layer and mask would be
+            // silently dropped on save.
+            bool hasCollisionFilters = w.Bodies.Any(b =>
+                b.CollisionGroup != CollisionFilter.DefaultGroup
+                || b.CollisionMask != CollisionFilter.DefaultMask);
+            uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
+                ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1119,6 +1142,8 @@ public static class Snapshot
             Dose = b.Nuclear.Dose,
             CaptureProgress = b.Nuclear.CaptureProgress,
         },
+        CollisionGroup = b.CollisionGroup,
+        CollisionMask = b.CollisionMask,
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -1322,7 +1347,14 @@ public static class Snapshot
             // would be silently dropped on save.
             bool hasNuclear = !w.Nuclear.Config.IsDefault()
                 || w.Bodies.Any(b => !b.Nuclear.IsDefault());
-            uint schema = hasThermal || hasRadiationExtras || hasNuclear ? NuclearSchemaVersion
+            // Schema v13: a body with a non-default collision filter
+            // needs the v13 record, or its layer and mask would be
+            // silently dropped on save.
+            bool hasCollisionFilters = w.Bodies.Any(b =>
+                b.CollisionGroup != CollisionFilter.DefaultGroup
+                || b.CollisionMask != CollisionFilter.DefaultMask);
+            uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
+                ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1611,6 +1643,8 @@ public static class Snapshot
             Dose = b.Nuclear.Dose,
             CaptureProgress = b.Nuclear.CaptureProgress,
         },
+        CollisionGroup = b.CollisionGroup,
+        CollisionMask = b.CollisionMask,
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -2023,6 +2057,10 @@ public static class Snapshot
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
+            // The collision filter (schema v13). A file without one keeps
+            // the default layer and mask, which accept every pair.
+            body.CollisionGroup = b.CollisionGroup;
+            body.CollisionMask = b.CollisionMask;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2231,6 +2269,10 @@ public static class Snapshot
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
+            // The collision filter (schema v13). A file without one keeps
+            // the default layer and mask, which accept every pair.
+            body.CollisionGroup = b.CollisionGroup;
+            body.CollisionMask = b.CollisionMask;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2874,6 +2916,12 @@ public static class Snapshot
                 w.Write(b.Nuclear.Dose);
                 w.Write(b.Nuclear.CaptureProgress);
             }
+            // Schema v13: the per-body collision filter.
+            if (dto.Schema >= CollisionFiltersSchemaVersion)
+            {
+                w.Write(b.CollisionGroup);
+                w.Write(b.CollisionMask);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -3170,6 +3218,12 @@ public static class Snapshot
                         CaptureProgress = r.ReadSingle(),
                     }
                     : new NuclearBodyDto(),
+                CollisionGroup = version >= CollisionFiltersSchemaVersion
+                    ? r.ReadUInt32()
+                    : CollisionFilter.DefaultGroup,
+                CollisionMask = version >= CollisionFiltersSchemaVersion
+                    ? r.ReadUInt32()
+                    : CollisionFilter.DefaultMask,
             };
             dto.Bodies.Add(b);
         }
@@ -3526,6 +3580,12 @@ public static class Snapshot
                 w.Write(b.Nuclear.Dose);
                 w.Write(b.Nuclear.CaptureProgress);
             }
+            // Schema v13: the per-body collision filter.
+            if (dto.Schema >= CollisionFiltersSchemaVersion)
+            {
+                w.Write(b.CollisionGroup);
+                w.Write(b.CollisionMask);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -3629,6 +3689,12 @@ public static class Snapshot
                         CaptureProgress = r.ReadSingle(),
                     }
                     : new NuclearBodyDto(),
+                CollisionGroup = version >= CollisionFiltersSchemaVersion
+                    ? r.ReadUInt32()
+                    : CollisionFilter.DefaultGroup,
+                CollisionMask = version >= CollisionFiltersSchemaVersion
+                    ? r.ReadUInt32()
+                    : CollisionFilter.DefaultMask,
             });
         }
         int nj = r.ReadInt32();

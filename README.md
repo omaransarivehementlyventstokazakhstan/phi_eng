@@ -388,6 +388,17 @@ contact for that frame rather than a guessed depth.
   scenes pay nothing), full keeps the legacy peak-speed behavior. Maps
   from `SolverQuality` (`Ultra`→Full, `High`→Swept, else Off); persists
   in the v6 `ccd` block's `tier` field.
+- **Collision filtering (2D and 3D, both languages):** every body
+  carries a collision *layer* (the group it belongs to) and a *mask*
+  (the layers it accepts). Two bodies may collide only when each
+  accepts the other's layer, so one side is enough to veto a pair. The
+  default filter (layer 1, mask all) accepts everything, so a scene
+  that never configures one behaves exactly as before — every pinned
+  trajectory hash is unchanged. `RigidBody2/3.CollisionGroup` /
+  `CollisionMask`; FFI `phieng_world[_3]_set/get_body_collision_filter`
+  plus managed `PhiNativeWorld(3).Set/GetBodyCollisionFilter`;
+  persists in schema v13 (older files load with the default). Pinned by
+  L01–L06 (Rust↔C# parity).
 - **SIMD math paths (Rust, opt-in):** `phieng-math` `simd` feature flag
   (off by default for MSRV compatibility) enables batched primitives
   (`add4`/`sub4`/`mul4`/`dot4`, `dot2_batch`, `add_vec2_batch`) using

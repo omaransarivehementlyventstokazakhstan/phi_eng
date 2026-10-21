@@ -964,6 +964,44 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>
+    /// Set a body's collision filter: the layer it belongs to and the
+    /// layers it accepts. Two bodies may collide only when each
+    /// accepts the other's layer. The default filter accepts
+    /// everything, so an unconfigured body collides with everything.
+    /// </summary>
+    public void SetBodyCollisionFilter(int bodyId, uint group, uint mask)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_body_collision_filter(_handle, (uint)bodyId, group, mask);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Read a body's collision filter: the layer it belongs to and the
+    /// layers it accepts.
+    /// </summary>
+    public unsafe (uint Group, uint Mask) GetBodyCollisionFilter(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint group, mask;
+            int ok = NativeMethods.phieng_world3_get_body_collision_filter(_handle, (uint)bodyId, &group, &mask);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+            return (group, mask);
+        }
+    }
+
     /// <summary>Read a 3D body's gravitational coupling multiplier.</summary>
     public unsafe float GetBodyGravityScale(int bodyId)
     {

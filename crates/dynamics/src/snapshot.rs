@@ -56,7 +56,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 12;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 13;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -81,6 +81,9 @@ const SNAPSHOT_SCHEMA_RADIATION_EXTRAS: u32 = 11;
 /// and the per-body nuclear state). Its own block, so every earlier
 /// payload still decodes.
 const SNAPSHOT_SCHEMA_NUCLEAR: u32 = 12;
+/// Schema that introduced the per-body collision filter (v13). Bodies
+/// without one keep the default layer and mask.
+const SNAPSHOT_SCHEMA_COLLISION_FILTERS: u32 = 13;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -281,6 +284,20 @@ struct Body2Dto {
     /// Nuclear state (schema v12).
     #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
     nuclear: NuclearBodyDto,
+    /// Collision layer the body belongs to (schema v13; default 1,
+    /// elided).
+    #[serde(
+        default = "default_collision_group",
+        skip_serializing_if = "is_default_collision_group"
+    )]
+    collision_group: u32,
+    /// Collision layers the body accepts (schema v13; default all,
+    /// elided).
+    #[serde(
+        default = "default_collision_mask",
+        skip_serializing_if = "is_default_collision_mask"
+    )]
+    collision_mask: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,6 +331,18 @@ struct Body3Dto {
     /// Nuclear state (schema v12). See `Body2Dto::nuclear`.
     #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
     nuclear: NuclearBodyDto,
+    /// See `Body2Dto::collision_group`.
+    #[serde(
+        default = "default_collision_group",
+        skip_serializing_if = "is_default_collision_group"
+    )]
+    collision_group: u32,
+    /// See `Body2Dto::collision_mask`.
+    #[serde(
+        default = "default_collision_mask",
+        skip_serializing_if = "is_default_collision_mask"
+    )]
+    collision_mask: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -930,6 +959,26 @@ fn default_expansion_reference_temperature() -> f32 {
 /// Default thermal-expansion factor (1.0 = not expanded).
 fn default_expansion_scale() -> f32 {
     1.0
+}
+
+/// Default collision layer (schema v13).
+fn default_collision_group() -> u32 {
+    crate::body::DEFAULT_COLLISION_GROUP
+}
+
+/// Default collision mask (schema v13): every layer is accepted.
+fn default_collision_mask() -> u32 {
+    crate::body::DEFAULT_COLLISION_MASK
+}
+
+/// Whether a body carries the default collision layer (elided in JSON).
+fn is_default_collision_group(group: &u32) -> bool {
+    *group == crate::body::DEFAULT_COLLISION_GROUP
+}
+
+/// Whether a body carries the default collision mask (elided in JSON).
+fn is_default_collision_mask(mask: &u32) -> bool {
+    *mask == crate::body::DEFAULT_COLLISION_MASK
 }
 
 fn default_collision_tier_tag() -> u32 {
@@ -2658,6 +2707,8 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
         nuclear: nuclear_body_dto(&b.nuclear),
+        collision_group: b.collision_group,
+        collision_mask: b.collision_mask,
     }
 }
 
@@ -2680,6 +2731,8 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
         nuclear: nuclear_body_dto(&b.nuclear),
+        collision_group: b.collision_group,
+        collision_mask: b.collision_mask,
     }
 }
 
@@ -2858,12 +2911,19 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || w.bodies
             .iter()
             .any(|b| b.nuclear != super::nuclear::NuclearState::default());
+    // Schema v13: a body with a non-default collision filter needs the
+    // v13 record, or its layer and mask would be silently dropped.
+    let has_collision_filters = w.bodies.iter().any(|b| {
+        b.collision_group != crate::body::DEFAULT_COLLISION_GROUP
+            || b.collision_mask != crate::body::DEFAULT_COLLISION_MASK
+    });
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
         || has_thermal_extras
         || has_radiation_extras
         || has_nuclear
+        || has_collision_filters
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -3090,12 +3150,19 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || w.bodies
             .iter()
             .any(|b| b.nuclear != super::nuclear::NuclearState::default());
+    // Schema v13: a body with a non-default collision filter needs the
+    // v13 record, or its layer and mask would be silently dropped.
+    let has_collision_filters = w.bodies.iter().any(|b| {
+        b.collision_group != crate::body::DEFAULT_COLLISION_GROUP
+            || b.collision_mask != crate::body::DEFAULT_COLLISION_MASK
+    });
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
         || has_thermal_extras
         || has_radiation_extras
         || has_nuclear
+        || has_collision_filters
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -3518,6 +3585,10 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     };
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
+    // The collision filter (schema v13). A file without one keeps
+    // the default layer and mask, which accept every pair.
+    body.collision_group = b.collision_group;
+    body.collision_mask = b.collision_mask;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -3589,6 +3660,10 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     };
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
+    // The collision filter (schema v13). A file without one keeps
+    // the default layer and mask, which accept every pair.
+    body.collision_group = b.collision_group;
+    body.collision_mask = b.collision_mask;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -4859,6 +4934,11 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
             write_f32(&mut p, b.nuclear.dose);
             write_f32(&mut p, b.nuclear.capture_progress);
         }
+        // Schema v13: the per-body collision filter.
+        if dto.schema >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+            write_u32(&mut p, b.collision_group);
+            write_u32(&mut p, b.collision_mask);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -6048,6 +6128,17 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                     } else {
                         NuclearBodyDto::default()
                     },
+                    // Schema v13: the per-body collision filter.
+                    collision_group: if version >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+                        r.read_u32()?
+                    } else {
+                        default_collision_group()
+                    },
+                    collision_mask: if version >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+                        r.read_u32()?
+                    } else {
+                        default_collision_mask()
+                    },
                 };
                 v.push(body);
             }
@@ -6282,6 +6373,11 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
             write_f32(&mut p, b.nuclear.delayed_neutrons);
             write_f32(&mut p, b.nuclear.dose);
             write_f32(&mut p, b.nuclear.capture_progress);
+        }
+        // Schema v13: the per-body collision filter.
+        if dto.schema >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+            write_u32(&mut p, b.collision_group);
+            write_u32(&mut p, b.collision_mask);
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -6527,6 +6623,17 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         }
                     } else {
                         NuclearBodyDto::default()
+                    },
+                    // Schema v13: the per-body collision filter.
+                    collision_group: if version >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+                        r.read_u32()?
+                    } else {
+                        default_collision_group()
+                    },
+                    collision_mask: if version >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
+                        r.read_u32()?
+                    } else {
+                        default_collision_mask()
                     },
                 });
             }

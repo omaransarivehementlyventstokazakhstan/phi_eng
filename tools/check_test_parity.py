@@ -38,6 +38,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              fidelity, ceiling below the required tier stops contacts,
              ceiling at the required tier keeps them, 3D mirror,
              determinism under a capped ceiling)
+    L01-L06  collision filtering (mirrored both languages: the default
+             filter accepts every layer, a layer that does not accept the
+             other side rejects the pair, one side is enough to veto it,
+             3D mirror, snapshot round-trip, FFI round-trip)
     Q01-Q05  solver quality tiers (mirrored both languages: iteration
              budgets, friction/restitution switches, snapshot round-trip)
     C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,

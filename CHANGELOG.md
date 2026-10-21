@@ -7,6 +7,32 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Added
+- **Collision filtering.** Every body now carries a collision *layer*
+  (the group it belongs to) and a *mask* (the layers it accepts), and
+  two bodies may collide only when each accepts the other's layer — the
+  rule every layered physics engine uses (Box2D, Bullet). One side is
+  enough to veto a pair, so a body that accepts a single layer collides
+  only with the bodies on it.
+
+  The default filter (layer 1, mask all) accepts everything, so a scene
+  that never configures a filter behaves exactly as it did before —
+  every pinned trajectory hash is unchanged, in 2D and 3D, on the serial
+  and the parallel path.
+
+  The filter is applied in the narrowphase, so a filtered pair produces
+  no contact at all, and in the CCD swept test, so a filtered pair does
+  not drag the world into substepping either.
+
+  The filter rides in the snapshot (schema **v13**; files written
+  before it existed still load, with the default filter) and crosses
+  the C ABI (`phieng_world_set/get_body_collision_filter` and the
+  `world3` pair), the managed C# mirror (`CollisionGroup`,
+  `CollisionMask` on `RigidBody2/3`), and the managed world.
+
+  Mirrored Rust↔C# tests: **L01–L06** (`crates/engine/tests/collision_filter.rs`,
+  `tests/PhiEng.Tests/CollisionFilterTests.cs`).
+
 ### Fixed
 - **Circle-vs-polygon narrowphase no longer reports phantom contacts.**
   `sat_circle_polygon` (Rust) and `SAT.CirclePolygon` (C#) tested only

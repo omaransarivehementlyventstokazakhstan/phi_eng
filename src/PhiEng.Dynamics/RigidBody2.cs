@@ -48,6 +48,18 @@ public class RigidBody2
     /// </summary>
     public float GravityScale { get; set; }
     /// <summary>
+    /// Collision layer this body belongs to. A pair may collide only
+    /// when each body accepts the other's layer. Mirrors Rust
+    /// <c>RigidBody2::collision_group</c>.
+    /// </summary>
+    public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
+    /// <summary>
+    /// Collision layers this body accepts. Mirrors Rust
+    /// <c>RigidBody2::collision_mask</c>; the default accepts every
+    /// layer, so an unconfigured body collides with everything.
+    /// </summary>
+    public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
+    /// <summary>
     /// Ambient-force coupling multiplier (1.0 full, 0.0 immune; must be
     /// finite). Mirrors Rust <c>RigidBody2::ambient_scale</c>.
     /// </summary>
@@ -98,6 +110,8 @@ public class RigidBody2
         LinearDamping = 0.01f;
         AngularDamping = 0.01f;
         GravityScale = 1.0f;
+        CollisionGroup = CollisionFilter.DefaultGroup;
+        CollisionMask = CollisionFilter.DefaultMask;
         AmbientScale = 1.0f;
         Temperature = ThermalConfig2.DefaultTemperature;
         ExpansionScale = 1.0f;

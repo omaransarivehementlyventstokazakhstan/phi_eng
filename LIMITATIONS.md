@@ -138,7 +138,7 @@ interpenetrated pairs (past any range the solver would let persist) can
 report flipped axes, which is another reason penetration must be
 arrested early rather than resolved late.
 
-## No raycasts, triggers — broadphase tiers, rigid-only joints, snapshots are versioned v12
+## No raycasts, triggers — broadphase tiers, rigid-only joints, snapshots are versioned v13
 
 Broad-phase backends (`BroadphaseMode`: brute force, spatial hash,
 dynamic AABB tree, hybrid auto-select — B01–B06) are behavior-identical
@@ -165,6 +165,12 @@ sequence, so switching mode mid-run is transparent. Known caveats:
   bottom-up rebuild (past 2×log₂) restores balance. The threshold is
   conservative, so adversarial orderings pay one O(n log n) rebuild
   before settling.
+
+Collision filtering (L01–L06) is applied in the narrowphase and in
+the CCD swept test, not in the broad phase: the grid still emits the
+candidate pair and the narrow phase is the first place that knows
+whether the two bodies may collide. The pair census therefore does not
+shrink when a body is filtered — only the contacts do.
 
 Joints exist in both dimensions (distance, hinge with angle limits,
 prismatic with travel limits, fixed weld — rigid only, see

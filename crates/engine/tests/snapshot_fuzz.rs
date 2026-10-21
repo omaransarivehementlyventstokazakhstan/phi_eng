@@ -22,6 +22,7 @@ use glam::Vec2;
 use phieng_dynamics::body::Shape2;
 use phieng_dynamics::{
     world2_from_binary, world2_from_json, world2_to_binary, world2_to_json, LoadMode, World2,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 use std::time::Instant;
 
@@ -287,9 +288,11 @@ fn fuzz_unknown_schema_version_rejected() {
     let world = sample_world();
     let bytes = world2_to_binary(&world, LoadMode::Exact).expect("serializable");
 
-    // The readable range (schema 3 ..= the current version).
+    // The readable range (schema 3 ..= the current version). The upper
+    // bound is the published constant, so a schema bump cannot leave a
+    // stale literal here.
     const MIN_READABLE: u32 = 3;
-    const MAX_READABLE: u32 = 12;
+    const MAX_READABLE: u32 = SNAPSHOT_SCHEMA_VERSION;
 
     let mut rejected = 0usize;
     let mut accepted_outside = 0usize;

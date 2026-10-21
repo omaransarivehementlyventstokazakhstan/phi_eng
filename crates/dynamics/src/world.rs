@@ -608,6 +608,16 @@ impl World2 {
             if body_a.is_static || body_b.is_static {
                 continue;
             }
+            // Collision layers: a pair that may not collide must not
+            // drag the whole world into substepping either.
+            if !super::body::collision_filter_allows(
+                body_a.collision_group,
+                body_a.collision_mask,
+                body_b.collision_group,
+                body_b.collision_mask,
+            ) {
+                continue;
+            }
             let (amin, amax) = self.get_body_aabb(body_a);
             let (bmin, bmax) = self.get_body_aabb(body_b);
             let a_extent = (amax - amin).length() * 0.5;
@@ -698,6 +708,17 @@ impl World2 {
                 // for them entirely. Bit-identical: their constraints would
                 // solve to zero and warm-start zeros are no-ops.
                 if self.bodies[a].is_static && self.bodies[b].is_static {
+                    continue;
+                }
+                // Collision layers: each body must accept the other's
+                // layer. The default filter accepts everything, so an
+                // unconfigured scene is unaffected.
+                if !super::body::collision_filter_allows(
+                    self.bodies[a].collision_group,
+                    self.bodies[a].collision_mask,
+                    self.bodies[b].collision_group,
+                    self.bodies[b].collision_mask,
+                ) {
                     continue;
                 }
                 // Narrowphase tier gate: see `World2::test_collisions_into`.
@@ -1920,6 +1941,16 @@ impl World3 {
             if body_a.is_static || body_b.is_static {
                 continue;
             }
+            // Collision layers: a pair that may not collide must not
+            // drag the whole world into substepping either.
+            if !super::body::collision_filter_allows(
+                body_a.collision_group,
+                body_a.collision_mask,
+                body_b.collision_group,
+                body_b.collision_mask,
+            ) {
+                continue;
+            }
             let (amin, amax) = self.get_body_aabb(body_a);
             let (bmin, bmax) = self.get_body_aabb(body_b);
             let a_extent = (amax - amin).length() * 0.5;
@@ -2010,6 +2041,17 @@ impl World3 {
                 // effective mass in every direction); skip the narrowphase.
                 // Bit-identical: their constraints would solve to zero.
                 if self.bodies[a].is_static && self.bodies[b].is_static {
+                    continue;
+                }
+                // Collision layers: each body must accept the other's
+                // layer. The default filter accepts everything, so an
+                // unconfigured scene is unaffected.
+                if !super::body::collision_filter_allows(
+                    self.bodies[a].collision_group,
+                    self.bodies[a].collision_mask,
+                    self.bodies[b].collision_group,
+                    self.bodies[b].collision_mask,
+                ) {
                     continue;
                 }
                 if self.collision_tier.is_active() {

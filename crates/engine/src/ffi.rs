@@ -1402,6 +1402,107 @@ pub unsafe extern "C" fn phieng_world_get_body_gravity_scale(
     1
 }
 
+/// Set a body's collision filter (2D).
+///
+/// `group` is the layer the body belongs to; `mask` is the set of
+/// layers it accepts. Two bodies may collide only when each accepts the
+/// other's layer, so a body that accepts one layer collides only with
+/// the bodies on it. The default filter (group 1, mask all) collides
+/// with everything, which is what a scene that never configures a
+/// filter gets.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_collision_filter(
+    world: *mut World2,
+    body_id: u32,
+    group: u32,
+    mask: u32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].collision_group = group;
+    world_ref.bodies[index].collision_mask = mask;
+    1
+}
+
+/// Copy a body's collision filter out (2D). `out_group` and `out_mask`
+/// receive the layer and the mask. Returns 1 on success, 0 on any
+/// invalid input.
+/// # Safety
+/// See [`phieng_world_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_collision_filter(
+    world: *const World2,
+    body_id: u32,
+    out_group: *mut u32,
+    out_mask: *mut u32,
+) -> i32 {
+    if world.is_null() || out_group.is_null() || out_mask.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_group = world_ref.bodies[index].collision_group;
+    *out_mask = world_ref.bodies[index].collision_mask;
+    1
+}
+
+/// Set a body's collision filter (3D). See
+/// [`phieng_world_set_body_collision_filter`].
+/// # Safety
+/// See [`phieng_world3_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_collision_filter(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    group: u32,
+    mask: u32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].collision_group = group;
+    world_ref.bodies[index].collision_mask = mask;
+    1
+}
+
+/// Copy a body's collision filter out (3D). See
+/// [`phieng_world_get_body_collision_filter`].
+/// # Safety
+/// See [`phieng_world3_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_collision_filter(
+    world: *const phieng_dynamics::World3,
+    body_id: u32,
+    out_group: *mut u32,
+    out_mask: *mut u32,
+) -> i32 {
+    if world.is_null() || out_group.is_null() || out_mask.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_group = world_ref.bodies[index].collision_group;
+    *out_mask = world_ref.bodies[index].collision_mask;
+    1
+}
+
 /// Set a body's ambient-force coupling multiplier (2D). See
 /// [`phieng_world_set_body_gravity_scale`].
 /// # Safety
