@@ -507,14 +507,18 @@ per-phase split, and the measurement discipline.
 
 | Scene | Rust serial | Rust parallel | Notes |
 |---|---|---|---|
-| pile 2D (1500), iters=1 | 0.624 ms/step | — | was 2.31 ms/step before the overhaul |
-| pile 2D (1500), iters=8 | 0.890 ms/step | — | was 5.11 ms/step (**−83 %**) |
-| pile 2D, settled census | 1.834 ms/step | — | was 3.18 ms/step (**−42 %**) |
+| pile 2D (1500), iters=1 | 0.588 ms/step | — | was 2.63 ms/step before the overhaul |
+| pile 2D (1500), iters=8 | 0.880 ms/step | — | was 5.13 ms/step (**−83 %**) |
+| pile 2D, settled census | 1.403 ms/step | — | was 3.21 ms/step (**−56 %**) |
 | pile 2D allocs | **0.0/step** | — | was 0.8/step |
-| islands (8×5 stacks) | 0.0289 ms/step | 0.0328 | the parallel path is still ~13 % slower at 41 bodies |
-| pile 3D (400), iters=8 | 0.176 ms/step | n/a (2D-only) | was 0.232 ms/step |
+| islands (8×5 stacks) | 0.0249 ms/step | 0.0232 | 41 bodies: below the parallelization threshold |
+| pile 3D (400), iters=8 | 0.133 ms/step | n/a (2D-only) | was 0.236 ms/step (**−44 %**) |
 | pile 3D allocs | 0.0/step | — | |
 | statics (420) | 0.205 ms/step | — | pair phase 18x faster (0.999 → 0.054 ms) |
+
+Those are interleaved A/B numbers (the two builds alternate, nine
+rounds) on one machine — the only comparison that survives a loaded
+box, since the absolute timings drift by ±20 % between runs.
 
 Every one of those changes leaves the pinned hashes bit-identical: the
 grid compaction, the FxHash switch, the AABB pair filter and the

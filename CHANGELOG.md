@@ -56,10 +56,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
   Measured on the corrected trajectory (AMD Ryzen 7 7445HS, release,
   interleaved A/B with the hash guard green on both sides): the static
   scene's pair phase **0.999 → 0.054 ms/step (18x)**; islands serial
-  −10 %, islands parallel −12 %, pile 3D −9 %. Against the
-  pre-SAT-fix baseline the 2D pile's 8-iteration step went
-  **5.11 → 0.89 ms/step (−83 %)** and its settled census
-  **3.18 → 1.83 ms/step (−42 %)**, with per-step allocations at **0.0**.
+  −10 %, islands parallel −12 %, pile 3D −9 %. End to end against the
+  pre-overhaul build, the 2D pile's 8-iteration step went
+  **5.13 → 0.88 ms/step (−83 %)**, its settled census
+  **3.21 → 1.40 ms/step (−56 %)** and the 3D pile
+  **0.236 → 0.133 ms/step (−44 %)**, with per-step allocations at
+  **0.0**.
+- **The warm start looks the contact cache up once per constraint**
+  instead of twice. The `contains_key` probe that told the warm start
+  whether a pair was new folds into the lookup that fetches the cached
+  contact to match. The wake still happens before the solver runs, and
+  it cannot change what the match found: it only clears sleep flags,
+  and the cache holds the previous frame's contacts either way.
 
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,

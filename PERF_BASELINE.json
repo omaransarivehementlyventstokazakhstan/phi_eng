@@ -1,44 +1,44 @@
 {
   "islands_parallel": {
-    "max": 0.0372,
-    "median": 0.0328,
-    "min": 0.0268,
-    "n": 7
+    "max": 0.0351,
+    "median": 0.034,
+    "min": 0.0267,
+    "n": 5
   },
   "islands_serial": {
-    "max": 0.0357,
-    "median": 0.0289,
-    "min": 0.0263,
-    "n": 7
+    "max": 0.0372,
+    "median": 0.0317,
+    "min": 0.0259,
+    "n": 5
   },
   "pile2d_allocs": {
     "max": 0.0,
     "median": 0.0,
     "min": 0.0,
-    "n": 7
+    "n": 5
   },
   "pile2d_census": {
-    "max": 1.876,
-    "median": 1.834,
-    "min": 1.809,
-    "n": 7
+    "max": 1.832,
+    "median": 1.756,
+    "min": 1.728,
+    "n": 5
   },
   "pile2d_iters1": {
-    "max": 0.639,
-    "median": 0.624,
-    "min": 0.611,
-    "n": 7
+    "max": 1.107,
+    "median": 1.102,
+    "min": 1.068,
+    "n": 5
   },
   "pile2d_iters8": {
-    "max": 1.005,
-    "median": 0.89,
-    "min": 0.855,
-    "n": 7
+    "max": 1.659,
+    "median": 1.653,
+    "min": 1.623,
+    "n": 5
   },
   "pile3d_iters8": {
-    "max": 0.18,
-    "median": 0.176,
-    "min": 0.166,
-    "n": 7
+    "max": 0.171,
+    "median": 0.17,
+    "min": 0.168,
+    "n": 5
   }
 }

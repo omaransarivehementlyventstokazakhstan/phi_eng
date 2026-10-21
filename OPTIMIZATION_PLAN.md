@@ -202,6 +202,24 @@ pub enum BroadphaseMode {
   and its raw pair count from 8 010 to 18. Interleaved A/B over 9
   alternating rounds: islands serial −10.2 %, islands parallel
   −11.7 %, pile 3D −8.6 %, pile 2D −2 % to −3 %.
+- **Shipped (warm-start lookup)**: the warm start looked the contact
+  cache up twice per constraint — `contains_key` to learn whether the
+  pair was new (and so might need a sleeper woken) and then `get` to
+  find the cached contact to match. The first lookup folds into the
+  second. The wake still happens before the solver runs and cannot
+  change what the match found: it only clears sleep flags, and the
+  cache holds the previous frame's contacts either way. Interleaved A/B:
+  pile 2D settled census −12.8 %, islands serial −6.3 %, islands
+  parallel −4.2 %, pile 2D iters=8 −1.9 %, pile 3D unchanged.
+- **Measured, not shipped (grid cell size)**: the grid's cell (1.0) is
+  much larger than the bodies (0.3), so a cell holds many mutually
+  disjoint bodies: the pile examines **25 296** candidate pairs to
+  produce 1 953. A smaller cell was tried (0.5) and it made things
+  *worse* (41 879 candidates): a smaller cell means more cells, and a
+  body then spans more of them, so the same pair is found through more
+  cells. The candidate count is inherent to a uniform grid at this
+  density; the AABB filter is what keeps it cheap, and it is already
+  in place.
 - **Remaining**: an actual persistent static constraint graph, or
   static-awareness in the broadphase.
 - **Shipped (narrowphase input filtering)**: every broadphase backend

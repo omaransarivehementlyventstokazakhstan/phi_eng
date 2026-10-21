@@ -140,3 +140,22 @@ islands parallel −11.7 %, pile 3D −8.6 %, pile 2D −2 % to −3 %.
    every hash is bit-identical.
 4. Otherwise revert it and record the negative result in
    `OPTIMIZATION_PLAN.md` — a measured "no" is worth as much as a "yes".
+
+## The overhaul, end to end
+
+Interleaved A/B of the pre-overhaul build (commit `7c9b842`) against the
+current one, nine alternating rounds on the same machine:
+
+| Measure | Before | After | Delta |
+| ------- | ------ | ----- | ----- |
+| `pile2d_iters1` | 2.630 ms | 0.588 ms | **−77.6 %** |
+| `pile2d_iters8` | 5.130 ms | 0.880 ms | **−82.8 %** |
+| `pile2d_census` | 3.214 ms | 1.403 ms | **−56.3 %** |
+| `islands_serial` | 0.0243 ms | 0.0249 ms | +2.5 % (noise) |
+| `islands_parallel` | 0.0248 ms | 0.0232 ms | −6.5 % |
+| `pile3d_iters8` | 0.236 ms | 0.133 ms | **−43.6 %** |
+
+The pile-2D hash differs between the two builds **by design**: the
+circle-vs-polygon corner-axis fix removed phantom contacts, which
+changes the physics on purpose. The islands and 3D hashes are identical
+across the whole overhaul.
