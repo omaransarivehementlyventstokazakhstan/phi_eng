@@ -507,14 +507,14 @@ per-phase split, and the measurement discipline.
 
 | Scene | Rust serial | Rust parallel | Notes |
 |---|---|---|---|
-| pile 2D (1500), iters=1 | 0.555 ms/step | — | was 2.85 ms/step before the overhaul (**−80.5 %**) |
-| pile 2D (1500), iters=8 | 0.873 ms/step | — | was 5.03 ms/step (**−82.6 %**) |
-| pile 2D, settled census | 1.263 ms/step | — | was 3.26 ms/step (**−61.3 %**) |
+| pile 2D (1500), iters=1 | 0.566 ms/step | — | was 2.45 ms/step before the overhaul (**−77 %**) |
+| pile 2D (1500), iters=8 | 0.821 ms/step | — | was 6.18 ms/step (**−87 %**) |
+| pile 2D, settled census | 1.297 ms/step | — | was 3.92 ms/step (**−67 %**) |
 | pile 2D allocs | **0.0/step** | — | was 0.8/step |
-| islands (8×5 stacks) | 0.0219 ms/step | 0.0209 | 41 bodies: below the parallelization threshold |
-| pile 3D (400), iters=8 | 0.126 ms/step | n/a (2D-only) | was 0.228 ms/step (**−44.7 %**) |
+| islands (8×5 stacks) | 0.0299 ms/step | 0.0330 | 41 bodies: below the parallelization threshold |
+| pile 3D (400), iters=8 | 0.153 ms/step | n/a (2D-only) | was 0.302 ms/step (**−49 %**) |
 | pile 3D allocs | 0.0/step | — | |
-| statics (420) | 0.033 ms/step | — | pair phase 0.031 → 0.003 ms (a static cell is now skipped whole) |
+| statics (420) | 0.030 ms/step | — | the grid keeps its cells now: rebuild 0.0063 → 0.0029 ms |
 
 Those are interleaved A/B numbers (the two builds alternate, nine
 rounds) on one machine — the only comparison that survives a loaded
@@ -582,6 +582,23 @@ phase. The grid now drops such a cell whole.
 | static scene step | **−46 %** | 1.9x faster; 0.062 → 0.033 ms/step |
 | 1500-body pile | **unchanged** | every cell holds a dynamic body |
 | every pinned hash | **bit-identical** | the pair set is unchanged |
+
+## Baseline matrix 1f (persistent grid, 2026-10-21)
+
+The grid used to wipe every cell and re-insert every body, every step
+— 2 400 hash lookups for the static-heavy scene's 400 boxes alone. It
+now keeps its cells: a body whose cell range is unchanged keeps its
+place in them, and only the bodies that moved are re-inserted. The
+cell range is a tuple of integers, so the comparison involves no float
+rounding, and the pair set is unchanged.
+
+| Measure | Value | Notes |
+|---|---|---|
+| static scene rebuild | **−53 %** | 0.0063 → 0.0029 ms/step |
+| static scene step | **−32 %** | 0.042 → 0.030 ms/step |
+| 1500-body pile rebuild | **−33 % to −40 %** | its bodies all move, so less to skip |
+| 1500-body pile step | **−1 % to −6 %** | |
+| every pinned hash | **bit-identical** | 2D, 3D, islands serial **and** parallel |
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead

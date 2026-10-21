@@ -216,6 +216,30 @@ pub enum BroadphaseMode {
   is unchanged. Measured with the same harness: the pair phase **−18 %
   to −20 %**, the whole step **−3 % to −7 %**, every other phase inside
   the noise band.
+- **Shipped (persistent grid)**: the grid wiped every cell and
+  re-inserted every body, every step — 2 400 hash lookups for the
+  static-heavy scene's 400 boxes alone, most of it re-deriving a
+  membership that had not changed. The grid now keeps its cells across
+  steps: a body whose *cell range* is unchanged keeps its place in
+  them, only the bodies that moved are re-inserted, and a body the
+  world no longer has is taken out of the cells at the end of the step.
+  The cell range is a tuple of integers derived from the AABB, and the
+  cells a body occupies are exactly the cells of its range, so an
+  unchanged range means an unchanged membership and the pair set is the
+  same either way. Every pinned hash is unchanged. Measured with the
+  same harness: the static-heavy scene's rebuild **−53 %** and its
+  whole step **−32 %**; the 1500-body pile's rebuild **−33 % to −40 %**
+  and its whole step **−1 % to −6 %** (its bodies all move, so it has
+  little to skip).
+- **Measured, not shipped (strict membership rule)**: requiring a
+  body's AABB to be *bit-identical* before it keeps its cells is more
+  conservative than comparing the cell range — but it is also more
+  work for the same result, because a body that moved a little without
+  changing its cell is re-inserted anyway. On the 1500-body pile,
+  where every body moves every step, the strict rule made the rebuild
+  **78 % slower** than the grid that wipes and re-inserts everything,
+  and the whole step **9 % slower**. The rule is kept behind the
+  `phase-timing` switch so the measurement can be repeated.
 - **Shipped (static-cell skip)**: two statics never touch, so every
   candidate pair in a cell that holds nothing but static bodies was
   walked and then dropped one by one. In a level full of static

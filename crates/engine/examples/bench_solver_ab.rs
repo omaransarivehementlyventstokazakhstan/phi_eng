@@ -68,6 +68,13 @@ mod harness {
         /// every cell is walked, and the static-static ones are dropped
         /// one by one.
         WalkStaticCells,
+        /// The broad-phase grid keeping its cells across steps.
+        PersistentGrid,
+        /// The broad-phase grid keeping its cells across steps and
+        /// skipping any body whose cell range is unchanged.
+        PersistentGridRange,
+        /// The broad-phase grid wiping and re-inserting every body.
+        WipeGrid,
     }
 
     impl Variant {
@@ -80,6 +87,9 @@ mod harness {
                 Variant::UnownedPairs => "unowned",
                 Variant::SkipStaticCells => "skip",
                 Variant::WalkStaticCells => "walk",
+                Variant::PersistentGrid => "persistent",
+                Variant::PersistentGridRange => "persistent-range",
+                Variant::WipeGrid => "wipe",
             }
         }
 
@@ -90,21 +100,45 @@ mod harness {
                     world.solver.packed = true;
                     world.set_broadphase_owned_pairs(true);
                     world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(true);
                 }
                 Variant::DirectSolver => {
                     world.solver.packed = false;
                     world.set_broadphase_owned_pairs(true);
                     world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(true);
                 }
                 Variant::UnownedPairs => {
                     world.solver.packed = true;
                     world.set_broadphase_owned_pairs(false);
                     world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(true);
                 }
                 Variant::WalkStaticCells => {
                     world.solver.packed = true;
                     world.set_broadphase_owned_pairs(true);
                     world.set_broadphase_skip_static_cells(false);
+                    world.set_broadphase_persistent(true);
+                }
+                Variant::PersistentGrid => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(true);
+                    world.set_broadphase_persistent_strict(true);
+                }
+                Variant::PersistentGridRange => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(true);
+                    world.set_broadphase_persistent_strict(false);
+                }
+                Variant::WipeGrid => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(true);
+                    world.set_broadphase_skip_static_cells(true);
+                    world.set_broadphase_persistent(false);
                 }
             }
         }
@@ -207,6 +241,33 @@ mod harness {
         world
     }
 
+    /// The SPH fluid scene: 96 particles in a tank.
+    ///
+    /// The fluid phase is essentially all of this scene's step, and the
+    /// particles move every step, so nothing here can be skipped the
+    /// way a static body can.
+    fn build_fluid() -> World2 {
+        let mut world = World2::new();
+        world.gravity = Vec2::new(0.0, -9.81);
+        for (pos, he) in [
+            (Vec2::new(2.0, -1.0), Vec2::new(3.0, 0.5)),
+            (Vec2::new(-1.0, 2.0), Vec2::new(0.5, 3.5)),
+            (Vec2::new(5.0, 2.0), Vec2::new(0.5, 3.5)),
+        ] {
+            world
+                .add_static_body(pos, Shape2::Box { half_extents: he })
+                .expect("valid shape");
+        }
+        let mut positions = Vec::with_capacity(96);
+        for i in 0..8 {
+            for j in 0..12 {
+                positions.push(Vec2::new(-1.0 + i as f32 * 0.25, j as f32 * 0.25));
+            }
+        }
+        world.fluid.add_particles(&positions);
+        world
+    }
+
     /// Phase names, in pipeline order.
     const PHASES: [&str; 10] = [
         "gravity",
@@ -262,14 +323,15 @@ mod harness {
     /// alternating segment by segment.
     ///
     /// `scene` picks the world: 0 is the 1500-body pile, 1 is the
-    /// static-heavy scene.
+    /// static-heavy scene, 2 is the SPH fluid scene.
     pub fn run_alternating(a: Variant, b: Variant, bodies: usize, shape_mix: u8, scene: u8) {
-        let mut world = if scene == 1 {
-            build_statics()
-        } else {
-            build_pile(bodies, shape_mix)
+        let mut world = match scene {
+            1 => build_statics(),
+            2 => build_fluid(),
+            _ => build_pile(bodies, shape_mix),
         };
-        if scene == 1 {
+        if scene == 1 || scene == 2 {
+            // The static and fluid scenes settle in a few dozen steps.
             for _ in 0..60 {
                 world.step(DT);
             }
@@ -356,6 +418,9 @@ fn main() {
         let (a, b) = match comparison {
             "pairs" => (Variant::OwnedPairs, Variant::UnownedPairs),
             "statics" => (Variant::SkipStaticCells, Variant::WalkStaticCells),
+            "grid" => (Variant::PersistentGrid, Variant::WipeGrid),
+            "grid-range" => (Variant::PersistentGridRange, Variant::WipeGrid),
+            "grid-strict" => (Variant::PersistentGrid, Variant::PersistentGridRange),
             _ => (Variant::PackedSolver, Variant::DirectSolver),
         };
         let scene: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);

@@ -22,17 +22,17 @@ change that moves the physics fails loudly instead of silently.
 AMD Ryzen 7 7445HS, 12 threads, 15.2 GB, Windows x64, release build
 (`lto = "thin"`, `codegen-units = 1`, `opt-level = 3`).
 
-## Whole-step baseline (`bench_large`, median of 5 windows)
+## Whole-step baseline (`bench_large`, median of 15 interleaved windows)
 
 | Measure | Baseline | Notes |
 | ------- | -------- | ----- |
-| `pile2d_iters1` | **0.555 ms/step** | 1500 bodies, 1 solver iteration |
-| `pile2d_iters8` | **0.873 ms/step** | 1500 bodies, 8 solver iterations |
-| `pile2d_census` | **1.263 ms/step** | the settled pile, 8 iterations, after the sweep |
+| `pile2d_iters1` | **0.566 ms/step** | 1500 bodies, 1 solver iteration |
+| `pile2d_iters8` | **0.821 ms/step** | 1500 bodies, 8 solver iterations |
+| `pile2d_census` | **1.297 ms/step** | the settled pile, 8 iterations, after the sweep |
 | `pile2d_allocs` | **0.0 allocs/step** | counting global allocator |
-| `islands_serial` | **0.0219 ms/step** | 40 bodies, 8 stacks |
-| `islands_parallel` | **0.0209 ms/step** | serial and parallel tied at this size |
-| `pile3d_iters8` | **0.126 ms/step** | 400 bodies |
+| `islands_serial` | **0.0299 ms/step** | 40 bodies, 8 stacks — noise-dominated (±30 %) |
+| `islands_parallel` | **0.0330 ms/step** | 41 bodies: below the parallelization threshold |
+| `pile3d_iters8` | **0.153 ms/step** | 400 bodies |
 
 These numbers describe the corrected trajectory (after the
 circle-vs-polygon corner-axis fix below re-pinned the 2D hashes). The
@@ -52,17 +52,17 @@ only — the hashes are identical with the feature on and off.
 
 | Phase | ms/step | Share |
 | ----- | ------- | ----- |
-| gravity | 0.0047 | 0.4 % |
-| fluid | 0.0001 | 0.0 % |
-| broadphase: rebuild | 0.1258 | 10.0 % |
-| broadphase: pairs | 0.1706 | 13.5 % |
-| narrowphase | 0.2539 | 20.1 % |
-| cache (warm start) | 0.0819 | 6.5 % |
-| solver | 0.5003 | 39.7 % |
-| integrate | 0.0971 | 7.7 % |
-| thermal | 0.0002 | 0.0 % |
-| sleep | 0.0194 | 1.5 % |
-| **TOTAL** | **1.2603** | 99.9 % of the wall clock |
+| gravity | 0.0031 | 0.4 % |
+| fluid | 0.0000 | 0.0 % |
+| broadphase: rebuild | 0.0596 | 7.5 % |
+| broadphase: pairs | 0.1064 | 13.3 % |
+| narrowphase | 0.1642 | 20.6 % |
+| cache (warm start) | 0.0464 | 5.8 % |
+| solver | 0.3347 | 42.0 % |
+| integrate | 0.0654 | 8.2 % |
+| thermal | 0.0001 | 0.0 % |
+| sleep | 0.0130 | 1.6 % |
+| **TOTAL** | **0.7971** | 100 % of the wall clock |
 
 **The solver is now the largest phase (38 %)** on the corrected
 trajectory, followed by the narrowphase (19 %) and pair generation
@@ -76,7 +76,7 @@ with more contacts in flight, which is why the solver dominates here.
 | ----- | ------- | ---------------- | --------- | ------------ |
 | pile 3D (400 bodies) | 0.120 | 30 % | 400 | 400 |
 | islands (40 bodies) | 0.032 | 20 % | 44 | 43 |
-| **statics (420 bodies)** | **0.033** | **21 %** | **18** | **14** |
+| **statics (420 bodies)** | **0.030** | **50 %** | **18** | **14** |
 | fluid (96 SPH particles) | 0.069 | 1 % | — | — |
 
 The static-heavy scene was the pathological case: the broad phase used
@@ -248,19 +248,62 @@ The pile is untouched because every one of its cells holds a dynamic
 body — there is nothing to skip. The pair set is identical either way,
 so all hashes are bit-identical.
 
+## The persistent grid (shipped)
+
+The grid used to wipe every cell and re-insert every body, every step:
+2 400 hash lookups for the static-heavy scene's 400 boxes alone, and
+most of that work re-deriving a membership that had not changed.
+
+The grid now keeps its cells across steps. A body whose **cell range**
+is unchanged keeps its place in them, and only the bodies that moved
+are re-inserted; a body the world no longer has is taken out of the
+cells at the end of the step.
+
+The cell range is a tuple of integers derived from the AABB, and the
+cells a body occupies are exactly the cells of its range — so an
+unchanged range means an unchanged membership, and the pair set is the
+same either way. There is no float comparison involved.
+
+Measured with the same harness (the grid's behaviour toggled between
+segments in one world, one heap layout):
+
+| Scene | Measure | Persistent | Wiping | Delta |
+| ----- | ------- | ---------- | ------ | ----- |
+| statics (420 bodies) | broadphase: rebuild | 2.92 ms | 6.27 ms | **−53 %** |
+| statics (420 bodies) | TOTAL (wall clock) | 7.04 ms | 10.36 ms | **−32 %** |
+| pile 2D (1500 bodies) | broadphase: rebuild | 37.0–41.6 ms | 60.8–66.7 ms | **−33 % to −40 %** |
+| pile 2D (1500 bodies) | TOTAL (wall clock) | 598–654 ms | 636–693 ms | **−1 % to −6 %** |
+
+The 2D pile gains less because its bodies all move: there is little
+membership to keep. The static-heavy scene is where the grid was
+wasting the most.
+
+**The strict variant was measured and rejected.** Requiring the AABB
+to be *bit-identical* before a body keeps its cells is more conservative
+— but it is also more work for the same result, because a body that
+moved a little without changing its cell is re-inserted anyway. On the
+1500-body pile that made the rebuild **78 % slower** than the wiping
+grid and the whole step **9 % slower**. The rule is kept behind the
+`phase-timing` switch so the measurement can be repeated.
+
 ## The overhaul, end to end
 
 Interleaved A/B of the pre-overhaul build (commit `7c9b842`) against the
-current one, nine alternating rounds on the same machine:
+current one, fifteen alternating rounds on the same machine:
 
 | Measure | Before | After | Delta |
 | ------- | ------ | ----- | ----- |
-| `pile2d_iters1` | 2.850 ms | 0.555 ms | **−80.5 %** |
-| `pile2d_iters8` | 5.027 ms | 0.873 ms | **−82.6 %** |
-| `pile2d_census` | 3.262 ms | 1.263 ms | **−61.3 %** |
-| `islands_serial` | 0.0243 ms | 0.0219 ms | −9.9 % |
-| `islands_parallel` | 0.0253 ms | 0.0209 ms | −17.4 % |
-| `pile3d_iters8` | 0.228 ms | 0.126 ms | **−44.7 %** |
+| `pile2d_iters1` | 2.454 ms | 0.566 ms | **−76.9 %** |
+| `pile2d_iters8` | 6.180 ms | 0.821 ms | **−86.7 %** |
+| `pile2d_census` | 3.922 ms | 1.297 ms | **−66.9 %** |
+| `islands_serial` | 0.0332 ms | 0.0299 ms | −9.9 % |
+| `islands_parallel` | 0.0347 ms | 0.0330 ms | −4.9 % |
+| `pile3d_iters8` | 0.302 ms | 0.153 ms | **−49.3 %** |
+
+The "after" column is stable across repeats (±3 %); the "before" column
+moves with the machine's load (±20 %), so the percentages carry that
+much uncertainty and the absolute "after" numbers are the ones to
+compare against.
 
 The pile-2D hash differs between the two builds **by design**: the
 circle-vs-polygon corner-axis fix removed phantom contacts, which

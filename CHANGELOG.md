@@ -58,9 +58,9 @@ This project follows [Semantic Versioning](https://semver.org/) and
   scene's pair phase **0.999 → 0.054 ms/step (18x)**; islands serial
   −10 %, islands parallel −12 %, pile 3D −9 %. End to end against the
   pre-overhaul build, the 2D pile's 8-iteration step went
-  **5.03 → 0.87 ms/step (−83 %)**, its settled census
-  **3.26 → 1.26 ms/step (−61 %)** and the 3D pile
-  **0.228 → 0.126 ms/step (−45 %)**, with per-step allocations at
+  **6.18 → 0.82 ms/step (−87 %)**, its settled census
+  **3.92 → 1.30 ms/step (−67 %)** and the 3D pile
+  **0.302 → 0.153 ms/step (−49 %)**, with per-step allocations at
   **0.0**.
 - **The warm start looks the contact cache up once per constraint**
   instead of twice. The `contains_key` probe that told the warm start
@@ -107,6 +107,27 @@ This project follows [Semantic Versioning](https://semver.org/) and
   segments, everything else held fixed): the pair phase **−18 % to
   −20 %** and the whole step **−3 % to −7 %** over four independent
   repeats, with every other phase inside the noise band.
+- **The broad-phase grid keeps its cells across steps.** The grid used
+  to wipe every cell and re-insert every body, every step — 2 400
+  hash lookups for the static-heavy scene's 400 boxes alone, and most
+  of that work was re-deriving a membership that had not changed. The
+  grid now keeps its cells: a body whose *cell range* is unchanged
+  keeps its place in them, and only the bodies that moved are
+  re-inserted. A body the world no longer has is taken out of the
+  cells at the end of the step.
+
+  The cell range is a tuple of integers derived from the AABB, and the
+  cells a body occupies are exactly the cells of its range — so an
+  unchanged range means an unchanged membership, and the pair set is
+  the same either way. Every pinned hash is bit-identical: 2D, 3D,
+  islands serial **and** parallel.
+
+  Measured with the same harness (the grid's behaviour toggled between
+  segments in one world, one heap layout): the static-heavy scene's
+  rebuild phase **−53 %** and its whole step **−32 %** (0.042 →
+  0.030 ms/step); the 1500-body pile's rebuild **−33 % to −40 %** and
+  its whole step **−1 % to −6 %** (its bodies all move, so it has
+  less to skip).
 - **A cell of nothing but statics is skipped whole.** Two statics never
   touch, so every candidate pair in such a cell was walked and then
   dropped one by one. In a level full of static geometry that walk is

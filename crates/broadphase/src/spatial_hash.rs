@@ -65,6 +65,53 @@ pub struct SpatialHash2 {
     /// generated exactly once, and the candidate list that gets sorted
     /// and deduplicated shrinks by the duplication factor.
     cell_min: Vec<(i32, i32)>,
+    /// The highest cell each body occupies, indexed by body id.
+    ///
+    /// Together with `cell_min` this is the body's *cell range*: the
+    /// exact set of cells it is written into. The range is a pure
+    /// function of the AABB and the cell size, so two AABBs with the
+    /// same range put the body in exactly the same cells — which is
+    /// what lets the grid keep a body's membership across steps.
+    cell_max: Vec<(i32, i32)>,
+    /// The bodies the grid currently holds, with their cell membership.
+    ///
+    /// In the persistent mode the cells survive from step to step, so
+    /// the grid has to know which bodies it still holds: a body the
+    /// world no longer has has to be taken out of the cells, or it would
+    /// keep pairing with the rest of the scene forever.
+    tracked: Vec<usize>,
+    /// Whether each body id is in `tracked`, indexed by body id.
+    tracked_flag: Vec<bool>,
+    /// The step each body was last inserted in, indexed by body id.
+    ///
+    /// A body that is not inserted in the current step is not in the
+    /// world any more, and the grid drops it.
+    seen: Vec<u32>,
+    /// The current step, bumped by `clear`.
+    epoch: u32,
+    /// Keep the cells across steps and only re-insert the bodies that
+    /// moved.
+    ///
+    /// Profiling switch only (`phase-timing` feature): turning it off
+    /// restores the behaviour of wiping every cell and re-inserting
+    /// every body each step, so the two can be A/B measured inside one
+    /// binary. The shipped build always keeps the cells, and has no
+    /// branch in the insert path.
+    #[cfg(feature = "phase-timing")]
+    pub persistent: bool,
+    /// Only skip a body whose AABB is *bit-identical* to the one it was
+    /// inserted with.
+    ///
+    /// Profiling switch only (`phase-timing` feature), and off by
+    /// default: the shipped rule skips any body whose cell range is
+    /// unchanged, which is a pure integer comparison — the membership
+    /// depends on the range and nothing else, so both rules produce the
+    /// same pairs. The strict rule re-inserts a body whose range
+    /// survived a move that did not change its cell, which is more work
+    /// for the same result. This switch exists so the two can be
+    /// measured against each other.
+    #[cfg(feature = "phase-timing")]
+    pub persistent_strict: bool,
     /// Generate each pair once, in its owner cell, instead of once per
     /// shared cell.
     ///
@@ -116,10 +163,19 @@ impl SpatialHash2 {
             oversized: Vec::new(),
             statics: Vec::new(),
             cell_min: Vec::new(),
+            cell_max: Vec::new(),
+            tracked: Vec::new(),
+            tracked_flag: Vec::new(),
+            seen: Vec::new(),
+            epoch: 0,
             #[cfg(feature = "phase-timing")]
             owned_pairs: true,
             #[cfg(feature = "phase-timing")]
             skip_static_cells: true,
+            #[cfg(feature = "phase-timing")]
+            persistent: true,
+            #[cfg(feature = "phase-timing")]
+            persistent_strict: false,
         }
     }
 
@@ -164,10 +220,50 @@ impl SpatialHash2 {
         self.count = 0;
         self.all.clear();
         self.oversized.clear();
+        // A hard reset also drops what the grid was holding: nothing
+        // survives it.
+        self.tracked.clear();
+        self.tracked_flag.clear();
+        self.seen.clear();
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    /// Begin a step: reset what the step holds, keep what it does not.
+    ///
+    /// The cells survive the step, so the membership of a body that did
+    /// not move survives it too, and only the bodies that moved are
+    /// re-inserted. The frame-scoped lists (the bodies inserted this
+    /// step, the oversized ones) are reset either way.
+    ///
+    /// [`Self::clear`] still wipes the grid completely; this is the
+    /// step-scoped reset.
+    pub fn begin_frame(&mut self) {
+        if !self.keeps_cells() {
+            self.clear();
+            return;
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        self.count = 0;
+        self.all.clear();
+        self.oversized.clear();
     }
 
     /// Insert a body into the grid
     pub fn insert(&mut self, body_id: usize, min: Vec2, max: Vec2) {
+        self.insert_impl(body_id, min, max, false);
+    }
+
+    /// Insert a *static* body into the grid.
+    ///
+    /// A static body still pairs with every dynamic body (a resting box
+    /// needs the floor), but two statics can never touch, so the grid
+    /// skips those pairs.
+    pub fn insert_static(&mut self, body_id: usize, min: Vec2, max: Vec2) {
+        self.insert_impl(body_id, min, max, true);
+    }
+
+    /// The shared body of [`Self::insert`] and [`Self::insert_static`].
+    fn insert_impl(&mut self, body_id: usize, min: Vec2, max: Vec2, is_static: bool) {
         // Non-finite bounds (escaped NaN/inf velocity) cannot map to
         // cells — and must not reach the `as i32` casts below, which
         // saturate to i32::MIN/MAX and would hang the cell loops.
@@ -179,6 +275,13 @@ impl SpatialHash2 {
         if self.aabbs.len() <= body_id {
             self.aabbs.resize(body_id + 1, (Vec2::ZERO, Vec2::ZERO));
         }
+        if self.statics.len() <= body_id {
+            self.statics.resize(body_id + 1, false);
+        }
+        // The static flag is rewritten every step, so a body that
+        // changed kind cannot keep a stale one.
+        self.statics[body_id] = is_static;
+        let old_aabb = self.aabbs[body_id];
         self.aabbs[body_id] = (min, max);
 
         // Cells spanned per axis, computed in float to avoid overflow on
@@ -189,28 +292,66 @@ impl SpatialHash2 {
         let origin_f = (min.x.abs().max(max.x.abs()) / self.cell_size)
             .max(min.y.abs().max(max.y.abs()) / self.cell_size);
 
-        // Oversized (too many cells, or coords beyond safe cell indices):
-        // skip the grid and pair against the whole scene in `collect_pairs`.
-        if cells_f > Self::MAX_CELLS_PER_BODY as f32 || origin_f > Self::MAX_CELL_INDEX {
-            self.oversized.push(body_id);
-            return;
-        }
-
         // Calculate which cells this body overlaps.
         // Use floor (not truncation) so negative coords map correctly,
-        // and do NOT clamp to 0 �?" CellKey supports negative cells.
+        // and do NOT clamp to 0 — CellKey supports negative cells.
         let cell_min_x = (min.x / self.cell_size).floor() as i32;
         let cell_min_y = (min.y / self.cell_size).floor() as i32;
         let cell_max_x = (max.x / self.cell_size).floor() as i32;
         let cell_max_y = (max.y / self.cell_size).floor() as i32;
 
+        // Oversized (too many cells, or coords beyond safe cell indices):
+        // skip the grid and pair against the whole scene in `collect_pairs`.
+        if cells_f > Self::MAX_CELLS_PER_BODY as f32 || origin_f > Self::MAX_CELL_INDEX {
+            // A body that used to fit in the grid has to leave it.
+            if self.keeps_cells() {
+                self.untrack(body_id);
+            }
+            self.oversized.push(body_id);
+            return;
+        }
+
+        // The persistent mode: a body that did not move keeps its cells.
+        if self.keeps_cells() {
+            self.persistent_insert(
+                body_id, min, max, old_aabb, cell_min_x, cell_min_y, cell_max_x, cell_max_y,
+            );
+            return;
+        }
+
+        self.insert_into_cells(body_id, cell_min_x, cell_min_y, cell_max_x, cell_max_y);
+    }
+
+    /// Put a body into the cells of its range and record where it is.
+    ///
+    /// Both modes go through here, so the grid's bookkeeping — the
+    /// cells a body occupies, the bodies it holds, the step it was last
+    /// seen in — is the same whichever mode ran. That matters because
+    /// the profiling build switches between them from step to step: a
+    /// mode that left the bookkeeping behind would hand the next mode a
+    /// grid it cannot make sense of.
+    fn insert_into_cells(
+        &mut self,
+        body_id: usize,
+        cell_min_x: i32,
+        cell_min_y: i32,
+        cell_max_x: i32,
+        cell_max_y: i32,
+    ) {
         // Remember the lowest cell this body occupies: it is what picks
         // the single owner cell of every pair the body takes part in
         // (see `cell_min`).
         if self.cell_min.len() <= body_id {
             self.cell_min.resize(body_id + 1, (0, 0));
         }
+        if self.cell_max.len() <= body_id {
+            self.cell_max.resize(body_id + 1, (0, 0));
+        }
+        if self.tracked_flag.len() <= body_id {
+            self.tracked_flag.resize(body_id + 1, false);
+        }
         self.cell_min[body_id] = (cell_min_x, cell_min_y);
+        self.cell_max[body_id] = (cell_max_x, cell_max_y);
 
         for cx in cell_min_x..=cell_max_x {
             for cy in cell_min_y..=cell_max_y {
@@ -221,25 +362,182 @@ impl SpatialHash2 {
                     .push(body_id);
             }
         }
+
+        if self.seen.len() <= body_id {
+            self.seen.resize(body_id + 1, 0);
+        }
+        self.seen[body_id] = self.epoch;
+        if !self.tracked_flag[body_id] {
+            self.tracked.push(body_id);
+            self.tracked_flag[body_id] = true;
+        }
     }
 
-    /// Insert a *static* body into the grid.
+    /// Whether the grid keeps its cells across steps.
     ///
-    /// A static body still pairs with every dynamic body (a resting box
-    /// needs the floor), but two statics can never touch, so the grid
-    /// skips those pairs.
-    pub fn insert_static(&mut self, body_id: usize, min: Vec2, max: Vec2) {
-        if self.statics.len() <= body_id {
-            self.statics.resize(body_id + 1, false);
+    /// The shipped build always does; the profiling build can turn it
+    /// off to measure the behaviour it replaced. The `cfg` folds the
+    /// check away, so the insert path carries no branch.
+    #[inline]
+    fn keeps_cells(&self) -> bool {
+        #[cfg(feature = "phase-timing")]
+        {
+            self.persistent
         }
-        self.statics[body_id] = true;
-        self.insert(body_id, min, max);
+        #[cfg(not(feature = "phase-timing"))]
+        {
+            false
+        }
+    }
+
+    /// Whether a body is only skipped when its AABB is bit-identical to
+    /// the one it was inserted with.
+    ///
+    /// The shipped build is not strict: it skips any body whose *cell
+    /// range* is unchanged. The cells a body occupies are exactly the
+    /// cells of its range, and the range is a tuple of integers, so an
+    /// unchanged range means an unchanged membership — the pair set is
+    /// the same either way, and there is no float comparison involved.
+    ///
+    /// The strict variant re-inserts a body whose range survived a
+    /// move that did not change its cell. It produces the same pairs
+    /// for more work: on the 1500-body pile, where every body moves
+    /// every step, it made the rebuild **78 % slower** than the range
+    /// rule and the whole step **9 % slower** than the grid that wipes
+    /// and re-inserts everything. The profiling build can select it, so
+    /// the measurement can be repeated.
+    #[inline]
+    fn strict_skip(&self) -> bool {
+        #[cfg(feature = "phase-timing")]
+        {
+            self.persistent_strict
+        }
+        #[cfg(not(feature = "phase-timing"))]
+        {
+            false
+        }
     }
 
     /// Whether a body id was inserted as static.
     #[inline]
     fn is_static(&self, body_id: usize) -> bool {
         self.statics.get(body_id).copied().unwrap_or(false)
+    }
+
+    /// The persistent-mode insert: keep the cells a body already
+    /// occupies whenever it can, and only move it when it has to.
+    ///
+    /// The cell range is a pure function of the AABB and the cell size,
+    /// and the cells a body occupies are exactly the cells of its
+    /// range. So a body whose range is unchanged is in exactly the same
+    /// cells as before, and its membership can stay as it is: the grid
+    /// only has to refresh the AABB it filters pairs with.
+    ///
+    /// The strict variant insists on a bit-identical AABB instead, which
+    /// re-inserts a body whose range survived a move that did not change
+    /// its cell. Both produce the same pairs — the membership is the
+    /// same set either way, and the pair list is sorted and deduped —
+    /// so the switch only decides how much work is done.
+    #[allow(clippy::too_many_arguments)]
+    fn persistent_insert(
+        &mut self,
+        body_id: usize,
+        min: Vec2,
+        max: Vec2,
+        old_aabb: (Vec2, Vec2),
+        cell_min_x: i32,
+        cell_min_y: i32,
+        cell_max_x: i32,
+        cell_max_y: i32,
+    ) {
+        if self.seen.len() <= body_id {
+            self.seen.resize(body_id + 1, 0);
+        }
+        self.seen[body_id] = self.epoch;
+
+        let was_tracked = self.tracked_flag.get(body_id).copied().unwrap_or(false);
+        if was_tracked {
+            let old_min = self.cell_min[body_id];
+            let old_max = self.cell_max[body_id];
+            let same_range =
+                old_min == (cell_min_x, cell_min_y) && old_max == (cell_max_x, cell_max_y);
+            let same_aabb = old_aabb == (min, max);
+            if same_range && (same_aabb || !self.strict_skip()) {
+                // The membership is unchanged: the AABB in `self.aabbs`
+                // was already refreshed by the caller.
+                return;
+            }
+            self.remove_from_cells(body_id, old_min, old_max);
+        }
+
+        self.insert_into_cells(body_id, cell_min_x, cell_min_y, cell_max_x, cell_max_y);
+    }
+
+    /// Take a body out of the cells it occupies.
+    ///
+    /// A cell that runs empty is dropped from the map and its buffer
+    /// recycled, which is what keeps the map at the size of the scene's
+    /// current extent instead of every position the scene ever visited.
+    fn remove_from_cells(&mut self, body_id: usize, min: (i32, i32), max: (i32, i32)) {
+        for cx in min.0..=max.0 {
+            for cy in min.1..=max.1 {
+                let key = CellKey::new(cx, cy);
+                let empty = match self.grid.get_mut(&key) {
+                    Some(ids) => {
+                        if let Some(pos) = ids.iter().position(|&id| id == body_id) {
+                            ids.swap_remove(pos);
+                        }
+                        ids.is_empty()
+                    }
+                    None => false,
+                };
+                if empty {
+                    if let Some(mut ids) = self.grid.remove(&key) {
+                        ids.clear();
+                        self.pool.push(ids);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Take a body out of the grid entirely.
+    fn untrack(&mut self, body_id: usize) {
+        if !self.tracked_flag.get(body_id).copied().unwrap_or(false) {
+            return;
+        }
+        let min = self.cell_min[body_id];
+        let max = self.cell_max[body_id];
+        self.remove_from_cells(body_id, min, max);
+        self.tracked_flag[body_id] = false;
+        if let Some(pos) = self.tracked.iter().position(|&id| id == body_id) {
+            self.tracked.swap_remove(pos);
+        }
+    }
+
+    /// Drop the bodies the world no longer has.
+    ///
+    /// The cells survive the step, so a body that is not inserted any
+    /// more has to be taken out of them by hand — otherwise it would
+    /// keep pairing with the rest of the scene forever.
+    pub fn end_frame(&mut self) {
+        if !self.keeps_cells() {
+            return;
+        }
+        let epoch = self.epoch;
+        let mut i = 0;
+        while i < self.tracked.len() {
+            let body_id = self.tracked[i];
+            if self.seen.get(body_id).copied() != Some(epoch) {
+                let min = self.cell_min[body_id];
+                let max = self.cell_max[body_id];
+                self.remove_from_cells(body_id, min, max);
+                self.tracked_flag[body_id] = false;
+                self.tracked.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Whether two bodies' AABBs overlap.
@@ -375,6 +673,7 @@ impl SpatialHash2 {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
+                    debug_assert_ne!(a, b, "a body must not be twice in a cell");
                     // Two statics can never touch: the narrowphase
                     // discards the pair, so it is never generated.
                     if self.is_static(a) && self.is_static(b) {
@@ -509,6 +808,138 @@ mod tests {
             "expected duplicated candidates: {candidates} candidates, {} pairs",
             out.len()
         );
+    }
+
+    /// The pairs a brute-force sweep over the same AABBs produces.
+    fn brute_force_pairs(aabbs: &[(Vec2, Vec2)]) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for a in 0..aabbs.len() {
+            for b in a + 1..aabbs.len() {
+                let (amin, amax) = aabbs[a];
+                let (bmin, bmax) = aabbs[b];
+                if amin.x <= bmax.x && amax.x >= bmin.x && amin.y <= bmax.y && amax.y >= bmin.y {
+                    out.push((a, b));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn persistent_grid_does_not_reinsert_an_unchanged_body() {
+        let mut hash = SpatialHash2::new(1.0);
+        for _ in 0..3 {
+            hash.begin_frame();
+            hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(0.6, 0.6));
+            hash.end_frame();
+        }
+        let mut copies = 0;
+        for ids in hash.grid.values() {
+            copies += ids.iter().filter(|&&id| id == 0).count();
+        }
+        assert_eq!(
+            copies, 1,
+            "an unchanged body must stay in its cells exactly once"
+        );
+    }
+
+    #[test]
+    fn persistent_grid_matches_a_brute_force_sweep_over_many_steps() {
+        // The grid keeps its cells across steps and only re-inserts the
+        // bodies that moved. Whatever it does internally, the pairs it
+        // reports must be the ones a brute-force AABB sweep finds —
+        // every step, for bodies that move, that leave, and that come
+        // back.
+        let mut hash = SpatialHash2::new(1.0);
+        let mut aabbs: Vec<(Vec2, Vec2)> = Vec::new();
+        let mut step = 0usize;
+
+        for _ in 0..40 {
+            // Every third step a body leaves the scene, and a new one
+            // takes its place.
+            let leaving = if step.is_multiple_of(3) && !aabbs.is_empty() {
+                Some(aabbs.len() - 1)
+            } else {
+                None
+            };
+            if let Some(index) = leaving {
+                aabbs.remove(index);
+            }
+
+            hash.begin_frame();
+            for (id, (min, max)) in aabbs.iter().enumerate() {
+                hash.insert(id, *min, *max);
+            }
+            hash.end_frame();
+
+            let mut pairs = Vec::new();
+            hash.collect_overlapping_pairs(&mut pairs);
+            assert_eq!(
+                pairs,
+                brute_force_pairs(&aabbs),
+                "step {step}: the grid's pairs must match the sweep"
+            );
+
+            // Move everything a little, so the cells change.
+            for (min, max) in aabbs.iter_mut() {
+                let dx = ((step % 7) as f32 - 3.0) * 0.13;
+                let dy = ((step % 5) as f32 - 2.0) * 0.21;
+                *min += Vec2::new(dx, dy);
+                *max += Vec2::new(dx, dy);
+            }
+            step += 1;
+
+            if aabbs.len() < 6 {
+                // Keep the scene populated.
+                let min = Vec2::new(step as f32 * 0.37, step as f32 * 0.11);
+                aabbs.push((min, min + Vec2::new(0.6, 0.6)));
+            }
+        }
+    }
+
+    #[test]
+    fn persistent_grid_drops_a_body_that_leaves_the_scene() {
+        let mut hash = SpatialHash2::new(1.0);
+        hash.begin_frame();
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0));
+        hash.insert(1, Vec2::new(0.2, 0.2), Vec2::new(1.2, 1.2));
+        hash.end_frame();
+        let mut pairs = Vec::new();
+        hash.collect_overlapping_pairs(&mut pairs);
+        assert_eq!(pairs, vec![(0, 1)]);
+
+        // The next step has only one body: the one that left must not
+        // keep pairing with it.
+        hash.begin_frame();
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0));
+        hash.end_frame();
+        let mut pairs = Vec::new();
+        hash.collect_overlapping_pairs(&mut pairs);
+        assert!(
+            pairs.is_empty(),
+            "a body that left must not pair: {pairs:?}"
+        );
+    }
+
+    #[test]
+    fn persistent_grid_keeps_a_moved_body_pairing_with_its_neighbour() {
+        let mut hash = SpatialHash2::new(1.0);
+        hash.begin_frame();
+        hash.insert(0, Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0));
+        hash.insert(1, Vec2::new(0.5, 0.0), Vec2::new(1.5, 1.0));
+        hash.end_frame();
+
+        // Move the first body right, into the second one's cell. The
+        // pair must survive: the second body did not move, so the pair
+        // is found in the cell they now share.
+        hash.begin_frame();
+        hash.insert(0, Vec2::new(0.6, 0.0), Vec2::new(1.6, 1.0));
+        hash.insert(1, Vec2::new(0.5, 0.0), Vec2::new(1.5, 1.0));
+        hash.end_frame();
+        let mut pairs = Vec::new();
+        hash.collect_overlapping_pairs(&mut pairs);
+        assert_eq!(pairs, vec![(0, 1)], "the pair must survive the move");
     }
 
     #[test]

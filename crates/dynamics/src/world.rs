@@ -676,8 +676,11 @@ impl World2 {
             self.compute_body_aabbs();
         });
         timed!(timings.broadphase_rebuild, {
-            self.broadphase.clear();
+            self.broadphase.begin_frame();
             self.insert_body_aabbs();
+            // The grid keeps its cells across steps, so the bodies the
+            // world no longer has have to be taken out of them.
+            self.broadphase.end_frame();
         });
         timed!(timings.broadphase_pairs, {
             // Narrowphase fast path: only AABB-overlapping pairs can
@@ -1031,6 +1034,30 @@ impl World2 {
         self.broadphase.cell_count()
     }
 
+    /// Profiling only: turn the grid's persistent cells on or off.
+    ///
+    /// The persistent grid keeps its cells across steps and only
+    /// re-inserts the bodies that moved; the other behaviour wipes
+    /// every cell and re-inserts every body each step. The pair set is
+    /// the same either way, so the trajectory does not change; only the
+    /// amount of work does.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_persistent(&mut self, persistent: bool) {
+        self.broadphase.set_persistent(persistent);
+    }
+
+    /// Profiling only: whether the persistent grid only skips a body
+    /// whose AABB is bit-identical.
+    ///
+    /// The alternative skips any body whose cell range is unchanged,
+    /// which is a pure integer comparison: the cells a body occupies are
+    /// exactly the cells of its range, so an unchanged range means an
+    /// unchanged membership. Both produce the same pairs.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_persistent_strict(&mut self, strict: bool) {
+        self.broadphase.set_persistent_strict(strict);
+    }
+
     /// Profiling only: turn the grid's pair ownership rule on or off.
     ///
     /// The rule makes the grid generate each pair once, in the lowest
@@ -1136,9 +1163,12 @@ impl World2 {
 
     /// Update the broadphase with current body positions (2D)
     fn update_broadphase(&mut self) {
-        self.broadphase.clear();
+        self.broadphase.begin_frame();
         self.compute_body_aabbs();
         self.insert_body_aabbs();
+        // The grid keeps its cells across steps, so the bodies the world
+        // no longer has have to be taken out of them.
+        self.broadphase.end_frame();
     }
 
     /// Get AABB for a 2D body
@@ -1954,8 +1984,11 @@ impl World3 {
             self.compute_body_aabbs();
         });
         timed!(timings.broadphase_rebuild, {
-            self.broadphase.clear();
+            self.broadphase.begin_frame();
             self.insert_body_aabbs();
+            // The grid keeps its cells across steps, so the bodies the
+            // world no longer has have to be taken out of them.
+            self.broadphase.end_frame();
         });
         timed!(timings.broadphase_pairs, {
             pairs.clear();
@@ -2304,9 +2337,12 @@ impl World3 {
 
     /// Update the broadphase with current body positions (3D)
     fn update_broadphase(&mut self) {
-        self.broadphase.clear();
+        self.broadphase.begin_frame();
         self.compute_body_aabbs();
         self.insert_body_aabbs();
+        // The grid keeps its cells across steps, so the bodies the world
+        // no longer has have to be taken out of them.
+        self.broadphase.end_frame();
     }
 
     /// Get AABB for a body (exact for rotated boxes)
