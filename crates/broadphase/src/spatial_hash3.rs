@@ -37,6 +37,14 @@ pub struct SpatialHash3 {
     all: Vec<usize>,
     /// Bodies too large for the grid; paired against the whole scene.
     oversized: Vec<usize>,
+    /// Which body ids are static, indexed by body id (see the 2D grid).
+    ///
+    /// A pair of two static bodies can never produce an impulse (both
+    /// have infinite mass), so the narrowphase discards it. The grid
+    /// knows which bodies are static and skips those pairs at the
+    /// source, instead of generating thousands of them and throwing
+    /// them away one step later.
+    statics: Vec<bool>,
     /// The AABB of every body, indexed by body id. Used only by
     /// [`Self::collect_overlapping_pairs`] to drop candidate pairs whose
     /// AABBs are disjoint before they are pushed, sorted and deduplicated.
@@ -69,6 +77,7 @@ impl SpatialHash3 {
             pool: Vec::new(),
             all: Vec::new(),
             oversized: Vec::new(),
+            statics: Vec::new(),
             aabbs: Vec::new(),
         }
     }
@@ -108,6 +117,24 @@ impl SpatialHash3 {
         self.count = 0;
         self.all.clear();
         self.oversized.clear();
+    }
+
+    /// Insert a *static* body into the grid (see the 2D grid).
+    ///
+    /// A static body still pairs with every dynamic body, but two
+    /// statics can never touch, so the grid skips those pairs.
+    pub fn insert_static(&mut self, body_id: usize, min: Vec3, max: Vec3) {
+        if self.statics.len() <= body_id {
+            self.statics.resize(body_id + 1, false);
+        }
+        self.statics[body_id] = true;
+        self.insert(body_id, min, max);
+    }
+
+    /// Whether a body id was inserted as static.
+    #[inline]
+    fn is_static(&self, body_id: usize) -> bool {
+        self.statics.get(body_id).copied().unwrap_or(false)
     }
 
     /// Insert a body into the grid.
@@ -181,6 +208,10 @@ impl SpatialHash3 {
                 for j in (i + 1)..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
+                    // Two statics can never touch.
+                    if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
                     out.push(if a < b { (a, b) } else { (b, a) });
                 }
             }

@@ -1089,7 +1089,13 @@ impl World2 {
     fn insert_body_aabbs(&mut self) {
         let aabbs = &self.scratch.aabbs;
         for (body, (min, max)) in self.bodies.iter().zip(aabbs.iter()) {
-            self.broadphase.insert(body.id, *min, *max);
+            if body.is_static {
+                // A pair of two statics can never produce an impulse, so
+                // the broad phase does not generate it.
+                self.broadphase.insert_static(body.id, *min, *max);
+            } else {
+                self.broadphase.insert(body.id, *min, *max);
+            }
         }
     }
 
@@ -2251,7 +2257,13 @@ impl World3 {
     fn insert_body_aabbs(&mut self) {
         let aabbs = &self.scratch_aabbs;
         for (body, (min, max)) in self.bodies.iter().zip(aabbs.iter()) {
-            self.broadphase.insert(body.id, *min, *max);
+            if body.is_static {
+                // A pair of two statics can never produce an impulse, so
+                // the broad phase does not generate it.
+                self.broadphase.insert_static(body.id, *min, *max);
+            } else {
+                self.broadphase.insert(body.id, *min, *max);
+            }
         }
     }
 

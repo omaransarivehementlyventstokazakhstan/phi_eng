@@ -44,6 +44,14 @@ pub struct SpatialHash2 {
     /// 1.0 cell size would touch millions of cells and hang the step);
     /// instead they are paired against every body in `collect_pairs`.
     oversized: Vec<usize>,
+    /// Which body ids are static, indexed by body id.
+    ///
+    /// A pair of two static bodies can never produce an impulse (both
+    /// have infinite mass), so the narrowphase discards it. The grid
+    /// knows which bodies are static and skips those pairs at the
+    /// source, instead of generating thousands of them and throwing
+    /// them away one step later.
+    statics: Vec<bool>,
 }
 
 impl SpatialHash2 {
@@ -75,6 +83,7 @@ impl SpatialHash2 {
             all: Vec::new(),
             aabbs: Vec::new(),
             oversized: Vec::new(),
+            statics: Vec::new(),
         }
     }
 
@@ -170,6 +179,25 @@ impl SpatialHash2 {
         }
     }
 
+    /// Insert a *static* body into the grid.
+    ///
+    /// A static body still pairs with every dynamic body (a resting box
+    /// needs the floor), but two statics can never touch, so the grid
+    /// skips those pairs.
+    pub fn insert_static(&mut self, body_id: usize, min: Vec2, max: Vec2) {
+        if self.statics.len() <= body_id {
+            self.statics.resize(body_id + 1, false);
+        }
+        self.statics[body_id] = true;
+        self.insert(body_id, min, max);
+    }
+
+    /// Whether a body id was inserted as static.
+    #[inline]
+    fn is_static(&self, body_id: usize) -> bool {
+        self.statics.get(body_id).copied().unwrap_or(false)
+    }
+
     /// Whether two bodies' AABBs overlap.
     ///
     /// Conservative with respect to the narrow phase: an AABB contains
@@ -203,6 +231,11 @@ impl SpatialHash2 {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
+                    // Two statics can never touch: the narrowphase
+                    // discards the pair, so it is never generated.
+                    if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
                     // Canonical pair key.
                     out.push(if a < b { (a, b) } else { (b, a) });
                 }
@@ -245,6 +278,11 @@ impl SpatialHash2 {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
+                    // Two statics can never touch: the narrowphase
+                    // discards the pair, so it is never generated.
+                    if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
                     if !Self::aabbs_overlap(a, b, &self.aabbs) {
                         continue;
                     }
@@ -425,6 +463,27 @@ mod tests {
         // And the recycled buffer still works for a second body.
         hash.insert(8, Vec2::new(0.5, 0.5), Vec2::new(2.5, 2.5));
         assert_eq!(hash.get_pairs(), vec![(7, 8)]);
+    }
+
+    #[test]
+    fn test_static_pairs_are_not_generated() {
+        // A pair of two statics can never produce an impulse, so the grid
+        // must not emit it. A static and a dynamic body still pair.
+        let mut hash = SpatialHash2::new(1.0);
+        hash.insert_static(0, Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+        hash.insert_static(1, Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0));
+        hash.insert(2, Vec2::new(1.5, 1.5), Vec2::new(3.5, 3.5));
+
+        let mut pairs = Vec::new();
+        hash.collect_pairs(&mut pairs);
+        assert!(
+            !pairs.contains(&(0, 1)),
+            "a static-static pair must not be generated: {pairs:?}"
+        );
+        assert!(
+            pairs.contains(&(0, 2)) && pairs.contains(&(1, 2)),
+            "statics must still pair with dynamic bodies: {pairs:?}"
+        );
     }
 
     #[test]

@@ -43,6 +43,21 @@ impl Broadphase3 {
         }
     }
 
+    /// Insert a *static* body.
+    ///
+    /// A static body still pairs with every dynamic body, but a pair of
+    /// two statics can never produce an impulse, so the grid skips those
+    /// pairs instead of generating them for the narrowphase to discard.
+    /// The brute-force and tree backends have no such notion: they
+    /// already report only overlapping pairs, and the narrowphase
+    /// discards the static ones there.
+    pub fn insert_static(&mut self, body_id: usize, min: Vec3, max: Vec3) {
+        match self {
+            Broadphase3::SpatialHash(h) => h.insert_static(body_id, min, max),
+            _ => self.insert(body_id, min, max),
+        }
+    }
+
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         match self {
             Broadphase3::BruteForce(b) => b.collect_pairs(out),
