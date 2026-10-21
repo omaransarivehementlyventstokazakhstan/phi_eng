@@ -128,6 +128,122 @@ internal static partial class NativeMethods
         uint bodyId,
         float scale);
 
+    /// <summary>Places a body: sets its position and rotation (2D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_transform(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float angle);
+
+    /// <summary>Places a body: sets its position and rotation (3D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_transform(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float z,
+        float qx,
+        float qy,
+        float qz,
+        float qw);
+
+    /// <summary>Sets a body's angular velocity (2D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_angular_velocity(
+        IntPtr world,
+        uint bodyId,
+        float angularVelocity);
+
+    /// <summary>Reads a body's angular velocity (2D).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_angular_velocity(
+        IntPtr world,
+        uint bodyId,
+        float* outAngularVelocity);
+
+    /// <summary>Sets a body's angular velocity (3D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_angular_velocity(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float z);
+
+    /// <summary>Reads a body's angular velocity (3D).</summary>
+    /// <returns>1 on success, 0 on any invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_angular_velocity(
+        IntPtr world,
+        uint bodyId,
+        float* outAngularVelocity);
+
+    /// <summary>Applies an impulse to a body (2D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_apply_impulse(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y);
+
+    /// <summary>Applies an impulse to a body (3D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_apply_impulse(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float z);
+
+    /// <summary>Applies a force to a body (2D) for a number of seconds.</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_apply_force(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float dt);
+
+    /// <summary>Applies a force to a body (3D) for a number of seconds.</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_apply_force(
+        IntPtr world,
+        uint bodyId,
+        float x,
+        float y,
+        float z,
+        float dt);
+
+    /// <summary>Wakes a body and everything it touches (2D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_wake_body(IntPtr world, uint bodyId);
+
+    /// <summary>Wakes a body and everything it touches (3D).</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_wake_body(IntPtr world, uint bodyId);
+
+    /// <summary>The id of the body at an index (2D), or -1.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_get_body_id_at(IntPtr world, uint index);
+
+    /// <summary>The id of the body at an index (3D), or -1.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_get_body_id_at(IntPtr world, uint index);
+
     /// <summary>The bodies whose AABB overlaps a query box (2D).</summary>
     /// <returns>The number of ids written, or -1 for invalid input.</returns>
     [LibraryImport(LibraryName)]

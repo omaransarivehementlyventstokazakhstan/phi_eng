@@ -8,6 +8,17 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The native bridge can now write.** A game could read a body's state
+  through the C ABI but not change it: there was no way to place a
+  body, spin it, push it or wake it. The bridge now offers
+  \set_body_transform\, \get/set_body_angular_velocity\,
+  \pply_impulse\, \pply_force\, \wake_body\ and
+  \get_body_id_at\ (2D and 3D), with the managed wrappers
+  \PhiNativeWorld(3).SetBodyTransform/SetBodyAngularVelocity/
+  GetBodyAngularVelocity/ApplyImpulse/ApplyForce/WakeBody/GetBodyIdAt\.
+
+  Mirrored Rust↔C# tests: **F41–F46** (\crates/engine/tests/ffi_write_surface.rs\,
+  \	ests/PhiEng.Tests/FfiWriteSurfaceTests.cs\).
 - **Scene queries.** The world can now be asked which bodies are near a
   place: `World2/3::overlap_aabb` returns the bodies whose AABB
   overlaps a query box, in ascending id order, honouring the collision

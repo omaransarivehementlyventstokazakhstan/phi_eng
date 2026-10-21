@@ -399,6 +399,14 @@ contact for that frame rather than a guessed depth.
   plus managed `PhiNativeWorld(3).Set/GetBodyCollisionFilter`;
   persists in schema v13 (older files load with the default). Pinned by
   L01–L06 (Rust↔C# parity).
+- **The native bridge can write (2D and 3D):** a game could read a
+  body's state through the C ABI but not change it. The bridge now offers
+  set_body_transform, get/set_body_angular_velocity,
+  pply_impulse, pply_force, wake_body and get_body_id_at,
+  with the managed wrappers
+  PhiNativeWorld(3).SetBodyTransform/SetBodyAngularVelocity/
+  GetBodyAngularVelocity/ApplyImpulse/ApplyForce/WakeBody/GetBodyIdAt.
+  Pinned by F41–F46 (Rust↔C# parity).
 - **Scene queries (2D and 3D, both languages):** `World2/3::overlap_aabb`
   returns the bodies whose AABB overlaps a query box, in ascending id
   order, honouring the collision filter. The query runs against the

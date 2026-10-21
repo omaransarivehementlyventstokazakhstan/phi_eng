@@ -984,6 +984,116 @@ public sealed class PhiNativeWorld3 : IDisposable
     }
 
     /// <summary>
+    /// Place a body: set its position and rotation. The body keeps its
+    /// velocity; the broad phase picks the new place up at the start of
+    /// the next step.
+    /// </summary>
+    public void SetBodyTransform(int bodyId, Vector3 position, Quaternion rotation)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_body_transform(
+                _handle, (uint)bodyId, position.X, position.Y, position.Z,
+                rotation.X, rotation.Y, rotation.Z, rotation.W);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Set a body's angular velocity, in radians per second.</summary>
+    public void SetBodyAngularVelocity(int bodyId, Vector3 angularVelocity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_set_body_angular_velocity(
+                _handle, (uint)bodyId, angularVelocity.X, angularVelocity.Y, angularVelocity.Z);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Read a body's angular velocity, in radians per second.</summary>
+    public unsafe Vector3 GetBodyAngularVelocity(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var angularVelocity = new float[3];
+            int ok;
+            fixed (float* p = angularVelocity)
+            {
+                ok = NativeMethods.phieng_world3_get_body_angular_velocity(
+                    _handle, (uint)bodyId, p);
+            }
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+            return new Vector3(angularVelocity[0], angularVelocity[1], angularVelocity[2]);
+        }
+    }
+
+    /// <summary>Apply an impulse to a body, in newton-seconds.</summary>
+    public void ApplyImpulse(int bodyId, Vector3 impulse)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_apply_impulse(
+                _handle, (uint)bodyId, impulse.X, impulse.Y, impulse.Z);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Apply a force to a body, in newtons, for <paramref name="dt"/> seconds.</summary>
+    public void ApplyForce(int bodyId, Vector3 force, float dt)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_apply_force(
+                _handle, (uint)bodyId, force.X, force.Y, force.Z, dt);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Wake a body and everything it touches, so a sleeper responds again.</summary>
+    public void WakeBody(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world3_wake_body(_handle, (uint)bodyId);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>The id of the body at an index, or -1 past the end.</summary>
+    public int GetBodyIdAt(int index)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return NativeMethods.phieng_world3_get_body_id_at(_handle, (uint)index);
+        }
+    }
+
+    /// <summary>
     /// The bodies whose AABB overlaps the query box, in ascending id
     /// order. A body is reported only when the filter accepts it.
     /// </summary>

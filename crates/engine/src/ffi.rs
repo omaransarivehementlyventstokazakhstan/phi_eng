@@ -1497,6 +1497,349 @@ pub unsafe extern "C" fn phieng_world3_overlap_aabb(
     count as i32
 }
 
+/// Place a body: set its position and rotation (2D).
+///
+/// The body keeps its velocity. The broad phase is rebuilt at the start
+/// of the next step, so the new place is what the simulation sees.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_transform(
+    world: *mut World2,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    angle: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(angle) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].transform.position = glam::Vec2::new(x, y);
+    world_ref.bodies[index].transform.rotation = glam::Mat2::from_angle(angle);
+    1
+}
+
+/// Place a body: set its position and rotation (3D). See
+/// [`phieng_world_set_body_transform`].
+/// # Safety
+/// See [`phieng_world3_set_body_gravity_scale`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_transform(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+) -> i32 {
+    if world.is_null()
+        || !valid(x)
+        || !valid(y)
+        || !valid(z)
+        || !valid(qx)
+        || !valid(qy)
+        || !valid(qz)
+        || !valid(qw)
+    {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].transform.position = glam::Vec3::new(x, y, z);
+    world_ref.bodies[index].transform.rotation = glam::Quat::from_xyzw(qx, qy, qz, qw);
+    1
+}
+
+/// Set a body's angular velocity (2D), in radians per second.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_angular_velocity(
+    world: *mut World2,
+    body_id: u32,
+    angular_velocity: f32,
+) -> i32 {
+    if world.is_null() || !valid(angular_velocity) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].angular_velocity = angular_velocity;
+    1
+}
+
+/// Read a body's angular velocity (2D), in radians per second.
+///
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_angular_velocity(
+    world: *const World2,
+    body_id: u32,
+    out_angular_velocity: *mut f32,
+) -> i32 {
+    if world.is_null() || out_angular_velocity.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    *out_angular_velocity = world_ref.bodies[index].angular_velocity;
+    1
+}
+
+/// Set a body's angular velocity (3D), in radians per second.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_angular_velocity(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(z) {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].angular_velocity = glam::Vec3::new(x, y, z);
+    1
+}
+
+/// Read a body's angular velocity (3D), in radians per second.
+///
+/// Returns 1 on success, 0 on any invalid input.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_angular_velocity(
+    world: *const phieng_dynamics::World3,
+    body_id: u32,
+    out_angular_velocity: *mut f32,
+) -> i32 {
+    if world.is_null() || out_angular_velocity.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let body = &world_ref.bodies[index];
+    let out = unsafe { std::slice::from_raw_parts_mut(out_angular_velocity, 3) };
+    out[0] = body.angular_velocity.x;
+    out[1] = body.angular_velocity.y;
+    out[2] = body.angular_velocity.z;
+    1
+}
+
+/// Apply an impulse to a body (2D), in newton-seconds.
+///
+/// Returns 1 on success, 0 for a null world, an unknown body, or a
+/// non-finite impulse.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_apply_impulse(
+    world: *mut World2,
+    body_id: u32,
+    x: f32,
+    y: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let point = world_ref.bodies[index].transform.position;
+    world_ref.bodies[index].apply_impulse(glam::Vec2::new(x, y), point);
+    1
+}
+
+/// Apply an impulse to a body (3D), in newton-seconds.
+///
+/// Returns 1 on success, 0 for a null world, an unknown body, or a
+/// non-finite impulse.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_apply_impulse(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(z) {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let point = world_ref.bodies[index].transform.position;
+    world_ref.bodies[index].apply_impulse(glam::Vec3::new(x, y, z), point);
+    1
+}
+
+/// Apply a force to a body (2D), in newtons, for `dt` seconds.
+///
+/// The force is applied at the body's centre of mass, so it changes
+/// the body's velocity but not its spin.
+///
+/// Returns 1 on success, 0 for a null world, an unknown body, or a
+/// non-finite force.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_apply_force(
+    world: *mut World2,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    dt: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(dt) {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let point = world_ref.bodies[index].transform.position;
+    world_ref.bodies[index].apply_force(glam::Vec2::new(x, y), point, dt);
+    1
+}
+
+/// Apply a force to a body (3D), in newtons, for `dt` seconds.
+///
+/// Returns 1 on success, 0 for a null world, an unknown body, or a
+/// non-finite force.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_apply_force(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    dt: f32,
+) -> i32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(z) || !valid(dt) {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let point = world_ref.bodies[index].transform.position;
+    world_ref.bodies[index].apply_force(glam::Vec3::new(x, y, z), point, dt);
+    1
+}
+
+/// Wake a body and everything it touches (2D), so a sleeping body
+/// responds again.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_wake_body(world: *mut World2, body_id: u32) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    if body_by_id(world_ref, body_id).is_none() {
+        return 0;
+    }
+    world_ref.wake_body(body_id as usize);
+    1
+}
+
+/// Wake a body and everything it touches (3D).
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_wake_body(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    if body3_by_id(world_ref, body_id).is_none() {
+        return 0;
+    }
+    world_ref.wake_body(body_id as usize);
+    1
+}
+
+/// The id of the body at `index` (2D), or -1 when the index is past the
+/// end.
+///
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_id_at(world: *const World2, index: u32) -> i32 {
+    if world.is_null() {
+        return -1;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    match world_ref.bodies.get(index as usize) {
+        Some(body) => body.id as i32,
+        None => -1,
+    }
+}
+
+/// The id of the body at `index` (3D), or -1 when the index is past the
+/// end.
+///
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_id_at(
+    world: *const phieng_dynamics::World3,
+    index: u32,
+) -> i32 {
+    if world.is_null() {
+        return -1;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    match world_ref.bodies.get(index as usize) {
+        Some(body) => body.id as i32,
+        None => -1,
+    }
+}
+
 /// Set a body's collision filter (2D).
 ///
 /// `group` is the layer the body belongs to; `mask` is the set of

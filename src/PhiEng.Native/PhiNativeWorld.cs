@@ -944,6 +944,111 @@ public sealed class PhiNativeWorld : IDisposable
     }
 
     /// <summary>
+    /// Place a body: set its position and rotation. The body keeps its
+    /// velocity; the broad phase picks the new place up at the start of
+    /// the next step.
+    /// </summary>
+    public void SetBodyTransform(int bodyId, Vector2 position, float angle)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_body_transform(
+                _handle, (uint)bodyId, position.X, position.Y, angle);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Set a body's angular velocity, in radians per second.</summary>
+    public void SetBodyAngularVelocity(int bodyId, float angularVelocity)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_body_angular_velocity(
+                _handle, (uint)bodyId, angularVelocity);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Read a body's angular velocity, in radians per second.</summary>
+    public unsafe float GetBodyAngularVelocity(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            float angularVelocity;
+            int ok = NativeMethods.phieng_world_get_body_angular_velocity(
+                _handle, (uint)bodyId, &angularVelocity);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+            return angularVelocity;
+        }
+    }
+
+    /// <summary>Apply an impulse to a body, in newton-seconds.</summary>
+    public void ApplyImpulse(int bodyId, Vector2 impulse)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_apply_impulse(
+                _handle, (uint)bodyId, impulse.X, impulse.Y);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Apply a force to a body, in newtons, for <paramref name="dt"/> seconds.</summary>
+    public void ApplyForce(int bodyId, Vector2 force, float dt)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_apply_force(
+                _handle, (uint)bodyId, force.X, force.Y, dt);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Wake a body and everything it touches, so a sleeper responds again.</summary>
+    public void WakeBody(int bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_wake_body(_handle, (uint)bodyId);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>The id of the body at an index, or -1 past the end.</summary>
+    public int GetBodyIdAt(int index)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return NativeMethods.phieng_world_get_body_id_at(_handle, (uint)index);
+        }
+    }
+
+    /// <summary>
     /// The bodies whose AABB overlaps the query box, in ascending id
     /// order. A body is reported only when the filter accepts it.
     /// </summary>
