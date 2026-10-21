@@ -554,6 +554,21 @@ cannot resolve anything below ~15 %: two builds of *identical* source
 differ by 6–10 % per phase because the code layout moved.
 `PERF_BASELINE.md` documents all three confounds and their fixes.
 
+## Baseline matrix 1d (pair ownership rule, 2026-10-21)
+
+A body sits in every grid cell its AABB spans, so a pair of neighbours
+that share two or four cells was found in each of them — the same pair,
+several times over, before the sort and dedupe. The grid now gives
+every pair one *owner* cell: the lowest cell both bodies span, which
+both of them therefore occupy. No pair is lost; each is generated
+exactly once.
+
+| Measure | Value | Notes |
+|---|---|---|
+| broadphase pair phase | **−18 % to −20 %** | four independent repeats |
+| whole 2D pile step | **−3 % to −7 %** | same repeats |
+| every pinned hash | **bit-identical** | the pair set is unchanged |
+
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead
 dominates (0.50x Rust scoped-threads, 0.56x C# threadpool this run;

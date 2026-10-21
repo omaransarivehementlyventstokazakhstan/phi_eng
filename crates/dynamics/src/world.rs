@@ -1031,6 +1031,17 @@ impl World2 {
         self.broadphase.cell_count()
     }
 
+    /// Profiling only: turn the grid's pair ownership rule on or off.
+    ///
+    /// The rule makes the grid generate each pair once, in the lowest
+    /// cell the two bodies share, instead of once per shared cell. The
+    /// pair set is the same either way, so the trajectory does not
+    /// change; only the amount of duplicated candidate work does.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_owned_pairs(&mut self, owned: bool) {
+        self.broadphase.set_owned_pairs(owned);
+    }
+
     /// Wake a body and cascade through its contact partners and joint
     /// partners, transitively. The woken set is a fixpoint over
     /// idempotent flags, so map iteration order cannot affect the

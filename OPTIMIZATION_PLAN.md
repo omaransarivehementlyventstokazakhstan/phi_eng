@@ -200,7 +200,22 @@ pub enum BroadphaseMode {
   the fat body and the packed record both implement), the same values
   are copied, and the same arithmetic runs in the same order, so every
   pinned hash is unchanged. Measured with the same harness: the solver
-  phase **−6 % to −10 %**, the whole step **−2 % to −5.5 %**.
+  phase **−6 % to −10 %**, the whole step **−2 % to −5.5 %** — and the
+  advantage grows with the scene (**−14.9 %** on the solver phase at
+  4500 bodies), because the fat body array stops fitting in cache long
+  before the packed one does.
+- **Shipped (pair ownership rule)**: the grid holds a body in every
+  cell its AABB spans, so a pair of neighbours that share two or four
+  cells was generated in each of them — the same pair, several times
+  over, before the sort and dedupe that the output contract requires.
+  The grid now gives every pair one *owner* cell, the lowest cell both
+  bodies span (which both of them therefore occupy, so no pair is
+  lost), and emits the pair only there. The candidate list that has to
+  be sorted and deduplicated shrinks from a multiple of the pair set to
+  the pair set itself. The pair set is unchanged, so every pinned hash
+  is unchanged. Measured with the same harness: the pair phase **−18 %
+  to −20 %**, the whole step **−3 % to −7 %**, every other phase inside
+  the noise band.
 - **Shipped (grid hashing)**: the contact cache already used FxHash —
   a single multiply-rotate per word — because its keys are internal
   `(body_a, body_b)` pairs. The broad-phase grid had the same kind of

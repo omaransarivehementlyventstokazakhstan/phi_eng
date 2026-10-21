@@ -52,6 +52,29 @@ pub struct SpatialHash2 {
     /// source, instead of generating thousands of them and throwing
     /// them away one step later.
     statics: Vec<bool>,
+    /// The lowest cell each body occupies, indexed by body id.
+    ///
+    /// A body is inserted into every cell its AABB spans, so a pair of
+    /// bodies that share several cells is found in each of them — the
+    /// same pair, several times over, before the sort and dedupe that
+    /// the output contract requires. The lowest cell of each body is
+    /// enough to pick one owner for every pair: the owner is
+    /// `(max(a.x, b.x), max(a.y, b.y))`, the lowest cell both bodies
+    /// share, and the pair is emitted only there. Every shared cell
+    /// still contains both bodies, so no pair is lost — each one is
+    /// generated exactly once, and the candidate list that gets sorted
+    /// and deduplicated shrinks by the duplication factor.
+    cell_min: Vec<(i32, i32)>,
+    /// Generate each pair once, in its owner cell, instead of once per
+    /// shared cell.
+    ///
+    /// Profiling switch only (`phase-timing` feature): turning it off
+    /// restores the behaviour of generating the pair in every cell the
+    /// two bodies share, so the two can be A/B measured inside one
+    /// binary. The shipped build has no such switch and no branch in
+    /// the pair loop.
+    #[cfg(feature = "phase-timing")]
+    pub owned_pairs: bool,
 }
 
 impl SpatialHash2 {
@@ -84,6 +107,9 @@ impl SpatialHash2 {
             aabbs: Vec::new(),
             oversized: Vec::new(),
             statics: Vec::new(),
+            cell_min: Vec::new(),
+            #[cfg(feature = "phase-timing")]
+            owned_pairs: true,
         }
     }
 
@@ -168,6 +194,14 @@ impl SpatialHash2 {
         let cell_max_x = (max.x / self.cell_size).floor() as i32;
         let cell_max_y = (max.y / self.cell_size).floor() as i32;
 
+        // Remember the lowest cell this body occupies: it is what picks
+        // the single owner cell of every pair the body takes part in
+        // (see `cell_min`).
+        if self.cell_min.len() <= body_id {
+            self.cell_min.resize(body_id + 1, (0, 0));
+        }
+        self.cell_min[body_id] = (cell_min_x, cell_min_y);
+
         for cx in cell_min_x..=cell_max_x {
             for cy in cell_min_y..=cell_max_y {
                 let key = CellKey::new(cx, cy);
@@ -212,6 +246,26 @@ impl SpatialHash2 {
         }
     }
 
+    /// Whether cell `(cx, cy)` is the single owner of the pair `(a, b)`.
+    ///
+    /// The owner is the lowest cell both bodies span, so a pair that
+    /// shares several cells is generated in exactly one of them. The
+    /// pair set is unchanged — the same pairs, in the same canonical
+    /// order — but the list that has to be sorted and deduplicated is
+    /// as long as the pair set instead of a multiple of it.
+    #[inline]
+    fn owns_pair(&self, a: usize, b: usize, cx: i32, cy: i32) -> bool {
+        // The profiling build can turn the rule off to measure the
+        // behaviour it replaced.
+        #[cfg(feature = "phase-timing")]
+        if !self.owned_pairs {
+            return true;
+        }
+        let (ax, ay) = self.cell_min[a];
+        let (bx, by) = self.cell_min[b];
+        cx == ax.max(bx) && cy == ay.max(by)
+    }
+
     /// Get potential collision pairs
     pub fn get_pairs(&mut self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
@@ -226,7 +280,7 @@ impl SpatialHash2 {
     /// than hash-based dedupe for typical pair counts.
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
-        for cell_ids in self.grid.values() {
+        for (key, cell_ids) in &self.grid {
             for i in 0..cell_ids.len() {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
@@ -234,6 +288,12 @@ impl SpatialHash2 {
                     // Two statics can never touch: the narrowphase
                     // discards the pair, so it is never generated.
                     if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
+                    // Emit the pair in its owner cell only: the bodies
+                    // share this cell, and every shared cell holds both
+                    // of them, so the pair is still generated — once.
+                    if !self.owns_pair(a, b, key.x, key.y) {
                         continue;
                     }
                     // Canonical pair key.
@@ -273,7 +333,7 @@ impl SpatialHash2 {
     /// it here would blind the substepping decision.
     pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
-        for cell_ids in self.grid.values() {
+        for (key, cell_ids) in &self.grid {
             for i in 0..cell_ids.len() {
                 for j in i + 1..cell_ids.len() {
                     let a = cell_ids[i];
@@ -281,6 +341,11 @@ impl SpatialHash2 {
                     // Two statics can never touch: the narrowphase
                     // discards the pair, so it is never generated.
                     if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
+                    // Emit the pair in its owner cell only (see
+                    // `owns_pair`).
+                    if !self.owns_pair(a, b, key.x, key.y) {
                         continue;
                     }
                     if !Self::aabbs_overlap(a, b, &self.aabbs) {
@@ -339,6 +404,75 @@ impl Default for SpatialHash2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every candidate pair the cells hold, before the owner rule.
+    ///
+    /// The grid's pair set is the deduplicated, sorted output; this is
+    /// the raw candidate count, which is what the owner rule shrinks.
+    fn candidate_count(hash: &SpatialHash2) -> usize {
+        hash.grid
+            .values()
+            .map(|ids| ids.len() * (ids.len().saturating_sub(1)) / 2)
+            .sum()
+    }
+
+    #[test]
+    fn each_pair_is_generated_once() {
+        // Bodies of diameter 0.6 in cells of size 1.0: most of them span
+        // two cells, so a pair of neighbours is found in two or four
+        // cells. The owner rule must emit it exactly once, while the
+        // pair set itself stays the same.
+        let mut hash = SpatialHash2::new(1.0);
+        let mut expected = Vec::new();
+        let mut boxes = Vec::new();
+        for i in 0..64usize {
+            let x = (i % 8) as f32 * 0.5;
+            let y = (i / 8) as f32 * 0.5;
+            let min = Vec2::new(x, y);
+            let max = Vec2::new(x + 0.6, y + 0.6);
+            hash.insert(i, min, max);
+            boxes.push((min, max));
+        }
+        for i in 0..boxes.len() {
+            for j in i + 1..boxes.len() {
+                let (amin, amax) = boxes[i];
+                let (bmin, bmax) = boxes[j];
+                if amin.x <= bmax.x && amax.x >= bmin.x && amin.y <= bmax.y && amax.y >= bmin.y {
+                    expected.push((i, j));
+                }
+            }
+        }
+        expected.sort_unstable();
+
+        let mut out = Vec::new();
+        hash.collect_overlapping_pairs(&mut out);
+        assert_eq!(out, expected, "the pair set must be unchanged");
+        assert_eq!(
+            out.len(),
+            candidate_count(&hash).min(out.len()),
+            "every candidate is emitted at most once"
+        );
+    }
+
+    #[test]
+    fn owner_rule_drops_the_duplicates() {
+        // The owner rule must actually remove work: with bodies that
+        // span several cells, the candidates outnumber the pairs.
+        let mut hash = SpatialHash2::new(1.0);
+        for i in 0..64usize {
+            let x = (i % 8) as f32 * 0.5;
+            let y = (i / 8) as f32 * 0.5;
+            hash.insert(i, Vec2::new(x, y), Vec2::new(x + 0.6, y + 0.6));
+        }
+        let candidates = candidate_count(&hash);
+        let mut out = Vec::new();
+        hash.collect_overlapping_pairs(&mut out);
+        assert!(
+            candidates > out.len(),
+            "expected duplicated candidates: {candidates} candidates, {} pairs",
+            out.len()
+        );
+    }
 
     #[test]
     fn test_spatial_hash_insert_and_get_pairs() {

@@ -165,7 +165,6 @@ cargo run -p phieng --example bench_solver_ab --release --features phase-timing
 ```
 
 ## The packed solver view (shipped)
-
 The solver's inner loop reads position, velocity, angular velocity,
 inverse mass and inverse inertia for both ends of every constraint, on
 every iteration. In `RigidBody2` those fields sit at offsets 16, 56, 96,
@@ -190,6 +189,34 @@ Measured with the harness above (three independent repeats):
 Every other phase stayed within noise, as it must: the packed view only
 touches the solver. All hashes are bit-identical (2D, 3D, islands serial
 **and** parallel).
+
+The advantage grows with the scene: at 4500 bodies the same comparison
+gives the solver phase **−14.9 %** and the whole step **−7.0 %**, because
+the direct view's 176-byte bodies no longer fit in cache while the
+packed view's 32-byte records still do.
+
+## The pair ownership rule (shipped)
+
+A body is inserted into every grid cell its AABB spans, so two
+neighbours that share two or four cells were found in each of them — the
+same pair, several times over, before the sort and dedupe the output
+contract requires. The grid now picks one *owner* cell per pair: the
+lowest cell both bodies span, which both of them therefore occupy. No
+pair is lost (every shared cell still holds both bodies), each pair is
+generated exactly once, and the list that has to be sorted and
+deduplicated is as long as the pair set instead of a multiple of it.
+
+Measured with the same harness (the rule toggled between segments,
+everything else held fixed):
+
+| Phase | Owned | Unowned | Delta |
+| ----- | ----- | ------- | ----- |
+| broadphase: pairs | 61.7–68.4 ms | 76.7–83.4 ms | **−18 % to −20 %** |
+| TOTAL (wall clock) | 476–525 ms | 498–541 ms | **−3 % to −7 %** |
+
+Every other phase stayed inside the noise band, as it must: the rule
+only changes how many times a pair is *examined*, not which pairs exist.
+The pair set is identical, so all hashes are bit-identical.
 
 ## The overhaul, end to end
 

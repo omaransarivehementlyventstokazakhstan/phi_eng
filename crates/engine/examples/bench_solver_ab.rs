@@ -1,16 +1,23 @@
-﻿//! Same-binary, same-process A/B of the solver's body view.
+//! Same-binary, same-process A/B of two implementations of one phase.
 //!
 //! Cross-binary benchmarking on a busy machine cannot resolve small
 //! effects: two builds of *identical* source routinely differ by 6-10 %
-//! per phase because the code layout moved, and that offset never
-//! averages out (it is a fixed property of each binary). This example
-//! removes both confounds Ã¢â‚¬â€ the two variants live in one binary, and
-//! they are measured in the same process, back to back.
+//! per phase because the code layout moved. That offset never averages
+//! out (it is a fixed property of each binary), and the heap layout adds
+//! a second one: a variant that allocates a different scratch moves the
+//! body's array to a different address and changes its cache-set
+//! aliasing, worth several percent in *every* phase.
 //!
-//! The variants are the solver's packed body view (the default) and the
-//! direct fat-body view, selected by `Solver::packed`. The switch only
-//! exists in the `phase-timing` build, so the shipped default build has
-//! exactly one path.
+//! This harness removes all three confounds:
+//!   * one binary, so there is no code-layout difference;
+//!   * one world, so there is no heap-layout difference;
+//!   * the two variants alternate every few steps, so the pile's own
+//!     settling drift (the pile keeps moving while the measurement runs,
+//!     so whichever variant is measured last looks cheapest) hits both
+//!     equally.
+//!
+//! The variants are selected by the `phase-timing` build's profiling
+//! switches, which do not exist in the shipped build.
 //!
 //! Run with:
 //!
@@ -31,14 +38,6 @@ mod harness {
     use phieng_dynamics::PhaseTimings;
 
     const DT: f32 = 1.0 / 60.0;
-    /// Bodies in the 2D pile. Matches `bench_large` and `bench_phases`.
-    const BODIES: usize = 1500;
-    /// Steps per measurement block. Long enough that the first (cold)
-    /// steps do not dominate the block's average.
-    const BLOCK: usize = 300;
-    /// Measurement blocks. The reported number per phase is the minimum
-    /// over the blocks, which is the least perturbed sample.
-    const BLOCKS: usize = 7;
     /// Steps per measured segment. Short enough that the settling drift
     /// over one segment is negligible, long enough that the timing is
     /// not dominated by the clock's own resolution.
@@ -46,6 +45,54 @@ mod harness {
     /// Measured segments. The two variants alternate every segment, so
     /// each covers half of them.
     const SEGMENTS: usize = 40;
+
+    /// Which implementation a measured segment uses.
+    ///
+    /// Every variant leaves the trajectory bit-identical -- that is the
+    /// point of the switches -- so the world stays in lockstep whichever
+    /// variant runs, and the two cover the same span of the simulation.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Variant {
+        /// The solver's packed body view (the shipped one).
+        PackedSolver,
+        /// The solver's direct fat-body view.
+        DirectSolver,
+        /// The broad-phase grid's pair ownership rule (the shipped one).
+        OwnedPairs,
+        /// The broad-phase grid's old behaviour: the pair is generated
+        /// in every cell the two bodies share.
+        UnownedPairs,
+    }
+
+    impl Variant {
+        /// Label used in the report.
+        fn name(self) -> &'static str {
+            match self {
+                Variant::PackedSolver => "packed",
+                Variant::DirectSolver => "direct",
+                Variant::OwnedPairs => "owned",
+                Variant::UnownedPairs => "unowned",
+            }
+        }
+
+        /// Select this variant in the world.
+        fn apply(self, world: &mut World2) {
+            match self {
+                Variant::PackedSolver | Variant::OwnedPairs => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(true);
+                }
+                Variant::DirectSolver => {
+                    world.solver.packed = false;
+                    world.set_broadphase_owned_pairs(true);
+                }
+                Variant::UnownedPairs => {
+                    world.solver.packed = true;
+                    world.set_broadphase_owned_pairs(false);
+                }
+            }
+        }
+    }
 
     /// FNV-1a over the bodies' state, the same hash `bench_large` pins.
     fn final_hash(world: &World2) -> u64 {
@@ -66,10 +113,14 @@ mod harness {
     }
 
     /// Build the pile scene, identical for every variant.
-    fn build_pile(packed: bool) -> World2 {
+    ///
+    /// The body count is a parameter so the same harness can be run at
+    /// several scene sizes: the packed view's whole point is that its
+    /// working set is 32 bytes per body, so the wider the scene, the
+    /// more the direct view's fat bodies should hurt.
+    fn build_pile(bodies: usize) -> World2 {
         let mut world = World2::new();
         world.gravity = Vec2::new(0.0, -9.81);
-        world.solver.packed = packed;
         world
             .add_static_body(
                 Vec2::new(0.0, -1.0),
@@ -78,7 +129,7 @@ mod harness {
                 },
             )
             .expect("valid shape");
-        for i in 0..BODIES {
+        for i in 0..bodies {
             let x = -14.0 + (i as f32 % 30.0) * 0.95;
             let y = 2.0 + (i as f32 / 30.0) * 0.75;
             if i % 3 == 0 {
@@ -132,18 +183,8 @@ mod harness {
         }
     }
 
-    /// Measure ONE variant in this process, alone, with a warm cache.
-    ///
-    /// The interleaved mode above is the fairest comparison of the two
-    /// paths, but it evicts each world's bodies from cache on every step,
-    /// which is not how the engine runs. This mode measures one variant
-    /// in a dedicated process instead, and the driver alternates the two
-    /// processes: same binary (no layout confound), realistic cache
-    /// behaviour, and the order alternation cancels the CPU-boost bias.
-    ///
-    /// Prints `phase <name> <ms>` lines and a `total <ms>` line.
-    pub fn run_solo(packed: bool) {
-        let mut world = build_pile(packed);
+    /// Settle the pile the way `bench_large` and `bench_phases` do.
+    fn settle(world: &mut World2) {
         for _ in 0..900 {
             world.step(DT);
         }
@@ -159,80 +200,32 @@ mod harness {
             }
         }
         world.solver.iterations = 8;
-
-        let mut best: Vec<f64> = vec![f64::MAX; PHASES.len()];
-        let mut best_total = f64::MAX;
-        for _ in 0..BLOCKS {
-            world.reset_phase_timings();
-            let start = std::time::Instant::now();
-            for _ in 0..BLOCK {
-                world.step(DT);
-            }
-            let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let timings = *world.phase_timings();
-            for (i, name) in PHASES.iter().enumerate() {
-                best[i] = best[i].min(phase_ms(&timings, name));
-            }
-            best_total = best_total.min(wall_ms / BLOCK as f64);
-        }
-        for (i, name) in PHASES.iter().enumerate() {
-            println!("phase {name} {:.6}", best[i]);
-        }
-        println!("total {best_total:.6}");
     }
 
-    /// The definitive A/B: ONE world, ONE heap layout, the two solver
-    /// paths alternating segment by segment.
-    ///
-    /// Every other comparison has a confound this one does not:
-    ///   * two binaries differ in code layout (6-10 % on this machine);
-    ///   * two processes differ in heap layout Ã¢â‚¬â€ the packed path
-    ///     allocates a 48 KB scratch, which moves the body's array to a
-    ///     different address and changes its cache-set aliasing, worth
-    ///     several percent in EVERY phase;
-    ///   * two interleaved worlds evict each other from cache;
-    ///   * long blocks drift, because the pile keeps settling while the
-    ///     measurement runs, so whichever variant is measured last looks
-    ///     cheapest no matter which code it ran.
-    ///
-    /// Here the world, its bodies and its heap are identical for both
-    /// variants; only the solver's body view changes. The variant
-    /// alternates every few steps, so the two variants cover the same
-    /// span of the simulation and the settling drift hits both equally.
-    /// The reported number per phase is the total over all segments.
-    pub fn run_alternating() {
-        let mut world = build_pile(true);
-        for _ in 0..900 {
+    /// The definitive A/B: ONE world, ONE heap layout, the two variants
+    /// alternating segment by segment.
+    pub fn run_alternating(a: Variant, b: Variant, bodies: usize) {
+        let mut world = build_pile(bodies);
+        settle(&mut world);
+
+        // Any scratch a variant allocates must already be allocated
+        // before the measured segments, or the first segment of that
+        // variant would change the heap layout the other is measured
+        // against.
+        for variant in [a, b] {
+            variant.apply(&mut world);
             world.step(DT);
         }
-        for iters in [1usize, 8] {
-            world.solver.iterations = iters;
-            for _ in 0..30 {
-                world.step(DT);
-            }
-            for _ in 0..5 {
-                for _ in 0..300 {
-                    world.step(DT);
-                }
-            }
-        }
-        world.solver.iterations = 8;
 
-        // The packed path's scratch must already be allocated before the
-        // measured segments, or the first packed segment would change
-        // the heap layout the direct segments are measured against.
-        world.solver.packed = true;
-        world.step(DT);
-
-        let mut acc_packed: Vec<f64> = vec![0.0; PHASES.len()];
-        let mut acc_direct: Vec<f64> = vec![0.0; PHASES.len()];
-        let mut total_packed = 0.0;
-        let mut total_direct = 0.0;
-        let mut trend: Vec<f64> = Vec::new();
+        let mut acc_a: Vec<f64> = vec![0.0; PHASES.len()];
+        let mut acc_b: Vec<f64> = vec![0.0; PHASES.len()];
+        let mut total_a = 0.0;
+        let mut total_b = 0.0;
 
         for segment in 0..SEGMENTS {
-            let is_packed = segment % 2 == 0;
-            world.solver.packed = is_packed;
+            let is_a = segment % 2 == 0;
+            let variant = if is_a { a } else { b };
+            variant.apply(&mut world);
             world.reset_phase_timings();
             let start = std::time::Instant::now();
             for _ in 0..SEGMENT_STEPS {
@@ -243,58 +236,58 @@ mod harness {
             let steps = SEGMENT_STEPS as f64;
             for (i, name) in PHASES.iter().enumerate() {
                 let ms = phase_ms(&timings, name) * steps;
-                if is_packed {
-                    acc_packed[i] += ms;
+                if is_a {
+                    acc_a[i] += ms;
                 } else {
-                    acc_direct[i] += ms;
+                    acc_b[i] += ms;
                 }
             }
-            trend.push(wall_ms / steps);
-            if is_packed {
-                total_packed += wall_ms;
+            if is_a {
+                total_a += wall_ms;
             } else {
-                total_direct += wall_ms;
+                total_b += wall_ms;
             }
         }
 
         println!("final hash {:#x}", final_hash(&world));
-        // The per-segment trend must be flat: if it is not, the scene is
-        // still changing and the comparison is not fair.
-        let first = trend[0];
-        let last = trend[trend.len() - 1];
         println!(
-            "per-step trend: first {:.4} ms, last {:.4} ms ({:+.1} %)",
-            first,
-            last,
-            100.0 * (last - first) / first
-        );
-
-        println!(
-            "\n{:<14} {:>10} {:>10} {:>9}",
-            "phase", "packed", "direct", "delta"
+            "\n{:<14} {:>10} {:>10} {:>9}   ({} vs {})",
+            "phase",
+            a.name(),
+            b.name(),
+            "delta",
+            a.name(),
+            b.name()
         );
         for (i, name) in PHASES.iter().enumerate() {
-            let p = acc_packed[i];
-            let d = acc_direct[i];
-            let delta = 100.0 * (p - d) / d;
-            println!("{name:<14} {p:>10.4} {d:>10.4} {delta:>8.1}%");
+            let va = acc_a[i];
+            let vb = acc_b[i];
+            let delta = 100.0 * (va - vb) / vb;
+            println!("{name:<14} {va:>10.4} {vb:>10.4} {delta:>8.1}%");
         }
-        let total_delta = 100.0 * (total_packed - total_direct) / total_direct;
+        let total_delta = 100.0 * (total_a - total_b) / total_b;
         println!(
             "{:<14} {:>10.4} {:>10.4} {:>8.1}%  (wall clock)",
-            "TOTAL", total_packed, total_direct, total_delta
+            "TOTAL", total_a, total_b, total_delta
         );
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `bench_solver_ab [comparison] [bodies]`. The body count defaults
+    // to the 1500 of `bench_large`; larger scenes show how the two
+    // variants scale.
     #[cfg(feature = "phase-timing")]
-    match args.first().map(String::as_str) {
-        Some("packed") => harness::run_solo(true),
-        Some("direct") => harness::run_solo(false),
-        Some("alternate") => harness::run_alternating(),
-        _ => harness::run_alternating(),
+    {
+        use harness::Variant;
+        let comparison = args.first().map(String::as_str).unwrap_or("solver");
+        let bodies: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1500);
+        let (a, b) = match comparison {
+            "pairs" => (Variant::OwnedPairs, Variant::UnownedPairs),
+            _ => (Variant::PackedSolver, Variant::DirectSolver),
+        };
+        harness::run_alternating(a, b, bodies);
     }
     #[cfg(not(feature = "phase-timing"))]
     {

@@ -45,6 +45,27 @@ pub struct SpatialHash3 {
     /// source, instead of generating thousands of them and throwing
     /// them away one step later.
     statics: Vec<bool>,
+    /// The lowest cell each body occupies, indexed by body id.
+    ///
+    /// A body is inserted into every cell its AABB spans, so a pair of
+    /// bodies that share several cells is found in each of them — the
+    /// same pair, several times over, before the sort and dedupe that
+    /// the output contract requires. The lowest cell of each body is
+    /// enough to pick one owner for every pair: the owner is
+    /// `(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z))`, the lowest cell
+    /// both bodies share, and the pair is emitted only there. Every
+    /// shared cell still contains both bodies, so no pair is lost.
+    cell_min: Vec<(i32, i32, i32)>,
+    /// Generate each pair once, in its owner cell, instead of once per
+    /// shared cell.
+    ///
+    /// Profiling switch only (`phase-timing` feature): turning it off
+    /// restores the behaviour of generating the pair in every cell the
+    /// two bodies share, so the two can be A/B measured inside one
+    /// binary. The shipped build has no such switch and no branch in
+    /// the pair loop.
+    #[cfg(feature = "phase-timing")]
+    pub owned_pairs: bool,
     /// The AABB of every body, indexed by body id. Used only by
     /// [`Self::collect_overlapping_pairs`] to drop candidate pairs whose
     /// AABBs are disjoint before they are pushed, sorted and deduplicated.
@@ -78,6 +99,9 @@ impl SpatialHash3 {
             all: Vec::new(),
             oversized: Vec::new(),
             statics: Vec::new(),
+            cell_min: Vec::new(),
+            #[cfg(feature = "phase-timing")]
+            owned_pairs: true,
             aabbs: Vec::new(),
         }
     }
@@ -183,6 +207,13 @@ impl SpatialHash3 {
         let cell_max_y = (max.y / self.cell_size).floor() as i32;
         let cell_max_z = (max.z / self.cell_size).floor() as i32;
 
+        // Remember the lowest cell this body occupies: it is what picks
+        // the single owner cell of every pair the body takes part in.
+        if self.cell_min.len() <= body_id {
+            self.cell_min.resize(body_id + 1, (0, 0, 0));
+        }
+        self.cell_min[body_id] = (cell_min_x, cell_min_y, cell_min_z);
+
         for cx in cell_min_x..=cell_max_x {
             for cy in cell_min_y..=cell_max_y {
                 for cz in cell_min_z..=cell_max_z {
@@ -203,13 +234,18 @@ impl SpatialHash3 {
     /// pair sequence.
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
-        for cell_ids in self.grid.values() {
+        for (key, cell_ids) in &self.grid {
             for i in 0..cell_ids.len() {
                 for j in (i + 1)..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
                     // Two statics can never touch.
                     if self.is_static(a) && self.is_static(b) {
+                        continue;
+                    }
+                    // Emit the pair in its owner cell only (see
+                    // `owns_pair`).
+                    if !self.owns_pair(a, b, key.x, key.y, key.z) {
                         continue;
                     }
                     out.push(if a < b { (a, b) } else { (b, a) });
@@ -248,6 +284,27 @@ impl SpatialHash3 {
         }
     }
 
+    /// Whether cell `(cx, cy, cz)` is the single owner of the pair
+    /// `(a, b)`.
+    ///
+    /// The owner is the lowest cell both bodies span, so a pair that
+    /// shares several cells is generated in exactly one of them. The
+    /// pair set is unchanged -- the same pairs, in the same canonical
+    /// order -- but the list that has to be sorted and deduplicated is
+    /// as long as the pair set instead of a multiple of it.
+    #[inline]
+    fn owns_pair(&self, a: usize, b: usize, cx: i32, cy: i32, cz: i32) -> bool {
+        // The profiling build can turn the rule off to measure the
+        // behaviour it replaced.
+        #[cfg(feature = "phase-timing")]
+        if !self.owned_pairs {
+            return true;
+        }
+        let (ax, ay, az) = self.cell_min[a];
+        let (bx, by, bz) = self.cell_min[b];
+        cx == ax.max(bx) && cy == ay.max(by) && cz == az.max(bz)
+    }
+
     /// Append the subset of potential collision pairs whose AABBs overlap.
     ///
     /// This is the narrowphase fast path: every dropped pair is two
@@ -265,11 +322,16 @@ impl SpatialHash3 {
     /// it here would blind the substepping decision.
     pub fn collect_overlapping_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
-        for cell_ids in self.grid.values() {
+        for (key, cell_ids) in &self.grid {
             for i in 0..cell_ids.len() {
-                for j in i + 1..cell_ids.len() {
+                for j in (i + 1)..cell_ids.len() {
                     let a = cell_ids[i];
                     let b = cell_ids[j];
+                    // Emit the pair in its owner cell only (see
+                    // `owns_pair`).
+                    if !self.owns_pair(a, b, key.x, key.y, key.z) {
+                        continue;
+                    }
                     if !Self::aabbs_overlap(a, b, &self.aabbs) {
                         continue;
                     }

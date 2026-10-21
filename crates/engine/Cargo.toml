@@ -29,7 +29,7 @@ default = []
 # Off by default: the default build's public API and its trajectory
 # hashes are exactly what they were. With it, the `bench_phases` example
 # can print where a step's time goes.
-phase-timing = ["phieng-dynamics/phase-timing"]
+phase-timing = ["phieng-dynamics/phase-timing", "phieng-broadphase/phase-timing"]
 
 [lib]
 name = "phieng"

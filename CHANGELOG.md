@@ -88,6 +88,25 @@ This project follows [Semantic Versioning](https://semver.org/) and
   neither the code layout nor the settling drift can favour either
   side): the solver phase **−6 % to −10 %** and the whole step
   **−2 % to −5.5 %** over three independent repeats.
+- **The broad phase generates each pair once, not once per shared cell.**
+  A body is inserted into every grid cell its AABB spans, so two
+  neighbours that share two or four cells were found in each of them —
+  the same pair, several times over, before the sort and dedupe the
+  output contract requires. The grid now picks one *owner* cell for
+  every pair: the lowest cell both bodies span, which both of them
+  therefore occupy. Every shared cell still contains both bodies, so no
+  pair is lost — each one is generated exactly once, and the list that
+  has to be sorted and deduplicated is as long as the pair set instead
+  of a multiple of it.
+
+  The pair set is unchanged (the same pairs, in the same canonical
+  order), so every pinned hash is bit-identical — 2D, 3D, islands serial
+  **and** parallel.
+
+  Measured with the same harness (the grid's rule toggled between
+  segments, everything else held fixed): the pair phase **−18 % to
+  −20 %** and the whole step **−3 % to −7 %** over four independent
+  repeats, with every other phase inside the noise band.
 
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,

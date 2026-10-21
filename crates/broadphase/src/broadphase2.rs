@@ -82,6 +82,19 @@ impl Broadphase2 {
         }
     }
 
+    /// Profiling only: turn the grid's pair ownership rule on or off.
+    ///
+    /// The rule makes the grid generate each pair once, in the lowest
+    /// cell the two bodies share, instead of once per shared cell. The
+    /// pair set is the same either way; only the amount of duplicated
+    /// candidate work differs.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_owned_pairs(&mut self, owned: bool) {
+        if let Broadphase2::SpatialHash(h) = self {
+            h.owned_pairs = owned;
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Broadphase2::SpatialHash(h) => h.len(),

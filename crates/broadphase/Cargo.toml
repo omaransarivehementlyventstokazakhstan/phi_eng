@@ -14,3 +14,13 @@ categories = ["physics", "game-development"]
 [dependencies]
 phieng-math = { path = "../math", version = "0.4.0" }
 glam = { workspace = true }
+
+[features]
+default = []
+# Profiling switches for the benchmark harness.
+#
+# Off by default: the shipped grid has no switch and no branch in its
+# pair loop. With it, the grid can be asked to generate every pair in
+# every cell they share (the behaviour before the owner rule) so the
+# two can be A/B measured inside one binary.
+phase-timing = []
