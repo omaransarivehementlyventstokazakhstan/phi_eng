@@ -340,6 +340,11 @@ proptest! {
         t2 in (200.0f32..500.0f32),
     ) {
         prop_assume!(t1 != t2);
+        // The two temperatures must differ by more than the f32
+        // resolution at this magnitude (about 3e-5 K near 340 K),
+        // otherwise the heat flow is too small to change the hot body's
+        // temperature at all and the assertion below cannot hold.
+        prop_assume!((t1 - t2).abs() > 0.5);
 
         let mut world = World2::new();
         world.gravity = Vec2::ZERO;

@@ -944,6 +944,35 @@ public sealed class PhiNativeWorld : IDisposable
     }
 
     /// <summary>
+    /// The bodies whose AABB overlaps the query box, in ascending id
+    /// order. A body is reported only when the filter accepts it.
+    /// </summary>
+    public unsafe uint[] OverlapAabb(
+        float minX, float minY, float maxX, float maxY,
+        uint group, uint mask)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int count = (int)NativeMethods.phieng_world_overlap_aabb(_handle, minX, minY, maxX, maxY, group, mask, null, 0);
+            if (count < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(minX), "Invalid query box.");
+            }
+            if (count == 0)
+            {
+                return Array.Empty<uint>();
+            }
+            var ids = new uint[count];
+            fixed (uint* p = ids)
+            {
+                NativeMethods.phieng_world_overlap_aabb(_handle, minX, minY, maxX, maxY, group, mask, p, (uint)count);
+            }
+            return ids;
+        }
+    }
+
+    /// <summary>
     /// Read a body's collision filter: the layer it belongs to and the
     /// layers it accepts.
     /// </summary>

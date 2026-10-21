@@ -4,6 +4,7 @@ use super::broadphase_mode::BroadphaseMode;
 use super::brute_force2::BruteForce2;
 use super::dynamic_aabb_tree2::DynamicAABBTree2;
 use super::spatial_hash::SpatialHash2;
+use phieng_math::AABB2;
 
 /// Broadphase backend for 2D worlds. Wraps the concrete implementation
 /// selected by [`BroadphaseMode`].
@@ -164,6 +165,18 @@ impl Broadphase2 {
     pub fn set_skip_static_cells(&mut self, skip: bool) {
         if let Broadphase2::SpatialHash(h) = self {
             h.skip_static_cells = skip;
+        }
+    }
+
+    /// Append the ids of the bodies whose AABB overlaps `aabb`.
+    ///
+    /// Every backend answers the same question the same way, so a
+    /// scene query does not depend on which backend is in use.
+    pub fn query_aabb(&self, aabb: &AABB2, out: &mut Vec<usize>) {
+        match self {
+            Broadphase2::SpatialHash(h) => h.query_aabb(aabb, out),
+            Broadphase2::BruteForce(b) => b.query_aabb(aabb, out),
+            Broadphase2::DynamicAABBTree(t) => t.query_aabb(aabb, out),
         }
     }
 

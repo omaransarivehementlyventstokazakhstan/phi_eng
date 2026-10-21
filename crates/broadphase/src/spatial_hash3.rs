@@ -1,5 +1,5 @@
 use glam::Vec3;
-use phieng_math::fxhash::FxHashMap;
+use phieng_math::{fxhash::FxHashMap, AABB3};
 
 /// Cell key for the 3D spatial hash grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -596,6 +596,42 @@ impl SpatialHash3 {
             }
             // An id without a recorded AABB cannot be filtered.
             _ => true,
+        }
+    }
+
+    /// Append the ids of the bodies whose AABB overlaps `aabb`.
+    ///
+    /// The bodies whose AABB overlaps the query box, in ascending id
+    /// order and without duplicates: a body that spans several cells
+    /// is in each of them, and it is reported once.
+    pub fn query_aabb(&self, aabb: &AABB3, out: &mut Vec<usize>) {
+        let cell_min_x = (aabb.min.x / self.cell_size).floor() as i32;
+        let cell_min_y = (aabb.min.y / self.cell_size).floor() as i32;
+        let cell_min_z = (aabb.min.z / self.cell_size).floor() as i32;
+        let cell_max_x = (aabb.max.x / self.cell_size).floor() as i32;
+        let cell_max_y = (aabb.max.y / self.cell_size).floor() as i32;
+        let cell_max_z = (aabb.max.z / self.cell_size).floor() as i32;
+        let before = out.len();
+        for cx in cell_min_x..=cell_max_x {
+            for cy in cell_min_y..=cell_max_y {
+                for cz in cell_min_z..=cell_max_z {
+                    if let Some(ids) = self.grid.get(&CellKey3::new(cx, cy, cz)) {
+                        out.extend_from_slice(ids);
+                    }
+                }
+            }
+        }
+        if out.len() > before {
+            out[before..].sort_unstable();
+            let tail = &mut out[before..];
+            let mut write = 0;
+            for read in 0..tail.len() {
+                if read == 0 || tail[read] != tail[write - 1] {
+                    tail[write] = tail[read];
+                    write += 1;
+                }
+            }
+            out.truncate(before + write);
         }
     }
 

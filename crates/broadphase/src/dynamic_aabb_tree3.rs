@@ -147,6 +147,35 @@ impl DynamicAABBTree3 {
 
     /// Append every overlapping AABB pair to `out` without allocating.
     /// Contract: `out` must be empty (the world passes cleared scratch).
+    /// Append the ids of the bodies whose AABB overlaps `aabb`.
+    ///
+    /// The bodies whose AABB overlaps the query box, in ascending id
+    /// order and without duplicates. The tree is walked from the
+    /// root, skipping every subtree whose box is disjoint from the
+    /// query box.
+    pub fn query_aabb(&self, aabb: &AABB3, out: &mut Vec<usize>) {
+        self.query_aabb_recursive(self.root, aabb, out);
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Walk the tree, collecting the leaves whose box overlaps the
+    /// query box.
+    fn query_aabb_recursive(&self, index: usize, aabb: &AABB3, out: &mut Vec<usize>) {
+        if index == NULL_NODE {
+            return;
+        }
+        let node = &self.nodes[index];
+        if !node.aabb.intersects(aabb) {
+            return;
+        }
+        if node.body_id != NULL_NODE {
+            out.push(node.body_id);
+        }
+        self.query_aabb_recursive(node.left_child, aabb, out);
+        self.query_aabb_recursive(node.right_child, aabb, out);
+    }
+
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         if self.root == NULL_NODE {

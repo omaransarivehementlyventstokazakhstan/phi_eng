@@ -8,6 +8,25 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Scene queries.** The world can now be asked which bodies are near a
+  place: `World2/3::overlap_aabb` returns the bodies whose AABB
+  overlaps a query box, in ascending id order, honouring the collision
+  filter. The query runs against the *current* body positions, not the
+  broad phase's grid — the grid is rebuilt at the start of the step, so
+  between steps it holds the positions from before the solve, and a
+  query must not report against those.
+
+  Every broad-phase backend also answers an AABB query of its own
+  (`query_aabb` on the grid, the brute-force list and the dynamic
+  tree), and all three answer alike — a scene query does not depend on
+  which backend is in use.
+
+  The query crosses the C ABI (`phieng_world[_3]_overlap_aabb`, with a
+  null output array asking for the count alone) and the managed C#
+  mirror (`World2/3.OverlapAabb`, `PhiNativeWorld(3).OverlapAabb`).
+
+  Mirrored Rust↔C# tests: **X01–X06** (`crates/engine/tests/scene_query.rs`,
+  `tests/PhiEng.Tests/SceneQueryTests.cs`).
 - **Collision filtering.** Every body now carries a collision *layer*
   (the group it belongs to) and a *mask* (the layers it accepts), and
   two bodies may collide only when each accepts the other's layer — the

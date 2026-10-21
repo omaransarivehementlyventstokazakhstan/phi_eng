@@ -95,13 +95,15 @@ public class RigidBody3
     /// </summary>
     public float GravityScale { get; set; }
     /// <summary>
-    /// Collision layer this body belongs to. A pair may collide only
-    /// when each body accepts the other's layer. Mirrors Rust
+    /// Collision group this body belongs to. A pair may collide only
+    /// when each body accepts the other's group. A group is one bit
+    /// (the Box2D convention). Mirrors Rust
     /// <c>RigidBody2::collision_group</c>.
     /// </summary>
     public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
     /// <summary>
-    /// Collision layers this body accepts. Mirrors Rust
+    /// Collision groups this body accepts, as a bit field of the group
+    /// flags. Mirrors Rust
     /// <c>RigidBody2::collision_mask</c>; the default accepts every
     /// layer, so an unconfigured body collides with everything.
     /// </summary>

@@ -1402,6 +1402,101 @@ pub unsafe extern "C" fn phieng_world_get_body_gravity_scale(
     1
 }
 
+/// The bodies whose AABB overlaps a query box (2D).
+///
+/// The ids are written to `out_ids` (at most `out_cap` of them) and the
+/// number written is returned; a negative return means an invalid
+/// argument. A null `out_ids` asks for the count alone. `group` and `mask` are the query's collision filter: a
+/// body is reported only when it accepts the query's group and the
+/// query's mask accepts the body's layer.
+///
+/// The query runs against the *current* body positions, not the broad
+/// phase's grid, which holds the positions from before the last solve.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). `out_ids` must be either null (clean `0`) or valid for
+/// `out_cap` writes of `u32` and properly aligned.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_overlap_aabb(
+    world: *const World2,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    group: u32,
+    mask: u32,
+    out_ids: *mut u32,
+    out_cap: u32,
+) -> i32 {
+    if world.is_null() {
+        return -1;
+    }
+    if !valid(min_x) || !valid(min_y) || !valid(max_x) || !valid(max_y) {
+        return -1;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let aabb =
+        phieng_math::AABB2::new(glam::Vec2::new(min_x, min_y), glam::Vec2::new(max_x, max_y));
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let ids = world_ref.overlap_aabb(&aabb, &filter);
+    if out_ids.is_null() {
+        // A null array asks for the count alone.
+        return ids.len() as i32;
+    }
+    let count = ids.len().min(out_cap as usize);
+    let out = unsafe { std::slice::from_raw_parts_mut(out_ids, out_cap as usize) };
+    out[..count].copy_from_slice(&ids[..count]);
+    count as i32
+}
+
+/// The bodies whose AABB overlaps a query box (3D). See
+/// [`phieng_world_overlap_aabb`].
+/// # Safety
+/// See [`phieng_world_overlap_aabb`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_overlap_aabb(
+    world: *const phieng_dynamics::World3,
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+    group: u32,
+    mask: u32,
+    out_ids: *mut u32,
+    out_cap: u32,
+) -> i32 {
+    if world.is_null() {
+        return -1;
+    }
+    if !valid(min_x)
+        || !valid(min_y)
+        || !valid(min_z)
+        || !valid(max_x)
+        || !valid(max_y)
+        || !valid(max_z)
+    {
+        return -1;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let aabb = phieng_math::AABB3::new(
+        glam::Vec3::new(min_x, min_y, min_z),
+        glam::Vec3::new(max_x, max_y, max_z),
+    );
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let ids = world_ref.overlap_aabb(&aabb, &filter);
+    if out_ids.is_null() {
+        // A null array asks for the count alone.
+        return ids.len() as i32;
+    }
+    let count = ids.len().min(out_cap as usize);
+    let out = unsafe { std::slice::from_raw_parts_mut(out_ids, out_cap as usize) };
+    out[..count].copy_from_slice(&ids[..count]);
+    count as i32
+}
+
 /// Set a body's collision filter (2D).
 ///
 /// `group` is the layer the body belongs to; `mask` is the set of

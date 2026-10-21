@@ -256,6 +256,32 @@ public class World3
     /// MaxMovement per substep; disabled (default) is a single legacy
     /// substep, bit-identical to pre-CCD behavior.
     /// </summary>
+    /// <summary>
+    /// The bodies whose AABB overlaps the query box.
+    /// </summary>
+    /// <remarks>
+    /// The ids come back in ascending order, and a body is reported only
+    /// when the filter accepts it. The scan is over the *current* body
+    /// positions, not over the broad phase's grid, which holds the
+    /// positions from before the last solve.
+    /// </remarks>
+    public List<uint> OverlapAabb(AABB3 aabb, QueryFilter filter)
+    {
+        var result = new List<uint>();
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            var (min, max) = GetBodyAABB(body);
+            if (min.X <= aabb.Max.X && max.X >= aabb.Min.X
+                && min.Y <= aabb.Max.Y && max.Y >= aabb.Min.Y
+                && min.Z <= aabb.Max.Z && max.Z >= aabb.Min.Z)
+            {
+                result.Add((uint)body.Id);
+            }
+        }
+        return result;
+    }
+
     public void Step(float dt)
     {
         // Reset validation report once for the whole step; substeps merge.

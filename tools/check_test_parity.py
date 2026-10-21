@@ -42,6 +42,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              filter accepts every layer, a layer that does not accept the
              other side rejects the pair, one side is enough to veto it,
              3D mirror, snapshot round-trip, FFI round-trip)
+    X01-X06  scene queries (mirrored both languages: the overlap query
+             returns the bodies in the box in id order, the collision
+             filter applies to queries, the query sees the current
+             positions, 3D mirror, FFI round-trip)
     Q01-Q05  solver quality tiers (mirrored both languages: iteration
              budgets, friction/restitution switches, snapshot round-trip)
     C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,

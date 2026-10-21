@@ -1,6 +1,6 @@
 use super::body::{
-    validate_density, validate_shape2, validate_shape3, RigidBody2, RigidBody3, Shape2, Shape3,
-    ShapeError,
+    validate_density, validate_shape2, validate_shape3, QueryFilter, RigidBody2, RigidBody3,
+    Shape2, Shape3, ShapeError,
 };
 use super::ccd::{swept_aabb_overlap, swept_aabb_overlap_3, CcdTier};
 use super::joint::{Joint2, JointError};
@@ -15,6 +15,7 @@ use super::validation::{
 use glam::{Vec2, Vec3};
 use phieng_broadphase::{Broadphase2, Broadphase3, BroadphaseMode};
 use phieng_math::fxhash::FxHashMap;
+use phieng_math::{AABB2, AABB3};
 use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
 
 /// Time a block and add the elapsed milliseconds to `$acc`.
@@ -1190,6 +1191,33 @@ impl World2 {
         // The grid keeps its cells across steps, so the bodies the world
         // no longer has have to be taken out of them.
         self.broadphase.end_frame();
+    }
+
+    /// The bodies whose AABB overlaps `aabb`.
+    ///
+    /// The ids come back in ascending order, and a body is reported
+    /// only when the filter accepts it (see [`QueryFilter`]).
+    ///
+    /// The scan is over the *current* body positions, not over the
+    /// broad phase: the grid is rebuilt at the start of the step, so
+    /// between steps it holds the positions from before the solve,
+    /// and a query must not report against those.
+    pub fn overlap_aabb(&self, aabb: &AABB2, filter: &QueryFilter) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let (min, max) = self.get_body_aabb(body);
+            if min.x <= aabb.max.x
+                && max.x >= aabb.min.x
+                && min.y <= aabb.max.y
+                && max.y >= aabb.min.y
+            {
+                out.push(body.id as u32);
+            }
+        }
+        out
     }
 
     /// Get AABB for a 2D body
@@ -2385,6 +2413,35 @@ impl World3 {
         // The grid keeps its cells across steps, so the bodies the world
         // no longer has have to be taken out of them.
         self.broadphase.end_frame();
+    }
+
+    /// The bodies whose AABB overlaps `aabb`.
+    ///
+    /// The ids come back in ascending order, and a body is reported
+    /// only when the filter accepts it (see [`QueryFilter`]).
+    ///
+    /// The scan is over the *current* body positions, not over the
+    /// broad phase: the grid is rebuilt at the start of the step, so
+    /// between steps it holds the positions from before the solve,
+    /// and a query must not report against those.
+    pub fn overlap_aabb(&self, aabb: &AABB3, filter: &QueryFilter) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let (min, max) = self.get_body_aabb(body);
+            if min.x <= aabb.max.x
+                && max.x >= aabb.min.x
+                && min.y <= aabb.max.y
+                && max.y >= aabb.min.y
+                && min.z <= aabb.max.z
+                && max.z >= aabb.min.z
+            {
+                out.push(body.id as u32);
+            }
+        }
+        out
     }
 
     /// Get AABB for a body (exact for rotated boxes)

@@ -29,6 +29,20 @@ impl BruteForce3 {
     /// Sorted and deduped so every backend hands the narrowphase the same
     /// pair sequence (the sequential solver accumulates in pair order, so
     /// an unsorted backend would perturb trajectories at the 1e-13 level).
+    /// Append the ids of the bodies whose AABB overlaps `aabb`.
+    ///
+    /// The bodies whose AABB overlaps the query box, in ascending id
+    /// order and without duplicates.
+    pub fn query_aabb(&self, aabb: &AABB3, out: &mut Vec<usize>) {
+        for (body_id, body_aabb) in &self.entries {
+            if body_aabb.intersects(aabb) {
+                out.push(*body_id);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
     pub fn collect_pairs(&self, out: &mut Vec<(usize, usize)>) {
         debug_assert!(out.is_empty());
         for i in 0..self.entries.len() {

@@ -128,6 +128,36 @@ internal static partial class NativeMethods
         uint bodyId,
         float scale);
 
+    /// <summary>The bodies whose AABB overlaps a query box (2D).</summary>
+    /// <returns>The number of ids written, or -1 for invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_overlap_aabb(
+        IntPtr world,
+        float minX,
+        float minY,
+        float maxX,
+        float maxY,
+        uint group,
+        uint mask,
+        uint* outIds,
+        uint outCap);
+
+    /// <summary>The bodies whose AABB overlaps a query box (3D).</summary>
+    /// <returns>The number of ids written, or -1 for invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_overlap_aabb(
+        IntPtr world,
+        float minX,
+        float minY,
+        float minZ,
+        float maxX,
+        float maxY,
+        float maxZ,
+        uint group,
+        uint mask,
+        uint* outIds,
+        uint outCap);
+
     /// <summary>Sets a body's collision filter (layer and mask).</summary>
     /// <returns>1 on success, 0 for null world or unknown body.</returns>
     [LibraryImport(LibraryName)]

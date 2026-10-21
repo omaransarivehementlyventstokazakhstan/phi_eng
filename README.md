@@ -399,6 +399,16 @@ contact for that frame rather than a guessed depth.
   plus managed `PhiNativeWorld(3).Set/GetBodyCollisionFilter`;
   persists in schema v13 (older files load with the default). Pinned by
   L01–L06 (Rust↔C# parity).
+- **Scene queries (2D and 3D, both languages):** `World2/3::overlap_aabb`
+  returns the bodies whose AABB overlaps a query box, in ascending id
+  order, honouring the collision filter. The query runs against the
+  *current* body positions — the broad phase's grid holds the positions
+  from before the last solve, so a query must not report against those.
+  Every broad-phase backend also answers an AABB query of its own, and
+  all three answer alike. FFI `phieng_world[_3]_overlap_aabb` (a null
+  output array asks for the count alone) plus managed
+  `World2/3.OverlapAabb` and `PhiNativeWorld(3).OverlapAabb`. Pinned by
+  X01–X06 (Rust↔C# parity).
 - **SIMD math paths (Rust, opt-in):** `phieng-math` `simd` feature flag
   (off by default for MSRV compatibility) enables batched primitives
   (`add4`/`sub4`/`mul4`/`dot4`, `dot2_batch`, `add_vec2_batch`) using

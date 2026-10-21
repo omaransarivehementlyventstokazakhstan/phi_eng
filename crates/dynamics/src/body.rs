@@ -20,14 +20,57 @@ pub const DEFAULT_COLLISION_MASK: u32 = u32::MAX;
 
 /// Whether two bodies with the given filters may collide.
 ///
-/// The rule is the one every layered physics engine uses (Box2D,
-/// Bullet): each body must accept the other's layer. A body that
+/// The rule is the one every grouped physics engine uses (Box2D,
+/// Bullet): each body must accept the other's group. A body that
 /// accepts everything therefore collides with everything, and a body
-/// that accepts one layer collides only with the bodies on it — one
+/// that accepts one group collides only with the bodies on it — one
 /// side is enough to veto the pair.
+///
+/// A group is one bit, so the test is a bitwise AND of the two group
+/// flags against the other's mask.
 #[inline]
 pub const fn collision_filter_allows(group_a: u32, mask_a: u32, group_b: u32, mask_b: u32) -> bool {
     (group_a & mask_b) != 0 && (group_b & mask_a) != 0
+}
+
+/// The layers a scene query considers.
+///
+/// A query behaves like a body on `group`: a body is reported when it
+/// accepts the query's group and the query's mask accepts the body's
+/// layer -- the same rule two bodies use, so a query and a body
+/// agree about whether they would collide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueryFilter {
+    /// The layer the query pretends to be on.
+    pub group: u32,
+    /// The layers the query accepts.
+    pub mask: u32,
+}
+
+impl Default for QueryFilter {
+    fn default() -> Self {
+        Self {
+            group: DEFAULT_COLLISION_GROUP,
+            mask: DEFAULT_COLLISION_MASK,
+        }
+    }
+}
+
+impl QueryFilter {
+    /// A filter that accepts every body, whatever its layer.
+    pub const fn everything() -> Self {
+        Self {
+            group: DEFAULT_COLLISION_GROUP,
+            mask: DEFAULT_COLLISION_MASK,
+        }
+    }
+
+    /// Whether this filter accepts a body on `group` with the mask
+    /// `mask`.
+    #[inline]
+    pub const fn accepts(&self, group: u32, mask: u32) -> bool {
+        (group & self.mask) != 0 && (self.group & mask) != 0
+    }
 }
 
 /// Rigid body type in 2D
@@ -79,17 +122,21 @@ pub struct RigidBody2 {
     /// "none", so a body takes no part in the nuclear phase until it is
     /// given one.
     pub nuclear: NuclearState,
-    /// Collision layer this body belongs to (warm: narrowphase pair
-    /// filter). A pair collides only when each body accepts the
-    /// other's layer.
+    /// Collision group this body belongs to (warm: narrowphase pair
+    /// filter). A pair collides only when each body accepts the other's
+    /// group.
     ///
-    /// The default is [`DEFAULT_COLLISION_GROUP`], and the default mask
-    /// accepts every layer, so a body that is never configured collides
-    /// with everything — the behaviour every scene had before layers
-    /// existed.
+    /// A group is **one bit**, the convention Box2D and Bullet use: a
+    /// body belongs to exactly one group, and the mask says which of
+    /// the groups it collides with. The default is
+    /// [`DEFAULT_COLLISION_GROUP`] (the first bit), and the default
+    /// mask accepts every group, so a body that is never configured
+    /// collides with everything — the behaviour every scene had before
+    /// groups existed.
     pub collision_group: u32,
-    /// Collision layers this body accepts (warm: narrowphase pair
-    /// filter). See [`collision_filter_allows`].
+    /// Collision groups this body accepts (warm: narrowphase pair
+    /// filter), as a bit field of the group flags. See
+    /// [`collision_filter_allows`].
     pub collision_mask: u32,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
