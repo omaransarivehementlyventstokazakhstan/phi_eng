@@ -753,14 +753,14 @@ impl World2 {
                 };
                 self.contact_touch[a] = true;
                 self.contact_touch[b] = true;
-                if !self.contact_cache.contains_key(&(a, b))
-                    && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping)
-                {
-                    self.wake_body(a);
-                    self.wake_body(b);
-                }
-                let constraint = &mut self.scratch.constraints[i];
+                // One hash lookup, not two: the same lookup tells us
+                // whether the pair is new (a new pair may need its
+                // sleepers woken) and which cached contact to match.
+                let mut matched: Option<(f32, f32)> = None;
+                let mut is_new = true;
                 if let Some(entries) = self.contact_cache.get(&(a, b)) {
+                    is_new = false;
+                    let constraint = &self.scratch.constraints[i];
                     let mut best: Option<&CachedContact> = None;
                     let mut best_dist = CONTACT_MATCH_DIST_SQ;
                     for entry in entries {
@@ -775,9 +775,22 @@ impl World2 {
                         }
                     }
                     if let Some(entry) = best {
-                        constraint.normal_impulse = entry.normal_impulse;
-                        constraint.tangent_impulse = entry.tangent_impulse;
+                        matched = Some((entry.normal_impulse, entry.tangent_impulse));
                     }
+                }
+                // A new pair with a sleeping party wakes it (with a
+                // cascade) so it can respond to the newcomer. The wake
+                // cannot change what the match above found: it only
+                // clears sleep flags, and the cache holds the previous
+                // frame's contacts either way.
+                if is_new && (self.bodies[a].is_sleeping || self.bodies[b].is_sleeping) {
+                    self.wake_body(a);
+                    self.wake_body(b);
+                }
+                if let Some((normal_impulse, tangent_impulse)) = matched {
+                    let constraint = &mut self.scratch.constraints[i];
+                    constraint.normal_impulse = normal_impulse;
+                    constraint.tangent_impulse = tangent_impulse;
                 }
             }
 
