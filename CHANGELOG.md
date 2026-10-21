@@ -58,9 +58,9 @@ This project follows [Semantic Versioning](https://semver.org/) and
   scene's pair phase **0.999 → 0.054 ms/step (18x)**; islands serial
   −10 %, islands parallel −12 %, pile 3D −9 %. End to end against the
   pre-overhaul build, the 2D pile's 8-iteration step went
-  **5.13 → 0.88 ms/step (−83 %)**, its settled census
-  **3.21 → 1.40 ms/step (−56 %)** and the 3D pile
-  **0.236 → 0.133 ms/step (−44 %)**, with per-step allocations at
+  **5.03 → 0.87 ms/step (−83 %)**, its settled census
+  **3.26 → 1.26 ms/step (−61 %)** and the 3D pile
+  **0.228 → 0.126 ms/step (−45 %)**, with per-step allocations at
   **0.0**.
 - **The warm start looks the contact cache up once per constraint**
   instead of twice. The `contains_key` probe that told the warm start

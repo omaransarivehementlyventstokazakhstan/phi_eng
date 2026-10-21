@@ -26,13 +26,13 @@ AMD Ryzen 7 7445HS, 12 threads, 15.2 GB, Windows x64, release build
 
 | Measure | Baseline | Notes |
 | ------- | -------- | ----- |
-| `pile2d_iters1` | **0.620 ms/step** | 1500 bodies, 1 solver iteration |
-| `pile2d_iters8` | **0.874 ms/step** | 1500 bodies, 8 solver iterations |
-| `pile2d_census` | **1.377 ms/step** | the settled pile, 8 iterations, after the sweep |
+| `pile2d_iters1` | **0.555 ms/step** | 1500 bodies, 1 solver iteration |
+| `pile2d_iters8` | **0.873 ms/step** | 1500 bodies, 8 solver iterations |
+| `pile2d_census` | **1.263 ms/step** | the settled pile, 8 iterations, after the sweep |
 | `pile2d_allocs` | **0.0 allocs/step** | counting global allocator |
-| `islands_serial` | **0.0265 ms/step** | 40 bodies, 8 stacks |
-| `islands_parallel` | **0.0260 ms/step** | serial and parallel tied at this size |
-| `pile3d_iters8` | **0.140 ms/step** | 400 bodies |
+| `islands_serial` | **0.0219 ms/step** | 40 bodies, 8 stacks |
+| `islands_parallel` | **0.0209 ms/step** | serial and parallel tied at this size |
+| `pile3d_iters8` | **0.126 ms/step** | 400 bodies |
 
 These numbers describe the corrected trajectory (after the
 circle-vs-polygon corner-axis fix below re-pinned the 2D hashes). The
@@ -52,17 +52,17 @@ only — the hashes are identical with the feature on and off.
 
 | Phase | ms/step | Share |
 | ----- | ------- | ----- |
-| gravity | 0.0052 | 0.3 % |
+| gravity | 0.0047 | 0.4 % |
 | fluid | 0.0001 | 0.0 % |
-| broadphase: rebuild | 0.1785 | 11.7 % |
-| broadphase: pairs | 0.2162 | 14.2 % |
-| narrowphase | 0.2900 | 19.1 % |
-| cache (warm start) | 0.1169 | 7.7 % |
-| solver | 0.5830 | 38.3 % |
-| integrate | 0.1036 | 6.8 % |
+| broadphase: rebuild | 0.1258 | 10.0 % |
+| broadphase: pairs | 0.1706 | 13.5 % |
+| narrowphase | 0.2539 | 20.1 % |
+| cache (warm start) | 0.0819 | 6.5 % |
+| solver | 0.5003 | 39.7 % |
+| integrate | 0.0971 | 7.7 % |
 | thermal | 0.0002 | 0.0 % |
-| sleep | 0.0206 | 1.4 % |
-| **TOTAL** | **1.5218** | 99.9 % of the wall clock |
+| sleep | 0.0194 | 1.5 % |
+| **TOTAL** | **1.2603** | 99.9 % of the wall clock |
 
 **The solver is now the largest phase (38 %)** on the corrected
 trajectory, followed by the narrowphase (19 %) and pair generation
@@ -74,24 +74,30 @@ with more contacts in flight, which is why the solver dominates here.
 
 | Scene | ms/step | Broadphase share | Raw pairs | Cached pairs |
 | ----- | ------- | ---------------- | --------- | ------------ |
-| pile 3D (400 bodies) | 0.184 | 33 % | 400 | 400 |
-| islands (40 bodies) | 0.036 | 22 % | 44 | 43 |
-| **statics (420 bodies)** | **0.205** | **41 %** | **18** | **14** |
-| fluid (96 SPH particles) | 0.114 | 1 % | — | — |
+| pile 3D (400 bodies) | 0.120 | 30 % | 400 | 400 |
+| islands (40 bodies) | 0.032 | 20 % | 44 | 43 |
+| **statics (420 bodies)** | **0.033** | **21 %** | **18** | **14** |
+| fluid (96 SPH particles) | 0.069 | 1 % | — | — |
 
 The static-heavy scene was the pathological case: the broad phase used
 to generate **8 010** candidate pairs to end up with **14** live ones,
 and that generation was 91 % of the step. The grid no longer generates
 static-static pairs (they can never produce an impulse), so the scene
-now emits **18** raw pairs and its pair phase is 18x faster.
+now emits **18** raw pairs. Two more changes took it further: a pair is
+now generated once, in the cell that owns it, instead of once per cell
+the two bodies share; and a cell that holds nothing but static bodies
+is skipped whole, instead of having its quadratic number of
+static-static candidates walked and dropped one by one. The scene's
+pair phase went **0.999 → 0.003 ms/step**.
 
 ## What this rules in and out
 
 - **In:** the solver (40 % of the pile step on the corrected
-  trajectory) and the narrowphase (19 %).
-- **In:** broad-phase pair generation (15 % here) — the AABB pair filter
-  and the static-pair pruning already took the static scene's pair phase
-  from 91 % to 41 % of its step (see below).
+  trajectory) and the narrowphase (20 %).
+- **In:** broad-phase pair generation (14 % here) — the AABB pair filter,
+  the static-pair pruning, the owner rule and the static-cell skip
+  already took the static scene's pair phase from 91 % to 21 % of its
+  step (see below).
 - **In, done:** the rigid-body memory layout. The solver is the dominant
   phase on the corrected trajectory, and the packed solver view (see
   below) now keeps the solver's working set in 48 KB instead of 264 KB.
@@ -249,12 +255,12 @@ current one, nine alternating rounds on the same machine:
 
 | Measure | Before | After | Delta |
 | ------- | ------ | ----- | ----- |
-| `pile2d_iters1` | 2.630 ms | 0.588 ms | **−77.6 %** |
-| `pile2d_iters8` | 5.130 ms | 0.880 ms | **−82.8 %** |
-| `pile2d_census` | 3.214 ms | 1.403 ms | **−56.3 %** |
-| `islands_serial` | 0.0243 ms | 0.0249 ms | +2.5 % (noise) |
-| `islands_parallel` | 0.0248 ms | 0.0232 ms | −6.5 % |
-| `pile3d_iters8` | 0.236 ms | 0.133 ms | **−43.6 %** |
+| `pile2d_iters1` | 2.850 ms | 0.555 ms | **−80.5 %** |
+| `pile2d_iters8` | 5.027 ms | 0.873 ms | **−82.6 %** |
+| `pile2d_census` | 3.262 ms | 1.263 ms | **−61.3 %** |
+| `islands_serial` | 0.0243 ms | 0.0219 ms | −9.9 % |
+| `islands_parallel` | 0.0253 ms | 0.0209 ms | −17.4 % |
+| `pile3d_iters8` | 0.228 ms | 0.126 ms | **−44.7 %** |
 
 The pile-2D hash differs between the two builds **by design**: the
 circle-vs-polygon corner-axis fix removed phantom contacts, which

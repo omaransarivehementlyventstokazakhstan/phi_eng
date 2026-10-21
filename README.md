@@ -507,14 +507,14 @@ per-phase split, and the measurement discipline.
 
 | Scene | Rust serial | Rust parallel | Notes |
 |---|---|---|---|
-| pile 2D (1500), iters=1 | 0.588 ms/step | — | was 2.63 ms/step before the overhaul |
-| pile 2D (1500), iters=8 | 0.880 ms/step | — | was 5.13 ms/step (**−83 %**) |
-| pile 2D, settled census | 1.403 ms/step | — | was 3.21 ms/step (**−56 %**) |
+| pile 2D (1500), iters=1 | 0.555 ms/step | — | was 2.85 ms/step before the overhaul (**−80.5 %**) |
+| pile 2D (1500), iters=8 | 0.873 ms/step | — | was 5.03 ms/step (**−82.6 %**) |
+| pile 2D, settled census | 1.263 ms/step | — | was 3.26 ms/step (**−61.3 %**) |
 | pile 2D allocs | **0.0/step** | — | was 0.8/step |
-| islands (8×5 stacks) | 0.0249 ms/step | 0.0232 | 41 bodies: below the parallelization threshold |
-| pile 3D (400), iters=8 | 0.133 ms/step | n/a (2D-only) | was 0.236 ms/step (**−44 %**) |
+| islands (8×5 stacks) | 0.0219 ms/step | 0.0209 | 41 bodies: below the parallelization threshold |
+| pile 3D (400), iters=8 | 0.126 ms/step | n/a (2D-only) | was 0.228 ms/step (**−44.7 %**) |
 | pile 3D allocs | 0.0/step | — | |
-| statics (420) | 0.205 ms/step | — | pair phase 18x faster (0.999 → 0.054 ms) |
+| statics (420) | 0.033 ms/step | — | pair phase 0.031 → 0.003 ms (a static cell is now skipped whole) |
 
 Those are interleaved A/B numbers (the two builds alternate, nine
 rounds) on one machine — the only comparison that survives a loaded
@@ -528,7 +528,7 @@ different reason: the circle-vs-polygon corner-axis fix removed phantom
 contacts, and that changes the physics on purpose.
 
 Where the time goes now (2D pile, per step): the solver 40 %, the
-narrowphase 19 %, pair generation 15 %, the grid rebuild 9 %.
+narrowphase 20 %, pair generation 14 %, the grid rebuild 10 %.
 
 ## Baseline matrix 1c (packed solver view, 2026-10-21)
 
