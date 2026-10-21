@@ -147,6 +147,24 @@ pub enum BroadphaseMode {
     shared with the managed C# mirror and the B-tier tests).
   - The benchmark scene is kept: the repo had no static-heavy scenario
     to measure, and the next attempt needs one.
+- **Measured, not shipped (rigid-body layout)**: the solver is the
+  largest phase of the 2D pile (38 % of the step), and its inner loop
+  reads position, velocity, angular velocity, inverse mass/inertia and
+  the two flags for every constraint on every iteration. `RigidBody2` is
+  176 bytes and the compiler's field reordering spread those hot fields
+  across three cache lines (position @16, velocity @56, angular
+  velocity @96, flags @168). Pinning the order with `#[repr(C)]` and
+  declaring the hot fields first packs them into bytes 0–58 — one line.
+  It measured **slower**, though: interleaved A/B (two binaries, nine
+  alternating rounds, same machine) gave pile 2D iters=8 **0.920 → 1.162
+  ms/step (+26 %)**, iters=1 **+8.8 %**, while the settled census was
+  unchanged (−0.6 %) and the 40-body islands scene moved −0.6 %. The
+  reason is that `repr(C)` also fixed the struct at 192 bytes with
+  16-byte alignment, so consecutive bodies no longer pack as tightly and
+  the whole-body iteration streams more memory. So the cache-line win
+  does not pay for the density loss on this workload. The remaining
+  lever is a hot-field side array (SoA) rather than a field reorder —
+  but that changes the solver's data flow and is not yet measured.
 - **Remaining**: an actual persistent static constraint graph, or
   static-awareness in the broadphase.
 - **Shipped (narrowphase input filtering)**: every broadphase backend
