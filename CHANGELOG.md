@@ -8,17 +8,42 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Contact events and trigger sensors.** A body can now be made a
+  *sensor*: it reports its contacts as events and never pushes, so it
+  falls through whatever it touches — that is what a trigger volume is.
+  Independently of that, the world can collect *contact events*: one
+  event per pair that began or stopped touching this step, with the
+  contact point and normal.
+
+  The events are off by default (they cost a pass over the contact
+  cache, and a scene that never reads them should not pay for it) and
+  they are cleared at the start of the next step. A pair that keeps
+  touching produces no further events.
+
+  The feature is in the Rust core, the managed C# mirror
+  (`RigidBody2/3.IsSensor`, `World2/3.CollectContactEvents`,
+  `World2/3.ContactEvents`) and the C ABI
+  (`phieng_world[_3]_set_body_sensor`,
+  `phieng_world[_3]_set_collect_contact_events`,
+  `phieng_world[_3]_contact_event_count`,
+  `phieng_world[_3]_get_contact_event`). The sensor flag rides in the
+  snapshot (schema **v14**; older files load with the body an ordinary
+  body).
+
+  Mirrored Rust↔C# tests: **Z01–Z08**
+  (`crates/engine/tests/contact_events.rs`,
+  `tests/PhiEng.Tests/ContactEventTests.cs`).
 - **The native bridge can now write.** A game could read a body's state
   through the C ABI but not change it: there was no way to place a
   body, spin it, push it or wake it. The bridge now offers
-  \set_body_transform\, \get/set_body_angular_velocity\,
-  \pply_impulse\, \pply_force\, \wake_body\ and
-  \get_body_id_at\ (2D and 3D), with the managed wrappers
-  \PhiNativeWorld(3).SetBodyTransform/SetBodyAngularVelocity/
-  GetBodyAngularVelocity/ApplyImpulse/ApplyForce/WakeBody/GetBodyIdAt\.
+  `set_body_transform`, `get/set_body_angular_velocity`,
+  `apply_impulse`, `apply_force`, `wake_body` and `get_body_id_at`
+  (2D and 3D), with the managed wrappers
+  `PhiNativeWorld(3).SetBodyTransform/SetBodyAngularVelocity/
+  GetBodyAngularVelocity/ApplyImpulse/ApplyForce/WakeBody/GetBodyIdAt`.
 
-  Mirrored Rust↔C# tests: **F41–F46** (\crates/engine/tests/ffi_write_surface.rs\,
-  \	ests/PhiEng.Tests/FfiWriteSurfaceTests.cs\).
+  Mirrored Rust↔C# tests: **F41–F46** (`crates/engine/tests/ffi_write_surface.rs`,
+  `tests/PhiEng.Tests/FfiWriteSurfaceTests.cs`).
 - **Scene queries.** The world can now be asked which bodies are near a
   place: `World2/3::overlap_aabb` returns the bodies whose AABB
   overlaps a query box, in ascending id order, honouring the collision

@@ -56,7 +56,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 13;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 14;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -84,6 +84,8 @@ const SNAPSHOT_SCHEMA_NUCLEAR: u32 = 12;
 /// Schema that introduced the per-body collision filter (v13). Bodies
 /// without one keep the default layer and mask.
 const SNAPSHOT_SCHEMA_COLLISION_FILTERS: u32 = 13;
+/// Schema that introduced the per-body sensor flag (v14).
+const SNAPSHOT_SCHEMA_SENSORS: u32 = 14;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -298,6 +300,9 @@ struct Body2Dto {
         skip_serializing_if = "is_default_collision_mask"
     )]
     collision_mask: u32,
+    /// Is a sensor (schema v14; default false, elided).
+    #[serde(default, skip_serializing_if = "is_false")]
+    is_sensor: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +348,9 @@ struct Body3Dto {
         skip_serializing_if = "is_default_collision_mask"
     )]
     collision_mask: u32,
+    /// Is a sensor (schema v14). See `Body2Dto::is_sensor`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    is_sensor: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2709,6 +2717,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         nuclear: nuclear_body_dto(&b.nuclear),
         collision_group: b.collision_group,
         collision_mask: b.collision_mask,
+        is_sensor: b.is_sensor,
     }
 }
 
@@ -2733,6 +2742,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         nuclear: nuclear_body_dto(&b.nuclear),
         collision_group: b.collision_group,
         collision_mask: b.collision_mask,
+        is_sensor: b.is_sensor,
     }
 }
 
@@ -2917,6 +2927,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         b.collision_group != crate::body::DEFAULT_COLLISION_GROUP
             || b.collision_mask != crate::body::DEFAULT_COLLISION_MASK
     });
+    // Schema v14: a body that is a sensor needs the v14 record, or
+    // the flag would be silently dropped on save.
+    let has_sensors = w.bodies.iter().any(|b| b.is_sensor);
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
@@ -2924,6 +2937,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || has_radiation_extras
         || has_nuclear
         || has_collision_filters
+        || has_sensors
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -3156,6 +3170,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         b.collision_group != crate::body::DEFAULT_COLLISION_GROUP
             || b.collision_mask != crate::body::DEFAULT_COLLISION_MASK
     });
+    // Schema v14: a body that is a sensor needs the v14 record, or
+    // the flag would be silently dropped on save.
+    let has_sensors = w.bodies.iter().any(|b| b.is_sensor);
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
@@ -3163,6 +3180,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || has_radiation_extras
         || has_nuclear
         || has_collision_filters
+        || has_sensors
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -3589,6 +3607,9 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
     body.collision_mask = b.collision_mask;
+    // The sensor flag (schema v14). A file without one keeps the body
+    // a normal body.
+    body.is_sensor = b.is_sensor;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -3664,6 +3685,9 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
     body.collision_mask = b.collision_mask;
+    // The sensor flag (schema v14). A file without one keeps the body
+    // a normal body.
+    body.is_sensor = b.is_sensor;
     body.is_sleeping = b.is_sleeping;
     w.add_body(body)?;
     Ok(())
@@ -4939,6 +4963,10 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
             write_u32(&mut p, b.collision_group);
             write_u32(&mut p, b.collision_mask);
         }
+        // Schema v14: the per-body sensor flag.
+        if dto.schema >= SNAPSHOT_SCHEMA_SENSORS {
+            write_u8(&mut p, u8::from(b.is_sensor));
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -6139,6 +6167,12 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                     } else {
                         default_collision_mask()
                     },
+                    // Schema v14: the per-body sensor flag.
+                    is_sensor: if version >= SNAPSHOT_SCHEMA_SENSORS {
+                        r.read_u8()? != 0
+                    } else {
+                        false
+                    },
                 };
                 v.push(body);
             }
@@ -6378,6 +6412,10 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         if dto.schema >= SNAPSHOT_SCHEMA_COLLISION_FILTERS {
             write_u32(&mut p, b.collision_group);
             write_u32(&mut p, b.collision_mask);
+        }
+        // Schema v14: the per-body sensor flag.
+        if dto.schema >= SNAPSHOT_SCHEMA_SENSORS {
+            write_u8(&mut p, u8::from(b.is_sensor));
         }
     }
     write_u32(&mut p, dto.joints.len() as u32);
@@ -6634,6 +6672,12 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                         r.read_u32()?
                     } else {
                         default_collision_mask()
+                    },
+                    // Schema v14: the per-body sensor flag.
+                    is_sensor: if version >= SNAPSHOT_SCHEMA_SENSORS {
+                        r.read_u8()? != 0
+                    } else {
+                        false
                     },
                 });
             }

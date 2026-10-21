@@ -407,6 +407,18 @@ contact for that frame rather than a guessed depth.
   PhiNativeWorld(3).SetBodyTransform/SetBodyAngularVelocity/
   GetBodyAngularVelocity/ApplyImpulse/ApplyForce/WakeBody/GetBodyIdAt.
   Pinned by F41–F46 (Rust↔C# parity).
+- **Contact events and trigger sensors (2D and 3D, both languages):**
+  a body can be made a *sensor* — it reports its contacts as events
+  and never pushes, so it falls through whatever it touches, which is
+  what a trigger volume is. Independently, the world can collect
+  *contact events*: one per pair that began or stopped touching, with
+  the contact point and normal. The events are off by default and are
+  cleared at the start of the next step. RigidBody2/3.IsSensor,
+  World2/3.CollectContactEvents, World2/3.ContactEvents; FFI
+  phieng_world[_3]_set_body_sensor,
+  phieng_world[_3]_set_collect_contact_events and
+  phieng_world[_3]_contact_event_count/get_contact_event; the sensor
+  flag persists in schema v14. Pinned by Z01–Z08 (Rust↔C# parity).
 - **Scene queries (2D and 3D, both languages):** `World2/3::overlap_aabb`
   returns the bodies whose AABB overlaps a query box, in ascending id
   order, honouring the collision filter. The query runs against the

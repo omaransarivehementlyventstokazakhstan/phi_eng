@@ -120,6 +120,14 @@ public class World2
     private readonly List<Vector2> _clipTmp = new();
     private readonly HashSet<(int, int)> _liveKeys = new();
     private readonly List<(int, int)> _staleKeys = new();
+    /// <summary>The contact events of the last step.</summary>
+    private readonly List<ContactEvent2> _contactEvents = new();
+    /// <summary>The sensor pairs touching this step.</summary>
+    private List<(int, int)> _sensorPairs = new();
+    /// <summary>The sensor pairs that were touching last step.</summary>
+    private List<(int, int)> _lastSensorPairs = new();
+    /// <summary>The contacts a sensor pair reported.</summary>
+    private readonly List<ContactConstraint> _sensorContacts = new();
     private readonly List<bool> _contactTouch = new();
 
     /// <summary>Empty world with Earth gravity and default solver.</summary>
@@ -359,6 +367,24 @@ public class World2
         return result;
     }
 
+    /// <summary>
+    /// Collect the contact events (a pair began or stopped touching).
+    ///
+    /// Off by default: the events cost a pass over the contact cache,
+    /// and a scene that never reads them should not pay for it. When
+    /// on, the events of the last step are in
+    /// <see cref="ContactEvents"/>.
+    /// </summary>
+    public bool CollectContactEvents { get; set; }
+
+    /// <summary>The contact events of the last step.</summary>
+    /// <remarks>
+    /// One event per pair that began or stopped touching. The events
+    /// are only collected when <see cref="CollectContactEvents"/> is
+    /// on, and they are cleared at the start of the next step.
+    /// </remarks>
+    public IReadOnlyList<ContactEvent2> ContactEvents => _contactEvents;
+
     public void Step(float dt)
     {
         // Reset validation report once for the whole step; substeps merge.
@@ -426,6 +452,10 @@ public class World2
         // velocities; a no-op when the fluid holds no particles.
         FluidIntegration.StepFluid2(Fluid, Bodies, Gravity, Ambient, Time, dt);
 
+        // The events of the last step are the caller's to read; they are
+        // cleared when the next step starts.
+        _contactEvents.Clear();
+
         // 2. Broad phase - find potential collision pairs (into scratch).
         UpdateBroadphase();
         _pairs.Clear();
@@ -436,9 +466,27 @@ public class World2
         var constraints = _constraints;
         _vertsA.Clear();
         _vertsB.Clear();
+        _sensorContacts.Clear();
         foreach (var (a, b) in _pairs)
         {
-            TestCollisionsInto(a, b, constraints, _vertsA, _vertsB, _points, _clipTmp);
+            // A sensor reports contacts but never pushes: its contacts
+            // go to the sensor list, not to the solver.
+            if (Bodies[a].IsSensor || Bodies[b].IsSensor)
+            {
+                TestCollisionsInto(a, b, _sensorContacts, _vertsA, _vertsB, _points, _clipTmp);
+            }
+            else
+            {
+                TestCollisionsInto(a, b, constraints, _vertsA, _vertsB, _points, _clipTmp);
+            }
+        }
+
+        // 3a. A sensor's contacts are events, not contacts: the pair set
+        // is compared with last step's, and a pair that is new (or gone)
+        // produces an event.
+        if (CollectContactEvents && (_sensorContacts.Count > 0 || _lastSensorPairs.Count > 0))
+        {
+            SensorEvents();
         }
 
         // 3b. Warm-start: seed each constraint with cached impulses from the
@@ -457,7 +505,17 @@ public class World2
             var constraint = constraints[ci];
             _contactTouch[constraint.BodyA] = true;
             _contactTouch[constraint.BodyB] = true;
-            if (!ContactCache.ContainsKey((constraint.BodyA, constraint.BodyB))
+            bool isNew = !ContactCache.ContainsKey((constraint.BodyA, constraint.BodyB));
+            // A pair that was not touching last step began touching this
+            // step: that is the event a trigger wants.
+            if (isNew && CollectContactEvents)
+            {
+                var pair = EventPair(constraint.BodyA, constraint.BodyB);
+                _contactEvents.Add(new ContactEvent2(
+                    pair.Item1, pair.Item2,
+                    ContactEventKind.Began, constraint.Point, constraint.Normal));
+            }
+            if (isNew
                 && (Bodies[constraint.BodyA].IsSleeping || Bodies[constraint.BodyB].IsSleeping))
             {
                 WakeBody(constraint.BodyA);
@@ -553,6 +611,16 @@ public class World2
                 if (!_liveKeys.Contains(key)) _staleKeys.Add(key);
             foreach (var key in _staleKeys)
             {
+                // A pair that was touching last step and is not touching
+                // now stopped touching: that is the other half of the
+                // event.
+                if (CollectContactEvents)
+                {
+                    var pair = EventPair(key.Item1, key.Item2);
+                    _contactEvents.Add(new ContactEvent2(
+                        pair.Item1, pair.Item2,
+                        ContactEventKind.Ended, Vector2.Zero, Vector2.Zero));
+                }
                 // A vanished pair is lost contact: wake any sleeping party
                 // (loss of support must re-evaluate sleep).
                 if ((key.Item1 < Bodies.Count && Bodies[key.Item1].IsSleeping)
@@ -714,6 +782,89 @@ public class World2
         }
 
         return (body.Transform.Position, body.Transform.Position);
+    }
+
+    /// <summary>
+    /// Work out which sensor pairs began and which ended.
+    /// </summary>
+    private void SensorEvents()
+    {
+        _sensorPairs.Clear();
+        foreach (var c in _sensorContacts)
+        {
+            var key = (c.BodyA, c.BodyB);
+            if (_sensorPairs.Count == 0 || _sensorPairs[^1] != key) _sensorPairs.Add(key);
+        }
+
+        int i = 0, j = 0;
+        while (i < _sensorPairs.Count || j < _lastSensorPairs.Count)
+        {
+            bool hasNow = i < _sensorPairs.Count;
+            bool hadBefore = j < _lastSensorPairs.Count;
+            var now = hasNow ? _sensorPairs[i] : (0, 0);
+            var before = hadBefore ? _lastSensorPairs[j] : (0, 0);
+            if (hasNow && hadBefore && now == before)
+            {
+                i++;
+                j++;
+            }
+            else if (hasNow && (!hadBefore || PairLess(now, before)))
+            {
+                var pair = EventPair(now.Item1, now.Item2);
+                _contactEvents.Add(new ContactEvent2(
+                    pair.Item1, pair.Item2, ContactEventKind.Began,
+                    SensorPoint(now), SensorNormal(now)));
+                i++;
+            }
+            else if (hadBefore)
+            {
+                var pair = EventPair(before.Item1, before.Item2);
+                _contactEvents.Add(new ContactEvent2(
+                    pair.Item1, pair.Item2, ContactEventKind.Ended,
+                    Vector2.Zero, Vector2.Zero));
+                j++;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // This step's sensor pairs are next step's.
+        var swap = _sensorPairs;
+        _sensorPairs = _lastSensorPairs;
+        _lastSensorPairs = swap;
+    }
+
+    /// <summary>The two bodies of a pair, in a canonical order.</summary>
+    /// <remarks>
+    /// The narrow phase does not promise an order, so the events put
+    /// the smaller id first: an event says <em>which two</em> bodies
+    /// began or stopped touching, and that must not depend on the
+    /// order the narrow phase happened to produce.
+    /// </remarks>
+    private static (uint, uint) EventPair(int a, int b)
+        => a <= b ? ((uint)a, (uint)b) : ((uint)b, (uint)a);
+
+    /// <summary>Whether a pair sorts before another (the pairs are in
+    /// sorted order, so the two lists merge).</summary>
+    private static bool PairLess((int, int) a, (int, int) b)
+        => a.Item1 < b.Item1 || (a.Item1 == b.Item1 && a.Item2 < b.Item2);
+
+    /// <summary>The contact point of a sensor pair, if it has one.</summary>
+    private Vector2 SensorPoint((int, int) key)
+    {
+        foreach (var c in _sensorContacts)
+            if (c.BodyA == key.Item1 && c.BodyB == key.Item2) return c.Point;
+        return Vector2.Zero;
+    }
+
+    /// <summary>The contact normal of a sensor pair, if it has one.</summary>
+    private Vector2 SensorNormal((int, int) key)
+    {
+        foreach (var c in _sensorContacts)
+            if (c.BodyA == key.Item1 && c.BodyB == key.Item2) return c.Normal;
+        return Vector2.Zero;
     }
 
     private void TestCollisionsInto(

@@ -944,6 +944,62 @@ public sealed class PhiNativeWorld : IDisposable
     }
 
     /// <summary>
+    /// Makes a body a sensor: it reports its contacts as contact
+    /// events and never pushes, so it falls through whatever it
+    /// touches. That is what a trigger volume is.
+    /// </summary>
+    public void SetBodySensor(int bodyId, bool isSensor)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int ok = NativeMethods.phieng_world_set_body_sensor(
+                _handle, (uint)bodyId, isSensor ? (byte)1 : (byte)0);
+            if (ok == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bodyId), $"Unknown native body id {bodyId}.");
+            }
+        }
+    }
+
+    /// <summary>Turns the contact-event collection on or off.</summary>
+    public void SetCollectContactEvents(bool collect)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.phieng_world_set_collect_contact_events(
+                _handle, collect ? (byte)1 : (byte)0);
+        }
+    }
+
+    /// <summary>The contact events of the last step.</summary>
+    public unsafe (uint BodyA, uint BodyB, int Kind, Vector2 Point, Vector2 Normal)[] ContactEvents()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            int count = NativeMethods.phieng_world_contact_event_count(_handle);
+            if (count <= 0) return Array.Empty<(uint, uint, int, Vector2, Vector2)>();
+            var result = new (uint, uint, int, Vector2, Vector2)[count];
+            var buffer = new float[6];
+            for (int i = 0; i < count; i++)
+            {
+                fixed (float* p = buffer)
+                {
+                    if (NativeMethods.phieng_world_get_contact_event(_handle, (uint)i, p) == 0)
+                    {
+                        throw new InvalidOperationException("Contact event read failed.");
+                    }
+                }
+                result[i] = ((uint)buffer[0], (uint)buffer[1], (int)buffer[2],
+                    new Vector2(buffer[3], buffer[4]), Vector2.Zero);
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
     /// Place a body: set its position and rotation. The body keeps its
     /// velocity; the broad phase picks the new place up at the start of
     /// the next step.

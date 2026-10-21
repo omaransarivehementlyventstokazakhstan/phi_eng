@@ -1840,6 +1840,192 @@ pub unsafe extern "C" fn phieng_world3_get_body_id_at(
     }
 }
 
+/// Make a body a sensor (2D) or an ordinary body again.
+///
+/// A sensor reports its contacts as contact events and never pushes, so
+/// it falls through whatever it touches. That is what a trigger volume
+/// is.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_sensor(
+    world: *mut World2,
+    body_id: u32,
+    is_sensor: u8,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].is_sensor = is_sensor != 0;
+    1
+}
+
+/// Make a body a sensor (3D) or an ordinary body again.
+///
+/// Returns 1 on success, 0 for a null world or an unknown body.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_sensor(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    is_sensor: u8,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let Some(index) = body3_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].is_sensor = is_sensor != 0;
+    1
+}
+
+/// Turn the contact-event collection on or off (2D).
+///
+/// The events say which pairs began or stopped touching. They cost a pass
+/// over the contact cache, so they are off by default.
+///
+/// Returns 1 on success, 0 for a null world.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_collect_contact_events(
+    world: *mut World2,
+    collect: bool,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    world_ref.collect_contact_events = collect;
+    1
+}
+
+/// Turn the contact-event collection on or off (3D).
+///
+/// Returns 1 on success, 0 for a null world.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_collect_contact_events(
+    world: *mut phieng_dynamics::World3,
+    collect: bool,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    world_ref.collect_contact_events = collect;
+    1
+}
+
+/// The number of contact events of the last step (2D).
+///
+/// The events are only collected when the collection is on.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_contact_event_count(world: *const World2) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    world_ref.contact_events().len() as i32
+}
+
+/// Copy a contact event out (2D).
+///
+/// `out` receives body_a, body_b, kind (0 = began, 1 = ended), the
+/// contact point and the contact normal. Returns 1 on success, 0 on any
+/// invalid input.
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_contact_event(
+    world: *const World2,
+    index: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let Some(event) = world_ref.contact_events().get(index as usize) else {
+        return 0;
+    };
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+    out[0] = event.body_a as f32;
+    out[1] = event.body_b as f32;
+    out[2] = match event.kind {
+        phieng_dynamics::body::ContactEventKind::Began => 0.0,
+        phieng_dynamics::body::ContactEventKind::Ended => 1.0,
+    };
+    out[3] = event.point.x;
+    out[4] = event.point.y;
+    out[5] = 0.0;
+    1
+}
+
+/// The number of contact events of the last step (3D).
+///
+/// The events are only collected when the collection is on.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_contact_event_count(
+    world: *const phieng_dynamics::World3,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    world_ref.contact_events().len() as i32
+}
+
+/// Copy a contact event out (3D).
+///
+/// `out` receives body_a, body_b, kind (0 = began, 1 = ended) and the
+/// contact point and normal. Returns 1 on success, 0 on any invalid
+/// input.
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_contact_event(
+    world: *const phieng_dynamics::World3,
+    index: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let Some(event) = world_ref.contact_events().get(index as usize) else {
+        return 0;
+    };
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 9) };
+    out[0] = event.body_a as f32;
+    out[1] = event.body_b as f32;
+    out[2] = match event.kind {
+        phieng_dynamics::body::ContactEventKind::Began => 0.0,
+        phieng_dynamics::body::ContactEventKind::Ended => 1.0,
+    };
+    out[3] = event.point.x;
+    out[4] = event.point.y;
+    out[5] = event.point.z;
+    out[6] = event.normal.x;
+    out[7] = event.normal.y;
+    out[8] = event.normal.z;
+    1
+}
+
 /// Set a body's collision filter (2D).
 ///
 /// `group` is the layer the body belongs to; `mask` is the set of

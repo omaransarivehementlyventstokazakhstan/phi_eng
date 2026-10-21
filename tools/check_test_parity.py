@@ -20,6 +20,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
     F41-F46  the native write surface (mirrored both languages: a body
              can be placed, spun, pushed and woken, the bodies can be
              enumerated, and bad input is refused)
+    Z01-Z08  contact events and sensors (mirrored both languages: a pair
+             that starts or stops touching produces an event, a resting
+             pair produces none, a sensor reports its contacts and never
+             pushes, the events are off by default, FFI round-trip)
     V01-V11  runtime validation layer (mirrored both languages)
     J31-J44  joint constraints (mirrored both languages)
     E01-E07  snapshots save/load (mirrored both languages)

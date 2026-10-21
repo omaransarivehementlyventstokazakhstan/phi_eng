@@ -73,6 +73,52 @@ impl QueryFilter {
     }
 }
 
+/// What happened to a contact between two bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContactEventKind {
+    /// The bodies started touching this step.
+    Began,
+    /// The bodies stopped touching this step.
+    Ended,
+}
+
+/// A contact event: two bodies started or stopped touching.
+///
+/// The world collects one event per pair per step, in the order the
+/// pairs were found, and the caller drains them after the step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactEvent2 {
+    /// The first body of the pair.
+    pub body_a: u32,
+    /// The second body of the pair.
+    pub body_b: u32,
+    /// Whether the contact began or ended.
+    pub kind: ContactEventKind,
+    /// The contact point, in world space, at the moment the event fired.
+    ///
+    /// For an ended contact this is the last point the pair was seen
+    /// at; for a contact between two sensors it is the point of the
+    /// sensor contact.
+    pub point: Vec2,
+    /// The contact normal, in world space, at the moment the event fired.
+    pub normal: Vec2,
+}
+
+/// A contact event in 3D. See [`ContactEvent2`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactEvent3 {
+    /// The first body of the pair.
+    pub body_a: u32,
+    /// The second body of the pair.
+    pub body_b: u32,
+    /// Whether the contact began or ended.
+    pub kind: ContactEventKind,
+    /// The contact point, in world space, at the moment the event fired.
+    pub point: Vec3,
+    /// The contact normal, in world space, at the moment the event fired.
+    pub normal: Vec3,
+}
+
 /// Rigid body type in 2D
 ///
 /// Field order is hot-first for cache locality: the per-step hot loop
@@ -136,8 +182,11 @@ pub struct RigidBody2 {
     pub collision_group: u32,
     /// Collision groups this body accepts (warm: narrowphase pair
     /// filter), as a bit field of the group flags. See
-    /// [`collision_filter_allows`].
+    /// `RigidBody2::collision_mask`.
     pub collision_mask: u32,
+    /// Is a sensor: this body reports contacts but never pushes. See
+    /// `RigidBody2::is_sensor`.
+    pub is_sensor: bool,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material. (warm: narrowphase)
     pub material: PhysicsMaterial,
@@ -519,6 +568,7 @@ impl RigidBody2 {
             nuclear: NuclearState::default(),
             collision_group: DEFAULT_COLLISION_GROUP,
             collision_mask: DEFAULT_COLLISION_MASK,
+            is_sensor: false,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,
@@ -862,9 +912,13 @@ pub struct RigidBody3 {
     /// Collision layer this body belongs to (warm: narrowphase pair
     /// filter). See `RigidBody2::collision_group`.
     pub collision_group: u32,
-    /// Collision layers this body accepts (warm: narrowphase pair
-    /// filter). See `RigidBody2::collision_mask`.
+    /// Collision groups this body accepts (warm: narrowphase pair
+    /// filter), as a bit field of the group flags. See
+    /// `RigidBody2::collision_mask`.
     pub collision_mask: u32,
+    /// Is a sensor: this body reports contacts but never pushes. See
+    /// `RigidBody2::is_sensor`.
+    pub is_sensor: bool,
     /// Surface and mass properties (friction, restitution, density).
     /// Shapes inherit their body's material.
     pub material: PhysicsMaterial,
@@ -1164,6 +1218,7 @@ impl RigidBody3 {
             nuclear: NuclearState::default(),
             collision_group: DEFAULT_COLLISION_GROUP,
             collision_mask: DEFAULT_COLLISION_MASK,
+            is_sensor: false,
             material: PhysicsMaterial::default(),
             is_static: false,
             is_sleeping: false,

@@ -109,6 +109,14 @@ public class RigidBody3
     /// </summary>
     public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
     /// <summary>
+    /// Is a sensor: this body reports contacts but never pushes. A
+    /// sensor's contacts are reported as contact events and are not
+    /// solved, so the sensor falls through whatever it touches. That
+    /// is what a trigger volume is. Mirrors Rust
+    /// <c>RigidBody3::is_sensor</c>.
+    /// </summary>
+    public bool IsSensor { get; set; }
+    /// <summary>
     /// Ambient-force coupling multiplier (see <c>RigidBody2.AmbientScale</c>).
     /// </summary>
     public float AmbientScale { get; set; }

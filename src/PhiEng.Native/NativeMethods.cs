@@ -244,6 +244,58 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     internal static partial int phieng_world3_get_body_id_at(IntPtr world, uint index);
 
+    /// <summary>Makes a body a sensor (2D) or an ordinary body again.</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_body_sensor(
+        IntPtr world,
+        uint bodyId,
+        byte isSensor);
+
+    /// <summary>Makes a body a sensor (3D) or an ordinary body again.</summary>
+    /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_body_sensor(
+        IntPtr world,
+        uint bodyId,
+        byte isSensor);
+
+    /// <summary>Turns the contact-event collection on or off (2D).</summary>
+    /// <returns>1 on success, 0 for a null world.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_set_collect_contact_events(
+        IntPtr world,
+        byte collect);
+
+    /// <summary>Turns the contact-event collection on or off (3D).</summary>
+    /// <returns>1 on success, 0 for a null world.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_set_collect_contact_events(
+        IntPtr world,
+        byte collect);
+
+    /// <summary>The number of contact events of the last step (2D).</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_contact_event_count(IntPtr world);
+
+    /// <summary>Copies a contact event out (2D).</summary>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_contact_event(
+        IntPtr world,
+        uint index,
+        float* outEvent);
+
+    /// <summary>The number of contact events of the last step (3D).</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_contact_event_count(IntPtr world);
+
+    /// <summary>Copies a contact event out (3D).</summary>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_contact_event(
+        IntPtr world,
+        uint index,
+        float* outEvent);
+
     /// <summary>The bodies whose AABB overlaps a query box (2D).</summary>
     /// <returns>The number of ids written, or -1 for invalid input.</returns>
     [LibraryImport(LibraryName)]

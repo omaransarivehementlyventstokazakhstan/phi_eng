@@ -187,7 +187,7 @@ their managed mirrors). Not yet built: non-zero compliance (springs —
 rejected with `JointError::UnsupportedCompliance` rather than faked),
 motors, and breakable limits. Ray/shape queries beyond the AABB overlap
 are not built yet (no ray cast, shape overlap, point test or closest
-point), and there are still no sensor flags or contact callbacks.
+point).
 Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;
