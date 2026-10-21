@@ -6,6 +6,23 @@ Target: Run 60 FPS on devices with 1-2 CPU cores, 512MB-1GB RAM, no SIMD/FPU (e.
 
 Current baseline: ~2ms/step for 1500 bodies (2D) on desktop. Target: <16ms/step for 500 bodies on low-end.
 
+### How to measure a change here
+
+Absolute timings on a loaded machine drift by ±20 %, and two builds of
+**identical** source differ by 6–10 % per phase because the code layout
+moved — a fixed property of each binary, so it never averages out. A
+cross-binary A/B therefore cannot resolve anything below ~15 %, and a
+before/after comparison minutes apart is not evidence at all.
+
+The harness that removes the confounds lives in
+`crates/engine/examples/bench_solver_ab.rs`: **one binary** (so no
+layout difference), **one world** (so no heap-layout difference), and
+the two variants **alternating every 20 steps** (so the pile's own
+settling drift hits both equally). `PERF_BASELINE.md` § "Measuring on
+this machine" has the full table of confounds and their fixes. Every
+"measured" number below that is quoted with the method that produced
+it.
+
 ---
 
 ## Priority 1: Zero-Cost / High-Impact Optimizations (Week 1-2)
@@ -166,9 +183,24 @@ pub enum BroadphaseMode {
     +7.0 %, pile 3D −0.5 % — inside the noise, and the 192-byte body
     costs 9 % more memory.
   So the cache-line win does not pay for the density loss on this
-  workload. The remaining lever is a hot-field side array (SoA) rather
-  than a field reorder — that changes the solver's data flow and is not
-  yet measured.
+  workload. A re-measurement of the `repr(C)` hot-first variant with
+  the better harness (one binary, one heap layout, the two paths
+  alternating every 20 steps) confirmed it: **every phase** was 1–7 %
+  *slower* with the reordered body, and the whole step 4 % slower.
+  The field reorder stays rejected.
+- **Shipped (hot-field side array)**: the remaining lever, and the one
+  that does not pay for density. Instead of reordering `RigidBody2`,
+  the solver gathers the fields it actually reads — position, velocity,
+  angular velocity, inverse mass, inverse inertia and the two frozen
+  flags — into one cache-line-aligned 32-byte record per body, solves
+  on that, and writes the velocities back. The body array keeps its
+  176-byte layout; only the solver's *view* of it is packed, so the
+  solver's working set for the 1500-body pile drops from 264 KB to
+  48 KB. The physics has a single implementation (a `SolveBody` trait
+  the fat body and the packed record both implement), the same values
+  are copied, and the same arithmetic runs in the same order, so every
+  pinned hash is unchanged. Measured with the same harness: the solver
+  phase **−6 % to −10 %**, the whole step **−2 % to −5.5 %**.
 - **Shipped (grid hashing)**: the contact cache already used FxHash —
   a single multiply-rotate per word — because its keys are internal
   `(body_a, body_b)` pairs. The broad-phase grid had the same kind of

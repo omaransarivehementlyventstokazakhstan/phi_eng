@@ -92,11 +92,11 @@ now emits **18** raw pairs and its pair phase is 18x faster.
 - **In:** broad-phase pair generation (15 % here) — the AABB pair filter
   and the static-pair pruning already took the static scene's pair phase
   from 91 % to 41 % of its step (see below).
-- **In, conditionally:** the rigid-body memory layout. The solver is
-  the dominant phase on the corrected trajectory, so the layout work
-  from the plan is back on the table — pending its own measurement.
-  (A `repr(C)` field reorder was measured and did **not** pay; see
-  `OPTIMIZATION_PLAN.md`.)
+- **In, done:** the rigid-body memory layout. The solver is the dominant
+  phase on the corrected trajectory, and the packed solver view (see
+  below) now keeps the solver's working set in 48 KB instead of 264 KB.
+  A `repr(C)` field reorder of `RigidBody2` itself was measured and did
+  **not** pay — see `OPTIMIZATION_PLAN.md`.
 - **Out:** SIMD (already measured slower than the scalar loop it would
   replace — see `OPTIMIZATION_PLAN.md` §2.2).
 
@@ -140,6 +140,56 @@ islands parallel −11.7 %, pile 3D −8.6 %, pile 2D −2 % to −3 %.
    every hash is bit-identical.
 4. Otherwise revert it and record the negative result in
    `OPTIMIZATION_PLAN.md` — a measured "no" is worth as much as a "yes".
+
+## Measuring on this machine (read this before trusting a number)
+
+The absolute timings on this box drift by ±20 % between runs, and two
+builds of **identical** source differ by 6–10 % per phase because the
+code layout moved. That offset is a fixed property of each binary, so
+it never averages out: a cross-binary A/B cannot resolve anything below
+about 15 %. Three confounds, and how to remove each:
+
+| Confound | Symptom | Fix |
+| -------- | ------- | --- |
+| Code layout | every phase moves together by 5–10 % | put both variants in **one binary** and select at run time |
+| Heap layout | every phase moves together by 5–10 % | the extra scratch changes where the body's array lands; keep the **same world and heap** for both variants |
+| Work drift | whichever variant is measured *last* looks cheapest | the pile keeps settling while the measurement runs; **alternate the variants** every few steps, not every few hundred |
+
+`crates/engine/examples/bench_solver_ab.rs` is the harness that applies
+all three fixes at once: one world, one heap layout, the two solver
+paths alternating every 20 steps. It is the reference for any change
+that is too small to survive a cross-binary comparison.
+
+```text
+cargo run -p phieng --example bench_solver_ab --release --features phase-timing
+```
+
+## The packed solver view (shipped)
+
+The solver's inner loop reads position, velocity, angular velocity,
+inverse mass and inverse inertia for both ends of every constraint, on
+every iteration. In `RigidBody2` those fields sit at offsets 16, 56, 96,
+100 and 104 of a 176-byte body and the frozen flags at 168/169, so one
+body spans **three cache lines** and the 1500-body pile costs the
+solver a 264 KB working set.
+
+The solver now runs on a packed copy of exactly those fields — one
+32-byte record per body, cache-line aligned — so the working set drops
+to **48 KB**. The copy holds the same values and the same arithmetic
+runs in the same order, so the result is bit-identical; only velocity
+and angular velocity change during the solve, and both are written back
+before the solve returns.
+
+Measured with the harness above (three independent repeats):
+
+| Phase | Packed | Direct | Delta |
+| ----- | ------ | ------ | ----- |
+| solver | 202–215 ms | 216–240 ms | **−6 % to −10 %** |
+| TOTAL (wall clock) | 497–510 ms | 519–535 ms | **−2 % to −5.5 %** |
+
+Every other phase stayed within noise, as it must: the packed view only
+touches the solver. All hashes are bit-identical (2D, 3D, islands serial
+**and** parallel).
 
 ## The overhaul, end to end
 

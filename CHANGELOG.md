@@ -68,6 +68,26 @@ This project follows [Semantic Versioning](https://semver.org/) and
   contact to match. The wake still happens before the solver runs, and
   it cannot change what the match found: it only clears sleep flags,
   and the cache holds the previous frame's contacts either way.
+- **The contact solver runs on a packed copy of the bodies' hot fields.**
+  The solver's inner loop reads position, velocity, angular velocity,
+  inverse mass and inverse inertia for both ends of every constraint, on
+  every iteration. In `RigidBody2` those fields sit at offsets 16, 56,
+  96, 100 and 104 of a 176-byte body, and the frozen flags at 168/169 —
+  so one body spans three cache lines and the 1500-body pile costs the
+  solver a 264 KB working set. The solver now gathers exactly those
+  fields into one cache-line-aligned 32-byte record per body (48 KB for
+  the same pile) and writes the velocities back when it is done.
+
+  The result is **bit-identical**: the copy holds the same values, the
+  same arithmetic runs in the same order, and the physics has a single
+  implementation shared by both body views. Every pinned hash is
+  unchanged — 2D, 3D, islands serial **and** parallel.
+
+  Measured with `crates/engine/examples/bench_solver_ab.rs` (one world,
+  one heap layout, the two solver paths alternating every 20 steps, so
+  neither the code layout nor the settling drift can favour either
+  side): the solver phase **−6 % to −10 %** and the whole step
+  **−2 % to −5.5 %** over three independent repeats.
 
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,

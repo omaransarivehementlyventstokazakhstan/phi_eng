@@ -4,6 +4,190 @@ use phieng_math::{DEFAULT_BAUMGARTE, DEFAULT_SLOP, EARLY_EXIT_TOL, EPS};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+/// The body fields the contact solver reads and writes.
+///
+/// The solver's inner loop touches position, velocity, angular velocity,
+/// inverse mass and inverse inertia for *both* ends of every constraint,
+/// on every iteration. The trait exists so that physics has exactly one
+/// implementation: the fat [`RigidBody2`] and the packed [`HotBody`] view
+/// below run the same code, so switching views cannot change a result.
+trait SolveBody {
+    /// World-space position of the body's origin.
+    fn position(&self) -> Vec2;
+    /// Linear velocity.
+    fn velocity(&self) -> Vec2;
+    /// Angular velocity in radians per second.
+    fn angular_velocity(&self) -> f32;
+    /// Inverse mass (zero for a static body).
+    fn inv_mass(&self) -> f32;
+    /// Inverse inertia (zero for a static body).
+    fn inv_inertia(&self) -> f32;
+    /// True when the body never moves.
+    fn is_static(&self) -> bool;
+    /// True when the body is asleep.
+    fn is_sleeping(&self) -> bool;
+    /// Overwrite the linear velocity.
+    fn set_velocity(&mut self, v: Vec2);
+    /// Overwrite the angular velocity.
+    fn set_angular_velocity(&mut self, w: f32);
+}
+
+/// Packed solver view of a body: the hot fields of [`RigidBody2`] in a
+/// single 32-byte record.
+///
+/// In `RigidBody2` the fields the solver needs sit at offsets 16
+/// (position), 56 (velocity), 96 (angular velocity), 100 (inverse mass)
+/// and 104 (inverse inertia) of a 176-byte body, and the frozen flags at
+/// 168/169 — so one body spans three cache lines and the 1500-body pile
+/// costs the solver a 264 KB working set. Packed here, one body is one
+/// cache line and the same pile costs 48 KB, which keeps the solver's
+/// random accesses inside L2.
+///
+/// `repr(align(32))` is load-bearing: the record is 32 bytes, so
+/// without the alignment guarantee a quarter of the records would
+/// straddle a 64-byte line and cost two lines each.
+///
+/// Only the fields the solver touches are copied, so the view is
+/// gathered before the solve and scattered back afterwards; nothing else
+/// may read a body's velocity while the packed view is live.
+#[derive(Clone, Copy)]
+#[repr(align(32))]
+struct HotBody {
+    /// World-space position of the body's origin.
+    position: Vec2,
+    /// Linear velocity.
+    velocity: Vec2,
+    /// Angular velocity in radians per second.
+    angular_velocity: f32,
+    /// Inverse mass (zero for a static body).
+    inv_mass: f32,
+    /// Inverse inertia (zero for a static body).
+    inv_inertia: f32,
+    /// Bit 0: static. Bit 1: sleeping.
+    flags: u8,
+}
+
+impl HotBody {
+    /// Bit set on `flags` for a static body.
+    const STATIC: u8 = 1;
+    /// Bit set on `flags` for a sleeping body.
+    const SLEEPING: u8 = 2;
+
+    /// Pack the solver's hot fields of `body`.
+    fn from_body(body: &RigidBody2) -> Self {
+        let mut flags = 0;
+        if body.is_static {
+            flags |= Self::STATIC;
+        }
+        if body.is_sleeping {
+            flags |= Self::SLEEPING;
+        }
+        HotBody {
+            position: body.transform.position,
+            velocity: body.velocity,
+            angular_velocity: body.angular_velocity,
+            inv_mass: body.inv_mass,
+            inv_inertia: body.inv_inertia,
+            flags,
+        }
+    }
+}
+
+impl SolveBody for HotBody {
+    #[inline]
+    fn position(&self) -> Vec2 {
+        self.position
+    }
+    #[inline]
+    fn velocity(&self) -> Vec2 {
+        self.velocity
+    }
+    #[inline]
+    fn angular_velocity(&self) -> f32 {
+        self.angular_velocity
+    }
+    #[inline]
+    fn inv_mass(&self) -> f32 {
+        self.inv_mass
+    }
+    #[inline]
+    fn inv_inertia(&self) -> f32 {
+        self.inv_inertia
+    }
+    #[inline]
+    fn is_static(&self) -> bool {
+        self.flags & Self::STATIC != 0
+    }
+    #[inline]
+    fn is_sleeping(&self) -> bool {
+        self.flags & Self::SLEEPING != 0
+    }
+    #[inline]
+    fn set_velocity(&mut self, v: Vec2) {
+        self.velocity = v;
+    }
+    #[inline]
+    fn set_angular_velocity(&mut self, w: f32) {
+        self.angular_velocity = w;
+    }
+}
+
+impl SolveBody for RigidBody2 {
+    #[inline]
+    fn position(&self) -> Vec2 {
+        self.transform.position
+    }
+    #[inline]
+    fn velocity(&self) -> Vec2 {
+        self.velocity
+    }
+    #[inline]
+    fn angular_velocity(&self) -> f32 {
+        self.angular_velocity
+    }
+    #[inline]
+    fn inv_mass(&self) -> f32 {
+        self.inv_mass
+    }
+    #[inline]
+    fn inv_inertia(&self) -> f32 {
+        self.inv_inertia
+    }
+    #[inline]
+    fn is_static(&self) -> bool {
+        self.is_static
+    }
+    #[inline]
+    fn is_sleeping(&self) -> bool {
+        self.is_sleeping
+    }
+    #[inline]
+    fn set_velocity(&mut self, v: Vec2) {
+        self.velocity = v;
+    }
+    #[inline]
+    fn set_angular_velocity(&mut self, w: f32) {
+        self.angular_velocity = w;
+    }
+}
+
+thread_local! {
+    /// Scratch for the packed solver view.
+    ///
+    /// Thread-local because `Solver::solve` takes `&self` — the solver
+    /// cannot own reusable scratch — and because the parallel island path
+    /// runs the solver on several threads at once. Reused across steps,
+    /// so the packed view costs no allocation in the steady state.
+    static HOT_BODIES: std::cell::RefCell<Vec<HotBody>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Layout probe: a no-op that shifts the code layout of everything that
+/// follows it, used to measure the cross-binary noise floor.
+#[inline(never)]
+#[allow(dead_code)]
+pub fn _layout_probe() {}
+
 /// Contact constraint for the solver (2D sequential impulse with Coulomb friction).
 #[derive(Debug, Clone)]
 pub struct ContactConstraint {
@@ -198,6 +382,15 @@ pub struct Solver {
     /// reference behavior. When on and the step holds 0-1 islands, the
     /// solver takes the exact serial path (zero behavior change).
     pub parallel: bool,
+    /// Run the solve on a packed copy of the bodies' hot fields.
+    ///
+    /// Only the profiling build (`phase-timing` feature) exposes this
+    /// switch: it lets the packed path and the direct path be A/B
+    /// measured *inside one binary*, which is the only way to tell a real
+    /// win from code-layout luck. The default build always uses the
+    /// packed path — this field does not exist there.
+    #[cfg(feature = "phase-timing")]
+    pub packed: bool,
 }
 
 impl Solver {
@@ -218,6 +411,8 @@ impl Solver {
             enable_friction: true,
             enable_restitution: true,
             parallel: false,
+            #[cfg(feature = "phase-timing")]
+            packed: true,
         }
     }
 
@@ -236,9 +431,54 @@ impl Solver {
     /// velocities rather than half-updated per-contact state.
     ///
     /// Returns the iterations actually run (early exit when converged).
+    ///
+    /// The solve runs on a packed copy of the bodies' hot fields (one
+    /// 32-byte record per body) so the inner loop's random accesses hit
+    /// a 48 KB working set instead of a 264 KB one. The copy holds the
+    /// same values, so the result is bit-identical to solving the bodies
+    /// directly; only velocity and angular velocity change during the
+    /// solve, and both are written back before this returns.
     pub fn solve(
         &self,
         bodies: &mut [RigidBody2],
+        constraints: &mut [ContactConstraint],
+        dt: f32,
+    ) -> usize {
+        // The direct path exists only in the profiling build, so the
+        // packed path can be measured against it inside one binary.
+        #[cfg(feature = "phase-timing")]
+        if !self.packed {
+            return self.solve_core(bodies, constraints, dt);
+        }
+
+        HOT_BODIES.with(|cell| {
+            let mut hot = cell.borrow_mut();
+            hot.clear();
+            hot.reserve(bodies.len());
+            for body in bodies.iter() {
+                hot.push(HotBody::from_body(body));
+            }
+
+            let ran = self.solve_core(&mut hot, constraints, dt);
+
+            // Write the solved velocities back. Positions, inverse masses
+            // and the frozen flags are not touched by the solver, so
+            // velocity and angular velocity are the only fields to
+            // scatter.
+            for (body, packed) in bodies.iter_mut().zip(hot.iter()) {
+                body.velocity = packed.velocity;
+                body.angular_velocity = packed.angular_velocity;
+            }
+            ran
+        })
+    }
+
+    /// The solver's pre-loop and iteration core, generic over the body
+    /// view. [`Solver::solve`] runs it on the packed [`HotBody`] view,
+    /// [`Solver::solve_indexed`] on the bodies themselves.
+    fn solve_core<B: SolveBody>(
+        &self,
+        bodies: &mut [B],
         constraints: &mut [ContactConstraint],
         dt: f32,
     ) -> usize {
@@ -584,13 +824,13 @@ impl Solver {
     /// Sleeping bodies count as infinite mass (exactly like statics),
     /// so a frozen body anchors its awake partners instead of splitting
     /// the correction with a share that integrate then discards.
-    fn compute_mass_terms(bodies: &[RigidBody2], constraint: &mut ContactConstraint) {
+    fn compute_mass_terms<B: SolveBody>(bodies: &[B], constraint: &mut ContactConstraint) {
         let body_a = &bodies[constraint.body_a];
         let body_b = &bodies[constraint.body_b];
         let (ima, iia) = Self::effective_inverses(body_a);
         let (imb, iib) = Self::effective_inverses(body_b);
-        let r_a = constraint.point - body_a.transform.position;
-        let r_b = constraint.point - body_b.transform.position;
+        let r_a = constraint.point - body_a.position();
+        let r_b = constraint.point - body_b.position();
         constraint.mass_normal = effective_mass(ima, imb, iia, iib, r_a, r_b, constraint.normal);
         constraint.mass_tangent =
             effective_mass(ima, imb, iia, iib, r_a, r_b, constraint.tangent());
@@ -598,17 +838,17 @@ impl Solver {
 
     /// Inverse mass/inertia as seen by the solver: sleeping bodies are
     /// infinite-mass (zero), exactly like statics.
-    fn effective_inverses(body: &RigidBody2) -> (f32, f32) {
-        if body.is_static || body.is_sleeping {
+    fn effective_inverses<B: SolveBody>(body: &B) -> (f32, f32) {
+        if body.is_static() || body.is_sleeping() {
             (0.0, 0.0)
         } else {
-            (body.inv_mass, body.inv_inertia)
+            (body.inv_mass(), body.inv_inertia())
         }
     }
 
     /// Apply cached impulses from the previous frame directly (no re-scaling:
     /// the stored scalars already are impulses).
-    fn apply_warm_starting(bodies: &mut [RigidBody2], constraint: &ContactConstraint) {
+    fn apply_warm_starting<B: SolveBody>(bodies: &mut [B], constraint: &ContactConstraint) {
         if constraint.normal_impulse == 0.0 && constraint.tangent_impulse == 0.0 {
             return;
         }
@@ -616,8 +856,8 @@ impl Solver {
         let p =
             constraint.normal * constraint.normal_impulse + tangent * constraint.tangent_impulse;
 
-        let r_a = constraint.point - bodies[constraint.body_a].transform.position;
-        let r_b = constraint.point - bodies[constraint.body_b].transform.position;
+        let r_a = constraint.point - bodies[constraint.body_a].position();
+        let r_b = constraint.point - bodies[constraint.body_b].position();
 
         apply_impulse(bodies, constraint.body_a, constraint.body_b, r_a, r_b, p);
     }
@@ -625,21 +865,21 @@ impl Solver {
     /// Solve the normal (non-penetration + restitution + Baumgarte) constraint
     /// with impulse accumulation (j_n clamped >= 0). Returns the absolute
     /// applied impulse (drives the convergence early-exit).
-    fn solve_normal(
+    fn solve_normal<B: SolveBody>(
         &self,
-        bodies: &mut [RigidBody2],
+        bodies: &mut [B],
         constraint: &mut ContactConstraint,
         dt: f32,
     ) -> f32 {
         let body_a = &bodies[constraint.body_a];
         let body_b = &bodies[constraint.body_b];
 
-        let r_a = constraint.point - body_a.transform.position;
-        let r_b = constraint.point - body_b.transform.position;
+        let r_a = constraint.point - body_a.position();
+        let r_b = constraint.point - body_b.position();
 
         // Relative velocity at contact point
-        let v_a = body_a.velocity + vec2_to_angular(r_a, body_a.angular_velocity);
-        let v_b = body_b.velocity + vec2_to_angular(r_b, body_b.angular_velocity);
+        let v_a = body_a.velocity() + vec2_to_angular(r_a, body_a.angular_velocity());
+        let v_b = body_b.velocity() + vec2_to_angular(r_b, body_b.angular_velocity());
         let relative_velocity = v_b - v_a;
 
         let vn = relative_velocity.dot(constraint.normal);
@@ -686,16 +926,16 @@ impl Solver {
     /// Solve the tangential (Coulomb friction) constraint with accumulation.
     /// Clamps |j_t| <= mu * j_n (friction cone). Returns the absolute
     /// applied impulse.
-    fn solve_friction(bodies: &mut [RigidBody2], constraint: &mut ContactConstraint) -> f32 {
+    fn solve_friction<B: SolveBody>(bodies: &mut [B], constraint: &mut ContactConstraint) -> f32 {
         let tangent = constraint.tangent();
         let body_a = &bodies[constraint.body_a];
         let body_b = &bodies[constraint.body_b];
 
-        let r_a = constraint.point - body_a.transform.position;
-        let r_b = constraint.point - body_b.transform.position;
+        let r_a = constraint.point - body_a.position();
+        let r_b = constraint.point - body_b.position();
 
-        let v_a = body_a.velocity + vec2_to_angular(r_a, body_a.angular_velocity);
-        let v_b = body_b.velocity + vec2_to_angular(r_b, body_b.angular_velocity);
+        let v_a = body_a.velocity() + vec2_to_angular(r_a, body_a.angular_velocity());
+        let v_b = body_b.velocity() + vec2_to_angular(r_b, body_b.angular_velocity());
         let vt = (v_b - v_a).dot(tangent);
 
         let mass_t = constraint.mass_tangent;
@@ -736,17 +976,18 @@ impl Default for Solver {
 #[inline]
 /// True when both constraint ends are frozen (static or sleeping):
 /// zero velocity by construction, so the pair needs no solve work.
-fn both_frozen(bodies: &[RigidBody2], a: usize, b: usize) -> bool {
-    (bodies[a].is_static || bodies[a].is_sleeping) && (bodies[b].is_static || bodies[b].is_sleeping)
+fn both_frozen<B: SolveBody>(bodies: &[B], a: usize, b: usize) -> bool {
+    (bodies[a].is_static() || bodies[a].is_sleeping())
+        && (bodies[b].is_static() || bodies[b].is_sleeping())
 }
 
-fn restitution_bias(bodies: &[RigidBody2], constraint: &ContactConstraint) -> f32 {
+fn restitution_bias<B: SolveBody>(bodies: &[B], constraint: &ContactConstraint) -> f32 {
     let body_a = &bodies[constraint.body_a];
     let body_b = &bodies[constraint.body_b];
-    let r_a = constraint.point - body_a.transform.position;
-    let r_b = constraint.point - body_b.transform.position;
-    let v_a = body_a.velocity + vec2_to_angular(r_a, body_a.angular_velocity);
-    let v_b = body_b.velocity + vec2_to_angular(r_b, body_b.angular_velocity);
+    let r_a = constraint.point - body_a.position();
+    let r_b = constraint.point - body_b.position();
+    let v_a = body_a.velocity() + vec2_to_angular(r_a, body_a.angular_velocity());
+    let v_b = body_b.velocity() + vec2_to_angular(r_b, body_b.angular_velocity());
     let vn = (v_b - v_a).dot(constraint.normal);
     if vn < -1.0 {
         -constraint.restitution * vn
@@ -787,8 +1028,8 @@ fn effective_mass(
 /// instead of ~6. `body_a != body_b` always holds — broadphase pairs are
 /// distinct bodies and FFI ids are validated before use — and out-of-range
 /// indices panic exactly as before (pipeline corruption must stay loud).
-fn apply_impulse(
-    bodies: &mut [RigidBody2],
+fn apply_impulse<B: SolveBody>(
+    bodies: &mut [B],
     body_a: usize,
     body_b: usize,
     r_a: Vec2,
@@ -808,13 +1049,17 @@ fn apply_impulse(
 
     // Frozen bodies (static or sleeping) take no impulse, mirroring the
     // infinite-mass mass terms above.
-    if !a.is_static && !a.is_sleeping {
-        a.velocity -= p * a.inv_mass;
-        a.angular_velocity -= (r_a.x * p.y - r_a.y * p.x) * a.inv_inertia;
+    if !a.is_static() && !a.is_sleeping() {
+        a.set_velocity(a.velocity() - p * a.inv_mass());
+        a.set_angular_velocity(
+            a.angular_velocity() - (r_a.x * p.y - r_a.y * p.x) * a.inv_inertia(),
+        );
     }
-    if !b.is_static && !b.is_sleeping {
-        b.velocity += p * b.inv_mass;
-        b.angular_velocity += (r_b.x * p.y - r_b.y * p.x) * b.inv_inertia;
+    if !b.is_static() && !b.is_sleeping() {
+        b.set_velocity(b.velocity() + p * b.inv_mass());
+        b.set_angular_velocity(
+            b.angular_velocity() + (r_b.x * p.y - r_b.y * p.x) * b.inv_inertia(),
+        );
     }
 }
 

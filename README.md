@@ -530,6 +530,30 @@ contacts, and that changes the physics on purpose.
 Where the time goes now (2D pile, per step): the solver 40 %, the
 narrowphase 19 %, pair generation 15 %, the grid rebuild 9 %.
 
+## Baseline matrix 1c (packed solver view, 2026-10-21)
+
+The solver's inner loop reads six fields of each body for both ends of
+every constraint, on every iteration. In `RigidBody2` those fields span
+three cache lines, so the 1500-body pile cost the solver a 264 KB
+working set. The solver now gathers them into one cache-line-aligned
+32-byte record per body (48 KB for the same pile) and writes the
+velocities back when it is done — the body array keeps its layout, only
+the solver's *view* of it is packed.
+
+| Measure | Value | Notes |
+|---|---|---|
+| solver phase | **−6 % to −10 %** | three independent repeats |
+| whole 2D pile step | **−2 % to −5.5 %** | same repeats |
+| every pinned hash | **bit-identical** | 2D, 3D, islands serial **and** parallel |
+
+Those numbers come from `cargo run -p phieng --example
+bench_solver_ab --release --features phase-timing`, which puts both
+variants in one binary, one world and one heap layout, and alternates
+them every 20 steps. Cross-binary comparisons on a loaded machine
+cannot resolve anything below ~15 %: two builds of *identical* source
+differ by 6–10 % per phase because the code layout moved.
+`PERF_BASELINE.md` documents all three confounds and their fixes.
+
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead
 dominates (0.50x Rust scoped-threads, 0.56x C# threadpool this run;
