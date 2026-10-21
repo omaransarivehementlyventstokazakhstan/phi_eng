@@ -74,26 +74,29 @@ with more contacts in flight, which is why the solver dominates here.
 
 | Scene | ms/step | Broadphase share | Raw pairs | Cached pairs |
 | ----- | ------- | ---------------- | --------- | ------------ |
-| pile 3D (400 bodies) | 0.139 | 37 % | 400 | 400 |
-| islands (40 bodies) | 0.035 | 28 % | 44 | 43 |
-| **statics (420 bodies)** | **0.721** | **97 %** | **8 010** | **14** |
-| fluid (96 SPH particles) | 0.070 | 1 % | — | — |
+| pile 3D (400 bodies) | 0.184 | 33 % | 400 | 400 |
+| islands (40 bodies) | 0.036 | 22 % | 44 | 43 |
+| **statics (420 bodies)** | **0.205** | **41 %** | **18** | **14** |
+| fluid (96 SPH particles) | 0.114 | 1 % | — | — |
 
-The static-heavy scene is the pathological case: the broad phase
-generates **8 010** candidate pairs to end up with **14** live ones, and
-that generation is 91 % of the step. (Raw-pair counts here are measured
-with the AABB pair filter active; without it the static scene emits
-tens of thousands.)
+The static-heavy scene was the pathological case: the broad phase used
+to generate **8 010** candidate pairs to end up with **14** live ones,
+and that generation was 91 % of the step. The grid no longer generates
+static-static pairs (they can never produce an impulse), so the scene
+now emits **18** raw pairs and its pair phase is 18x faster.
 
 ## What this rules in and out
 
-- **In:** the solver (38 % of the pile step on the corrected
+- **In:** the solver (40 % of the pile step on the corrected
   trajectory) and the narrowphase (19 %).
-- **In:** broad-phase pair generation (14 % here, 91 % of the static
-  scene) — addressed by the AABB pair filter (see below).
+- **In:** broad-phase pair generation (15 % here) — the AABB pair filter
+  and the static-pair pruning already took the static scene's pair phase
+  from 91 % to 41 % of its step (see below).
 - **In, conditionally:** the rigid-body memory layout. The solver is
   the dominant phase on the corrected trajectory, so the layout work
   from the plan is back on the table — pending its own measurement.
+  (A `repr(C)` field reorder was measured and did **not** pay; see
+  `OPTIMIZATION_PLAN.md`.)
 - **Out:** SIMD (already measured slower than the scalar loop it would
   replace — see `OPTIMIZATION_PLAN.md` §2.2).
 
@@ -116,11 +119,23 @@ green both ways):
 No hash moves in either direction: the filter drops only pairs the
 (corrected) narrowphase rejects anyway.
 
+## The static-pair pruning (shipped)
+
+The grid learns which bodies are static and never generates a
+static-static pair: two statics can never produce an impulse, so the
+narrowphase discarded those pairs one step later. The static-heavy
+scene's pair phase went from **0.999 to 0.054 ms/step (18x)** and its
+raw pair count from 8 010 to 18. Interleaved A/B (9 alternating
+rounds, hash guard green on both sides): islands serial −10.2 %,
+islands parallel −11.7 %, pile 3D −8.6 %, pile 2D −2 % to −3 %.
+
 ## The rule for every change
 
 1. One change, one commit, revertible on its own.
 2. Measure before and after with `tools/bench_ab.py` (median of 5, the
-   hash guard on).
+   hash guard on). On a loaded machine, prefer the interleaved
+   A/B (`tools/` script) — the absolute numbers drift by ±20 % between
+   runs, so a before/after comparison minutes apart is not evidence.
 3. Keep it only if it wins **at least 3 %** on the target scene **and**
    every hash is bit-identical.
 4. Otherwise revert it and record the negative result in

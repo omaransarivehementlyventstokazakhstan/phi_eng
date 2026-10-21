@@ -148,23 +148,60 @@ pub enum BroadphaseMode {
   - The benchmark scene is kept: the repo had no static-heavy scenario
     to measure, and the next attempt needs one.
 - **Measured, not shipped (rigid-body layout)**: the solver is the
-  largest phase of the 2D pile (38 % of the step), and its inner loop
+  largest phase of the 2D pile (40 % of the step) and its inner loop
   reads position, velocity, angular velocity, inverse mass/inertia and
-  the two flags for every constraint on every iteration. `RigidBody2` is
-  176 bytes and the compiler's field reordering spread those hot fields
+  the two flags for every constraint it touches. `RigidBody2` is 176
+  bytes and the compiler's field reordering spread those hot fields
   across three cache lines (position @16, velocity @56, angular
-  velocity @96, flags @168). Pinning the order with `#[repr(C)]` and
-  declaring the hot fields first packs them into bytes 0–58 — one line.
-  It measured **slower**, though: interleaved A/B (two binaries, nine
-  alternating rounds, same machine) gave pile 2D iters=8 **0.920 → 1.162
-  ms/step (+26 %)**, iters=1 **+8.8 %**, while the settled census was
-  unchanged (−0.6 %) and the 40-body islands scene moved −0.6 %. The
-  reason is that `repr(C)` also fixed the struct at 192 bytes with
-  16-byte alignment, so consecutive bodies no longer pack as tightly and
-  the whole-body iteration streams more memory. So the cache-line win
-  does not pay for the density loss on this workload. The remaining
-  lever is a hot-field side array (SoA) rather than a field reorder —
-  but that changes the solver's data flow and is not yet measured.
+  velocity @96, flags @168). Two layouts were measured:
+  - `repr(C)` with the hot fields declared first: the hot block packs
+    into bytes 0–58 (one line), but the struct grows to 192 bytes with
+    16-byte alignment, so the body array no longer packs as tightly.
+    Interleaved A/B (two binaries, nine alternating rounds, same
+    machine): pile 2D iters=8 **0.920 → 1.162 ms/step (+26 %)**,
+    iters=1 +8.8 %, the settled census unchanged (−0.6 %).
+  - `repr(C, align(64))`: the body starts on a cache-line boundary, so
+    the hot block never straddles two lines. Interleaved A/B: pile 2D
+    iters=1 −3.7 %, iters=8 +3.2 %, census −2.6 %, islands serial
+    +7.0 %, pile 3D −0.5 % — inside the noise, and the 192-byte body
+    costs 9 % more memory.
+  So the cache-line win does not pay for the density loss on this
+  workload. The remaining lever is a hot-field side array (SoA) rather
+  than a field reorder — that changes the solver's data flow and is not
+  yet measured.
+- **Shipped (grid hashing)**: the contact cache already used FxHash —
+  a single multiply-rotate per word — because its keys are internal
+  `(body_a, body_b)` pairs. The broad-phase grid had the same kind of
+  key (an internal `CellKey` of two `i32`s) but used std's default
+  SipHash, and the grid is rebuilt every step: 1500 bodies × up to 4
+  cells each is ~6000 hash lookups per step, each a random probe into a
+  large table. FxHash now lives in `phieng-math` so both crates share
+  it. The grid's *output* is unaffected — `collect_pairs` sorts and
+  dedupes, so the emitted sequence is a canonical set and does not
+  depend on the hash order — and every pinned hash is unchanged.
+  Measured on the rebuild phase, the phase the hasher touches (three
+  consecutive runs each): **0.230 / 0.245 / 0.292 ms (SipHash)** →
+  **0.170 / 0.185 / 0.188 ms (FxHash)**. Interleaved A/B over 13
+  alternating rounds: islands serial −12.6 %, islands parallel
+  −18.5 %, pile 3D −9.5 %; the 1500-body pile is solver-bound, so
+  its grid is a smaller share.
+- **Shipped (static-pair pruning)**: the static-heavy scene generated
+  **8 010** candidate pairs to end up with **14** live ones, and the
+  generation was 91 % of the step. Every one of those pairs was static
+  against static: the narrowphase discards them immediately (a static
+  body has infinite mass, so the constraint would solve to zero), so
+  the work was thrown away one step later. The grid now learns which
+  bodies are static (`insert_static`) and skips a candidate pair whose
+  *both* ends are static — a static still pairs with every dynamic
+  body, so only the pair of two statics is dropped. The surviving
+  pairs are the same set in the same relative order (the emitted
+  sequence is sorted and deduped), so the constraint stream, the
+  contact cache and the trajectory are unchanged: every pinned hash
+  is identical, verified with the hash guard on both sides of the A/B.
+  The static scene's pair phase: **0.999 → 0.054 ms/step (18×)**,
+  and its raw pair count from 8 010 to 18. Interleaved A/B over 9
+  alternating rounds: islands serial −10.2 %, islands parallel
+  −11.7 %, pile 3D −8.6 %, pile 2D −2 % to −3 %.
 - **Remaining**: an actual persistent static constraint graph, or
   static-awareness in the broadphase.
 - **Shipped (narrowphase input filtering)**: every broadphase backend
