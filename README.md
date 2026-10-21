@@ -451,8 +451,8 @@ always read time *with* those counts, and with the solver sweep
   all **recycle their per-key / per-cell buffers through internal
   pools** — vacated entries return their `Vec` to a pool instead of the
   allocator, and new entries draw from it. The pile now runs at
-  **~0.8 allocs/step** (was ~467: the
-  churn was cell/entry birth-death, now effectively zero). Pooling is
+  **0.0 allocs/step** (was ~467: the churn was cell/entry birth-death,
+  now effectively zero). Pooling is
   memory-only and keeps `contact_cache.len()` exact, so trajectories are
   bit-identical. Residual churn is *trajectory-dependent* (pair order
   changes float summation order, which changes the pile's evolution —
@@ -498,6 +498,33 @@ missing corner-axis test: the old code reported phantom contacts for
 circles grazing polygon corners (face-normal projections can all
 overlap while the shapes are separated). Scenes without
 circle-vs-polygon corner grazing (islands, pile 3D) are unchanged.
+
+## Baseline matrix 1b (broadphase overhaul, 2026-10-21)
+
+The numbers below are the current state on an AMD Ryzen 7 7445HS
+(Windows x64, release). `PERF_BASELINE.md` holds the full table, the
+per-phase split, and the measurement discipline.
+
+| Scene | Rust serial | Rust parallel | Notes |
+|---|---|---|---|
+| pile 2D (1500), iters=1 | 0.624 ms/step | — | was 2.31 ms/step before the overhaul |
+| pile 2D (1500), iters=8 | 0.890 ms/step | — | was 5.11 ms/step (**−83 %**) |
+| pile 2D, settled census | 1.834 ms/step | — | was 3.18 ms/step (**−42 %**) |
+| pile 2D allocs | **0.0/step** | — | was 0.8/step |
+| islands (8×5 stacks) | 0.0289 ms/step | 0.0328 | the parallel path is still ~13 % slower at 41 bodies |
+| pile 3D (400), iters=8 | 0.176 ms/step | n/a (2D-only) | was 0.232 ms/step |
+| pile 3D allocs | 0.0/step | — | |
+| statics (420) | 0.205 ms/step | — | pair phase 18x faster (0.999 → 0.054 ms) |
+
+Every one of those changes leaves the pinned hashes bit-identical: the
+grid compaction, the FxHash switch, the AABB pair filter and the
+static-pair pruning all change *which* pairs are examined, never the
+constraint stream. The hashes that did move (the 2D pair) moved for a
+different reason: the circle-vs-polygon corner-axis fix removed phantom
+contacts, and that changes the physics on purpose.
+
+Where the time goes now (2D pile, per step): the solver 40 %, the
+narrowphase 19 %, pair generation 15 %, the grid rebuild 9 %.
 
 Findings for the SoA verdict: (1) the 41-body islands scene sits
 **below the parallelization threshold** — thread/barrier overhead

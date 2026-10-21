@@ -28,6 +28,39 @@ This project follows [Semantic Versioning](https://semver.org/) and
   - bench pile 2D: `0xc509c18cd50043b4` → `0x4acb6694f3a9917`
   - bench islands, determinism scene 3D and bench pile 3D are unchanged.
 
+### Changed
+- **The broad phase is substantially faster, with identical results.**
+  Three changes, each measured and each leaving every pinned hash
+  bit-identical:
+  - **The grid is compacted every step.** It used to keep every cell it
+    had ever seen and compact only every 256 clears, so a scene that
+    swept its bodies across many positions left millions of cells
+    behind — a settled 1500-body 2D pile held **3 327 878 cells for
+    1501 bodies**, and every lookup in a hash table that large is a
+    cache miss. The insert pass cost ~650 ns per body, essentially all
+    of it in the hash lookup.
+  - **The grid is hashed with FxHash** instead of std's SipHash. The
+    contact cache already used FxHash (its keys are internal
+    `(body_a, body_b)` pairs); the grid's key is the same kind of
+    internal value. The hasher now lives in `phieng-math` so both
+    crates share it. The grid's *output* is unaffected — the emitted
+    pair sequence is sorted and deduped, so it does not depend on the
+    hash order.
+  - **Static-static pairs are no longer generated.** Two statics can
+    never produce an impulse, and the narrowphase discarded those
+    pairs one step later; the static-heavy scene generated **8 010**
+    candidate pairs to end up with **14** live ones, and that
+    generation was 91 % of the step. The grid now learns which bodies
+    are static and skips those pairs at the source. A static still pairs
+    with every dynamic body.
+  Measured on the corrected trajectory (AMD Ryzen 7 7445HS, release,
+  interleaved A/B with the hash guard green on both sides): the static
+  scene's pair phase **0.999 → 0.054 ms/step (18x)**; islands serial
+  −10 %, islands parallel −12 %, pile 3D −9 %. Against the
+  pre-SAT-fix baseline the 2D pile's 8-iteration step went
+  **5.11 → 0.89 ms/step (−83 %)** and its settled census
+  **3.18 → 1.83 ms/step (−42 %)**, with per-step allocations at **0.0**.
+
 ### Added
 - **Four new absolute-stress suites, with readings.** The thermal,
   nuclear, snapshot-loader and tier systems had no absolute-stress
