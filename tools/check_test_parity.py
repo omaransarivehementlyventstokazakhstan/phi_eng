@@ -110,6 +110,13 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               the Grover search, the Fourier transform round trip, the
               teleportation fidelity and the superdense coding round
               trip)
+    M49-M56  the game-facing quantum layer (mirrored both languages:
+              the Born-rule sampling pinned shot for shot, the seeded
+              stream's reproducibility, the Bohmian velocity of a
+              stationary and a flowing state, the driven body surfacing
+              deterministically, the Madelung dispersion, the classical
+              limit, the visualisation feed, and the native bridge round
+              trip)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

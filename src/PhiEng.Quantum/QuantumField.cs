@@ -104,6 +104,17 @@ public sealed class QuantumField
     private DeterministicRng _rng;
 
     /// <summary>The cumulative probability of the measurement stream.</summary>
+    /// <summary>
+    /// The smallest positive normal <see cref="float"/>, 0x00800000.
+    /// </summary>
+    /// <remarks>
+    /// This is Rust's <c>f32::MIN_POSITIVE</c>, not .NET's
+    /// <see cref="float.Epsilon"/> (which is the smallest subnormal, a
+    /// different number). The two languages must clamp to the same
+    /// value.
+    /// </remarks>
+    private const float MinPositive = 1.17549435e-38f;
+
     private float[] _cumulative;
 
     /// <summary>The time the wavefunction has been evolved for.</summary>
@@ -257,17 +268,25 @@ public sealed class QuantumField
     /// </remarks>
     public int Sample(float[] output)
     {
-        int n = System.Math.Min(_state.Dim, output.Length);
-        // The cumulative probability of the outcomes. The cumulative array
-        // is as long as the state was when the field was built, so a state
-        // put in by the caller can be longer: the Rust zips the two, and
-        // the zip stops at the shorter one.
-        int c = System.Math.Min(_cumulative.Length, n);
+        int dim = _state.Dim;
+        int n = System.Math.Min(dim, output.Length);
+        // The cumulative distribution is built over the whole state, not
+        // the output: a short output asks for fewer draws, not a
+        // narrower distribution. The Rust draws the same way, so the
+        // streams agree draw for draw.
+        if (dim == 0 || _cumulative.Length < dim)
+        {
+            return 0;
+        }
         float total = 0.0f;
-        for (int i = 0; i < c; i++)
+        for (int i = 0; i < dim; i++)
         {
             total += Complex32.NormSqr(_state.Amplitudes[i]);
             _cumulative[i] = total;
+        }
+        if (!float.IsFinite(total) || total <= 0.0f)
+        {
+            return 0;
         }
         // The draws: the inverse-CDF method. Each draw is the first
         // outcome whose cumulative probability passes it.
@@ -275,7 +294,7 @@ public sealed class QuantumField
         {
             float u = _rng.NextFloat() * total;
             int index = 0;
-            for (int j = 0; j < c; j++)
+            for (int j = 0; j < dim; j++)
             {
                 if (u < _cumulative[j])
                 {
@@ -285,6 +304,270 @@ public sealed class QuantumField
                 index = j;
             }
             output[i] = index;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// Draws a position on the grid from the Born rule.
+    /// </summary>
+    /// <returns>
+    /// The grid point the drawn outcome names, or null when there is
+    /// nothing to draw. For the Dirichlet condition unknown
+    /// <c>i</c> is grid point <c>i + 1</c> (the ends are held at zero
+    /// and never drawn); for the periodic condition it is grid point
+    /// <c>i</c>.
+    /// </returns>
+    public float? SamplePosition()
+    {
+        int? index = DrawIndex();
+        if (index == null)
+        {
+            return null;
+        }
+        return GridPosition(index.Value);
+    }
+
+    /// <summary>The grid position an unknown index names.</summary>
+    private float GridPosition(int index)
+    {
+        return _config.Boundary == Boundary1D.Dirichlet
+            ? _grid.XAt(index + 1)
+            : _grid.XAt(index);
+    }
+
+    /// <summary>Draws one outcome index from the Born rule.</summary>
+    private int? DrawIndex()
+    {
+        int n = _state.Dim;
+        if (n == 0 || _cumulative.Length < n)
+        {
+            return null;
+        }
+        float total = 0.0f;
+        for (int i = 0; i < n; i++)
+        {
+            total += Complex32.NormSqr(_state.Amplitudes[i]);
+            _cumulative[i] = total;
+        }
+        if (!float.IsFinite(total) || total <= 0.0f)
+        {
+            return null;
+        }
+        float u = _rng.NextFloat() * total;
+        int found = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (u < _cumulative[i])
+            {
+                found = i;
+                break;
+            }
+            found = i;
+        }
+        return found;
+    }
+
+    /// <summary>The unknown index nearest to a position, clamped to the state.</summary>
+    private int? NearestIndex(float x)
+    {
+        int n = _state.Dim;
+        if (n == 0 || !float.IsFinite(x))
+        {
+            return null;
+        }
+        float dx = _grid.Dx();
+        if (!float.IsFinite(dx) || dx <= 0.0f)
+        {
+            return null;
+        }
+        float q = (x - _grid.XMin) / dx;
+        // A quotient this large is beyond any grid anyone will build;
+        // clamping keeps the float-to-integer cast below in range, where
+        // the two engines disagree on out-of-range casts.
+        long p = (long)MathF.Floor(System.Math.Clamp(q, -9.0e15f, 9.0e15f) + 0.5f);
+        int point = _config.Boundary == Boundary1D.Dirichlet
+            // The unknowns are the interior points 1..=n.
+            ? (int)System.Math.Clamp(p, 1L, n) - 1
+            : (int)(((p % n) + n) % n);
+        return System.Math.Min(point, n - 1);
+    }
+
+    /// <summary>
+    /// The Bohmian velocity at a position: v = J / rho with the
+    /// probability current J = (hbar / m) Im(psi* dpsi/dx).
+    /// </summary>
+    /// <remarks>
+    /// A stationary state has no current anywhere, so it reports zero;
+    /// a state with a phase gradient reports the flow. Central
+    /// differences on the three-point stencil around the nearest grid
+    /// point; where the density is at the floor the velocity is zero
+    /// rather than infinite.
+    /// </remarks>
+    public float VelocityAt(float x)
+    {
+        int? maybe = NearestIndex(x);
+        if (maybe == null)
+        {
+            return 0.0f;
+        }
+        int i = maybe.Value;
+        int n = _state.Dim;
+        var amps = _state.Amplitudes;
+        Complex32 At(int k)
+        {
+            if (_config.Boundary == Boundary1D.Dirichlet)
+            {
+                return k >= n ? Complex32.Zero : amps[k];
+            }
+            return amps[k % n];
+        }
+        Complex32 left = i == 0
+            ? (_config.Boundary == Boundary1D.Dirichlet ? Complex32.Zero : At(n - 1))
+            : At(i - 1);
+        Complex32 centre = At(i);
+        Complex32 right = i + 1 >= n
+            ? (_config.Boundary == Boundary1D.Dirichlet ? Complex32.Zero : At(0))
+            : At(i + 1);
+        float rho = Complex32.NormSqr(centre);
+        if (rho <= Madelung.DensityFloor)
+        {
+            return 0.0f;
+        }
+        float dx = _grid.Dx();
+        var deriv = (right - left) * (1.0f / (2.0f * dx));
+        float current = _config.Hbar / MathF.Max(_config.Mass, MinPositive)
+            * (Complex32.Conjugate(centre) * deriv).Im;
+        return current / rho;
+    }
+
+    /// <summary>
+    /// The force a classical particle feels at a position:
+    /// F = -d(V + Q)/dx, the classical potential plus the quantum
+    /// potential.
+    /// </summary>
+    /// <remarks>
+    /// The quantum potential is evaluated point by point from the
+    /// wavefunction's density, so no buffer is needed; where the
+    /// density is at the floor the quantum term is zero. This is the
+    /// Bohmian force: a game that integrates it moves bodies the way
+    /// the wavefunction pushes.
+    /// </remarks>
+    public float ForceAt(float x)
+    {
+        int? maybe = NearestIndex(x);
+        if (maybe == null)
+        {
+            return 0.0f;
+        }
+        int i = maybe.Value;
+        int n = _state.Dim;
+        float dx = _grid.Dx();
+        // The density and the classical potential on the five-point
+        // footprint the central difference of Q needs.
+        int lo = System.Math.Max(0, i - 2);
+        var rho = new float[5];
+        var pot = new float[5];
+        for (int k = 0; k < 5; k++)
+        {
+            (rho[k], pot[k]) = DensityAndPotentialAt(lo + k, n);
+        }
+        // The quantum potential at the three central points.
+        var q = new float[3];
+        for (int k = 0; k < 3; k++)
+        {
+            q[k] = PointQuantumPotential(rho[k], rho[k + 1], rho[k + 2], dx, _config.Hbar, _config.Mass);
+        }
+        // The classical potential at the three central points.
+        var v = new float[3];
+        for (int k = 0; k < 3; k++)
+        {
+            v[k] = PointPotential(lo + 1 + k, n);
+        }
+        return -((v[2] + q[2]) - (v[0] + q[0])) / (2.0f * dx);
+    }
+
+    /// <summary>
+    /// The density and the classical potential at unknown <paramref name="i"/>.
+    /// </summary>
+    /// <remarks>
+    /// Out-of-range indices are vacuum with the potential of the
+    /// nearest end for the Dirichlet condition, and wrap for the
+    /// periodic one.
+    /// </remarks>
+    private (float Rho, float Pot) DensityAndPotentialAt(int i, int n)
+    {
+        if (_config.Boundary == Boundary1D.Dirichlet)
+        {
+            if (i >= n)
+            {
+                return (0.0f, PointPotential(System.Math.Max(0, n - 1), n));
+            }
+            return (Complex32.NormSqr(_state.Amplitudes[i]), PointPotential(i, n));
+        }
+        int k = i % n;
+        return (Complex32.NormSqr(_state.Amplitudes[k]), PointPotential(k, n));
+    }
+
+    /// <summary>The classical potential at unknown <paramref name="i"/>, clamped to the state.</summary>
+    private float PointPotential(int i, int n)
+    {
+        float[] potential = _hamiltonian.Potential;
+        if (n == 0 || potential.Length == 0)
+        {
+            return 0.0f;
+        }
+        int k = System.Math.Min(i, n - 1);
+        k = System.Math.Min(k, potential.Length - 1);
+        if (_config.Boundary == Boundary1D.Dirichlet)
+        {
+            return k + 1 < potential.Length ? potential[k + 1] : 0.0f;
+        }
+        return potential[k];
+    }
+
+    /// <summary>The quantum potential of three consecutive densities.</summary>
+    private static float PointQuantumPotential(
+        float s0, float s1, float s2, float dx, float hbar, float mass)
+    {
+        float centre = MathF.Sqrt(MathF.Max(s1, 0.0f));
+        if (centre <= Madelung.DensityFloor)
+        {
+            return 0.0f;
+        }
+        float left = MathF.Sqrt(MathF.Max(s0, 0.0f));
+        float right = MathF.Sqrt(MathF.Max(s2, 0.0f));
+        float lap = (left - centre * 2.0f + right) / (dx * dx);
+        return -(hbar * hbar) / (2.0f * MathF.Max(mass, MinPositive)) * lap / centre;
+    }
+
+    /// <summary>
+    /// The density on the grid: the squared modulus of each amplitude.
+    /// </summary>
+    /// <param name="output">The destination of the density.</param>
+    /// <returns>The number of entries written.</returns>
+    public int Density(float[] output)
+    {
+        int n = System.Math.Min(_state.Dim, output.Length);
+        for (int i = 0; i < n; i++)
+        {
+            output[i] = Complex32.NormSqr(_state.Amplitudes[i]);
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// The phase on the grid: the argument of each amplitude, in
+    /// (-pi, pi], from the deterministic arctangent.
+    /// </summary>
+    /// <param name="output">The destination of the phase.</param>
+    /// <returns>The number of entries written.</returns>
+    public int Phase(float[] output)
+    {
+        int n = System.Math.Min(_state.Dim, output.Length);
+        for (int i = 0; i < n; i++)
+        {
+            output[i] = DeterministicTrig.Atan2(_state.Amplitudes[i].Im, _state.Amplitudes[i].Re);
         }
         return n;
     }

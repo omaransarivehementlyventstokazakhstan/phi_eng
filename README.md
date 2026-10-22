@@ -419,6 +419,16 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **The game-facing quantum layer (both languages):** Born-rule
+  sampling that follows the wavefunction (the same seed gives the same
+  shots everywhere), the Bohmian velocity a driven body surfs, and a
+  rigid body the world places on the grid with the flow velocity. The
+  Madelung fluid brings the hydrodynamic face as its own laboratory:
+  the quantum potential, a step that conserves the mass, a dispersion
+  that matches the analytic frequency to 5%, and a classical limit that
+  recovers the ordinary fluid exactly. The density and the phase travel
+  out through the native bridge for a renderer. Pinned by M49-M56
+  (Rust<->C# parity).
 - **The gates and circuits (both languages):** the single-qubit
   gates (H, X, Y, Z, S, T, RX, RY, RZ, U3), the entangling gates (CNOT,
   CZ, SWAP, Toffoli, Fredkin), the Bloch sphere, the measurement rule

@@ -86,6 +86,45 @@ public class World2
     public FluidState2 Fluid { get; } = new();
 
     /// <summary>
+    /// Drives a body by the world's quantum field: the body's x position
+    /// becomes a Born-rule draw from the wavefunction, and its x
+    /// velocity the Bohmian velocity there.
+    /// </summary>
+    /// <remarks>
+    /// A kinematic drive, not a force: the body is placed, not pushed.
+    /// The y coordinate is untouched - the field is one-dimensional
+    /// along the world's x-axis. Like any placement the drive wakes the
+    /// body.
+    /// </remarks>
+    /// <returns>False when the field is off or the body is unknown.</returns>
+    public bool DriveBodyByQuantum(int bodyId)
+    {
+        if (!Quantum.IsEnabled)
+        {
+            return false;
+        }
+        if (bodyId < 0 || bodyId >= Bodies.Count || Bodies[bodyId].Id != bodyId)
+        {
+            return false;
+        }
+        float? x = Quantum.SamplePosition();
+        if (x == null)
+        {
+            return false;
+        }
+        float v = Quantum.VelocityAt(x.Value);
+        var body = Bodies[bodyId];
+        var transform = body.Transform;
+        transform.Position = new System.Numerics.Vector2(x.Value, transform.Position.Y);
+        body.Transform = transform;
+        var velocity = body.Velocity;
+        velocity.X = v;
+        body.Velocity = velocity;
+        body.IsSleeping = false;
+        return true;
+    }
+
+    /// <summary>
     /// The quantum wavefunction. Disabled by default, so a world that
     /// never asks for a wavefunction behaves exactly as it did before the
     /// field existed.

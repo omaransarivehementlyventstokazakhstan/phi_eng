@@ -71,11 +71,11 @@ done.
 | **C** | The stationary 1D Schrödinger equation: the grid, the potentials, the Hamiltonian, the Sturm bisection, the inverse-iteration ground state. | M17–M26 |
 | **D** | The time evolution: Crank–Nicolson, the split operator, the deterministic FFT, the first FFI exports, snapshot v15. | M27–M34 |
 | **E** | The gates and circuits: the qubits, the Bloch sphere, the gates, the measurement, the algorithms. | M39–M48 |
-| **F** | The game-facing layer: Born-rule bodies, the Madelung quantum-fluid, the visualisation feed. | M45–M52 |
-| **G** | Spin and particles: the Pauli algebra, the Stern–Gerlach, the second quantisation. | M53–M60 |
-| **H** | Entanglement and quantum information: the Bell states, the CHSH game, the density matrices, the Lindblad master equation. | M61–M68 |
-| **I** | The 3D grid and the fields: the vector potential, the Aharonov–Bohm effect, the 3D FFI and snapshot. | M69–M76 |
-| **J** | The advanced: a tight-binding band structure, a Hartree–Fock-lite, a DMRG-lite, the scattering, the parameter-shift rule. | M77–M84 |
+| **F** | The game-facing layer: Born-rule bodies, the Madelung quantum-fluid, the visualisation feed. | M49–M56 |
+| **G** | Spin and particles: the Pauli algebra, the Stern–Gerlach, the second quantisation. | M57–M64 |
+| **H** | Entanglement and quantum information: the Bell states, the CHSH game, the density matrices, the Lindblad master equation. | M65–M72 |
+| **I** | The 3D grid and the fields: the vector potential, the Aharonov–Bohm effect, the 3D FFI and snapshot. | M73–M80 |
+| **J** | The advanced: a tight-binding band structure, a Hartree–Fock-lite, a DMRG-lite, the scattering, the parameter-shift rule. | M81–M88 |
 
 ### What each stage must prove
 
@@ -169,7 +169,12 @@ parity checker's ID list, and the native DLL restaged.
       `src/PhiEng.Quantum/{Gates,Circuit}.cs`. Pinned by M39-M48. A gate
       is never embedded in the full matrix; the inverse Fourier
       transform does its swaps first, because F = S U means F' = U' S.
-- [ ] **Stage F** — the game-facing layer.
+- [x] **Stage F** — the game-facing layer.
+      Born-rule bodies (`drive_body_by_quantum`), the Bohmian velocity
+      and force, the grid Madelung fluid, and the density/phase feed
+      through the native bridge. Pinned by M49-M56. The full
+      SPH-particle coupling of the quantum pressure is follow-up work:
+      it needs its own stability study.
 - [ ] **Stage G** — spin and particles.
 - [ ] **Stage H** — entanglement and information.
 - [ ] **Stage I** — the 3D grid and the fields.

@@ -1743,4 +1743,73 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>
+    /// Drives a body by the native world's quantum field: the body's x
+    /// position becomes a Born-rule draw, its x velocity the Bohmian
+    /// flow. Returns false when the field is off or the body is unknown.
+    /// </summary>
+    public bool QuantumDriveBody(uint bodyId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return NativeMethods.phieng_world3_quantum_drive_body(_handle, bodyId) != 0;
+        }
+    }
+
+    /// <summary>
+    /// The Bohmian force at <paramref name="x"/> in the native world, or
+    /// 0.0 when the field is off.
+    /// </summary>
+    public float QuantumForceAt(float x)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return NativeMethods.phieng_world3_quantum_force_at(_handle, x);
+        }
+    }
+
+    /// <summary>The native wavefunction's density on the grid.</summary>
+    public unsafe float[] QuantumDensity()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_quantum_density(_handle, null, 0);
+            if (count == 0) return Array.Empty<float>();
+            var density = new float[count];
+            fixed (float* p = density)
+            {
+                uint written = NativeMethods.phieng_world3_quantum_density(_handle, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native quantum density read failed.");
+                }
+            }
+            return density;
+        }
+    }
+
+    /// <summary>The native wavefunction's phase on the grid.</summary>
+    public unsafe float[] QuantumPhase()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_quantum_phase(_handle, null, 0);
+            if (count == 0) return Array.Empty<float>();
+            var phase = new float[count];
+            fixed (float* p = phase)
+            {
+                uint written = NativeMethods.phieng_world3_quantum_phase(_handle, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native quantum phase read failed.");
+                }
+            }
+            return phase;
+        }
+    }
+
 }

@@ -7,6 +7,7 @@ use crate::evolution::{crank_nicolson, split_operator, EvolutionMethod, Evolutio
 use crate::grid::Grid1D;
 use crate::hamiltonian::{Boundary1D, Hamiltonian1D};
 use crate::linalg::lowest_eigenvector;
+use crate::madelung::DENSITY_FLOOR;
 use crate::operator::QuantumOperator;
 use crate::potential::Potential1D;
 use crate::state::QuantumState;
@@ -181,6 +182,258 @@ impl QuantumField {
         *self = Self::new(config);
     }
 
+    /// Draws outcomes from the Born rule.
+    ///
+    /// Each draw is an outcome with the state's probability, so the
+    /// distribution of the draws is the probability distribution. The
+    /// stream is seeded, so the same seed gives the same draws — a
+    /// measurement can be replayed.
+    pub fn sample(&mut self, out: &mut [f32]) -> usize {
+        let n = self.state.dim().min(out.len());
+        for o in out.iter_mut().take(n) {
+            match self.draw_index() {
+                Some(index) => *o = index as f32,
+                None => return 0,
+            }
+        }
+        n
+    }
+
+    /// Draws one outcome index from the Born rule.
+    ///
+    /// Returns `None` when the state is empty or carries no probability.
+    /// The cumulative distribution lives in the field's scratch, so a
+    /// draw allocates nothing.
+    fn draw_index(&mut self) -> Option<usize> {
+        let n = self.state.dim();
+        if n == 0 || self.cumulative.len() < n {
+            return None;
+        }
+        let mut total = 0.0f32;
+        for (c, a) in self
+            .cumulative
+            .iter_mut()
+            .zip(self.state.amplitudes().iter())
+            .take(n)
+        {
+            total += a.norm_sqr();
+            *c = total;
+        }
+        if !total.is_finite() || total <= 0.0 {
+            return None;
+        }
+        let u = self.rng.next_f32() * total;
+        let mut index = 0usize;
+        for (i, c) in self.cumulative.iter().enumerate().take(n) {
+            if u < *c {
+                index = i;
+                break;
+            }
+            index = i;
+        }
+        Some(index)
+    }
+
+    /// Draws a position on the grid from the Born rule.
+    ///
+    /// The outcome index becomes the grid point it names: for the
+    /// Dirichlet condition unknown `i` is grid point `i + 1` (the ends
+    /// are held at zero and never drawn), for the periodic condition it
+    /// is grid point `i`. Returns `None` when there is nothing to draw.
+    pub fn sample_position(&mut self) -> Option<f32> {
+        let index = self.draw_index()?;
+        Some(self.grid_position(index))
+    }
+
+    /// The grid position an unknown index names.
+    fn grid_position(&self, index: usize) -> f32 {
+        match self.config.boundary {
+            Boundary1D::Dirichlet => self.grid.x_at(index + 1),
+            Boundary1D::Periodic => self.grid.x_at(index),
+        }
+    }
+
+    /// The unknown index nearest to a position, clamped to the state.
+    fn nearest_index(&self, x: f32) -> Option<usize> {
+        let n = self.state.dim();
+        if n == 0 || !x.is_finite() {
+            return None;
+        }
+        let dx = self.grid.dx();
+        if !dx.is_finite() || dx <= 0.0 {
+            return None;
+        }
+        let q = (x - self.grid.x_min()) / dx;
+        // A quotient this large is beyond any grid anyone will build;
+        // clamping keeps the float-to-integer cast below in range, where
+        // the two engines disagree on out-of-range casts.
+        let p = (q.clamp(-9.0e15, 9.0e15) + 0.5).floor() as i64;
+        let point = match self.config.boundary {
+            // The unknowns are the interior points 1..=n.
+            Boundary1D::Dirichlet => p.clamp(1, n as i64) as usize - 1,
+            Boundary1D::Periodic => p.rem_euclid(n as i64) as usize,
+        };
+        Some(point.min(n - 1))
+    }
+
+    /// The Bohmian velocity at a position: `v = J / rho` with the
+    /// probability current `J = (hbar / m) Im(psi* dpsi/dx)`.
+    ///
+    /// A stationary state has no current anywhere, so it reports zero;
+    /// a state with a phase gradient reports the flow. Central
+    /// differences on the three-point stencil around the nearest grid
+    /// point; where the density is at the floor the velocity is zero
+    /// rather than infinite.
+    pub fn velocity_at(&self, x: f32) -> f32 {
+        let Some(i) = self.nearest_index(x) else {
+            return 0.0;
+        };
+        let n = self.state.dim();
+        let amps = self.state.amplitudes();
+        let at = |k: usize| -> Complex32 {
+            match self.config.boundary {
+                Boundary1D::Dirichlet => {
+                    if k >= n {
+                        Complex32::zero()
+                    } else {
+                        amps[k]
+                    }
+                }
+                Boundary1D::Periodic => amps[k % n],
+            }
+        };
+        let left = if i == 0 {
+            match self.config.boundary {
+                Boundary1D::Dirichlet => Complex32::zero(),
+                Boundary1D::Periodic => at(n - 1),
+            }
+        } else {
+            at(i - 1)
+        };
+        let centre = at(i);
+        let right = if i + 1 >= n {
+            match self.config.boundary {
+                Boundary1D::Dirichlet => Complex32::zero(),
+                Boundary1D::Periodic => at(0),
+            }
+        } else {
+            at(i + 1)
+        };
+        let rho = centre.norm_sqr();
+        if rho <= DENSITY_FLOOR {
+            return 0.0;
+        }
+        let dx = self.grid.dx();
+        let deriv = (right - left).scale(1.0 / (2.0 * dx));
+        let current =
+            self.config.hbar / self.config.mass.max(f32::MIN_POSITIVE) * (centre.conj() * deriv).im;
+        current / rho
+    }
+
+    /// The force a classical particle feels at a position:
+    /// `F = -d(V + Q)/dx`, the classical potential plus the quantum
+    /// potential.
+    ///
+    /// The quantum potential is evaluated point by point from the
+    /// wavefunction's density, so no buffer is needed; where the
+    /// density is at the floor the quantum term is zero. This is the
+    /// Bohmian force: a game that integrates it moves bodies the way
+    /// the wavefunction pushes.
+    pub fn force_at(&self, x: f32) -> f32 {
+        let Some(i) = self.nearest_index(x) else {
+            return 0.0;
+        };
+        let n = self.state.dim();
+        let dx = self.grid.dx();
+        // The density and the potential on the five-point footprint the
+        // central difference of Q needs, with the ends held at zero for
+        // the Dirichlet condition and wrapped for the periodic one.
+        let lo = i.saturating_sub(2);
+        let mut rho = [0.0f32; 5];
+        let mut pot = [0.0f32; 5];
+        for k in 0..5 {
+            let (r, v) = self.density_and_potential_at(lo + k, n);
+            rho[k] = r;
+            pot[k] = v;
+        }
+        // The quantum potential at the three central points.
+        let mut q = [0.0f32; 3];
+        for (k, slot) in q.iter_mut().enumerate() {
+            *slot = Self::point_quantum_potential(
+                &rho[k..k + 3],
+                dx,
+                self.config.hbar,
+                self.config.mass,
+            );
+        }
+        // The classical potential at the three central points.
+        let mut v = [0.0f32; 3];
+        for (k, slot) in v.iter_mut().enumerate() {
+            *slot = self.point_potential(lo + 1 + k, n);
+        }
+        -((v[2] + q[2]) - (v[0] + q[0])) / (2.0 * dx)
+    }
+
+    /// The density and the classical potential at unknown `i`.
+    ///
+    /// Out-of-range indices are vacuum with the potential of the
+    /// nearest end for the Dirichlet condition, and wrap for the
+    /// periodic one.
+    fn density_and_potential_at(&self, i: usize, n: usize) -> (f32, f32) {
+        match self.config.boundary {
+            Boundary1D::Dirichlet => {
+                if i >= n {
+                    (0.0, self.point_potential(n.saturating_sub(1), n))
+                } else {
+                    (
+                        self.state.amplitudes()[i].norm_sqr(),
+                        self.point_potential(i, n),
+                    )
+                }
+            }
+            Boundary1D::Periodic => {
+                let k = i % n;
+                (
+                    self.state.amplitudes()[k].norm_sqr(),
+                    self.point_potential(k, n),
+                )
+            }
+        }
+    }
+
+    /// The classical potential at unknown `i`, clamped to the state.
+    fn point_potential(&self, i: usize, n: usize) -> f32 {
+        let states = self.hamiltonian.potential().len();
+        if n == 0 || states == 0 {
+            return 0.0;
+        }
+        let k = i.min(n - 1).min(states - 1);
+        match self.config.boundary {
+            Boundary1D::Dirichlet => self
+                .hamiltonian
+                .potential()
+                .get(k + 1)
+                .copied()
+                .unwrap_or(0.0),
+            Boundary1D::Periodic => self.hamiltonian.potential().get(k).copied().unwrap_or(0.0),
+        }
+    }
+
+    /// The quantum potential of three consecutive densities.
+    fn point_quantum_potential(s: &[f32], dx: f32, hbar: f32, mass: f32) -> f32 {
+        if s.len() < 3 {
+            return 0.0;
+        }
+        let centre = s[1].max(0.0).sqrt();
+        if centre <= DENSITY_FLOOR {
+            return 0.0;
+        }
+        let left = s[0].max(0.0).sqrt();
+        let right = s[2].max(0.0).sqrt();
+        let lap = (left - centre * 2.0 + right) / (dx * dx);
+        -(hbar * hbar) / (2.0 * mass.max(f32::MIN_POSITIVE)) * lap / centre
+    }
+
     /// The probability of each outcome: the squared modulus of each
     /// amplitude.
     ///
@@ -193,38 +446,23 @@ impl QuantumField {
         n
     }
 
-    /// Draws outcomes from the Born rule.
+    /// The density on the grid: the squared modulus of each amplitude.
     ///
-    /// Each draw is an outcome with the state's probability, so the
-    /// distribution of the draws is the probability distribution. The
-    /// stream is seeded, so the same seed gives the same draws — a
-    /// measurement can be replayed.
-    pub fn sample(&mut self, out: &mut [f32]) -> usize {
+    /// The same numbers as [`QuantumField::probabilities`], under the
+    /// name a renderer asks for.
+    pub fn density(&self, out: &mut [f32]) -> usize {
+        self.probabilities(out)
+    }
+
+    /// The phase on the grid: the argument of each amplitude, in
+    /// `(-pi, pi]`, from the deterministic arctangent.
+    ///
+    /// A stationary state with a fixed global phase reads flat; the
+    /// interference fringes of a superposition read as ramps.
+    pub fn phase(&self, out: &mut [f32]) -> usize {
         let n = self.state.dim().min(out.len());
-        // The cumulative probability of the outcomes.
-        let mut total = 0.0f32;
-        for (c, a) in self
-            .cumulative
-            .iter_mut()
-            .zip(self.state.amplitudes().iter())
-            .take(n)
-        {
-            total += a.norm_sqr();
-            *c = total;
-        }
-        // The draws: the inverse-CDF method. Each draw is the first
-        // outcome whose cumulative probability passes it.
-        for o in out.iter_mut().take(n) {
-            let u = self.rng.next_f32() * total;
-            let mut index = 0usize;
-            for (i, c) in self.cumulative.iter().enumerate().take(n) {
-                if u < *c {
-                    index = i;
-                    break;
-                }
-                index = i;
-            }
-            *o = index as f32;
+        for (o, a) in out.iter_mut().zip(self.state.amplitudes().iter()).take(n) {
+            *o = phieng_math::trig::atan2(a.im, a.re);
         }
         n
     }

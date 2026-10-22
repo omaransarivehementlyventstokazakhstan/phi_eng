@@ -1415,6 +1415,42 @@ impl World2 {
         &self.scratch.events
     }
 
+    /// Drives a body by the world's quantum field: the body's x position
+    /// becomes a Born-rule draw from the wavefunction, and its x
+    /// velocity the Bohmian velocity there.
+    ///
+    /// A kinematic drive, not a force: the body is placed, not pushed.
+    /// The y coordinate is untouched — the field is one-dimensional
+    /// along the world's x-axis — and a game that wants the dynamic
+    /// variant reads [`phieng_quantum::field::QuantumField::force_at`]
+    /// instead. Like any placement the drive wakes the body.
+    ///
+    /// Returns false when the field is off or the body is unknown.
+    pub fn drive_body_by_quantum(&mut self, body_id: usize) -> bool {
+        if !self.quantum.is_enabled() {
+            return false;
+        }
+        // The borrow of the body cannot overlap the draw: the draw
+        // advances the field's stream.
+        if self
+            .bodies
+            .get(body_id)
+            .filter(|b| b.id == body_id)
+            .is_none()
+        {
+            return false;
+        }
+        let Some(x) = self.quantum.sample_position() else {
+            return false;
+        };
+        let v = self.quantum.velocity_at(x);
+        let body = &mut self.bodies[body_id];
+        body.transform.position.x = x;
+        body.velocity.x = v;
+        body.is_sleeping = false;
+        true
+    }
+
     /// Work out which sensor pairs began and which ended.
     ///
     /// The sensor pairs of this step are in the order the broad phase
@@ -3568,6 +3604,41 @@ impl World3 {
     /// they are cleared at the start of the next step.
     pub fn contact_events(&self) -> &[ContactEvent3] {
         &self.scratch_events
+    }
+
+    /// Drives a body by the world's quantum field: the body's x position
+    /// becomes a Born-rule draw from the wavefunction, and its x
+    /// velocity the Bohmian velocity there.
+    ///
+    /// A kinematic drive, not a force: the body is placed, not pushed.
+    /// The y and z coordinates are untouched — the field is
+    /// one-dimensional along the world's x-axis. Like any placement the
+    /// drive wakes the body.
+    ///
+    /// Returns false when the field is off or the body is unknown.
+    pub fn drive_body_by_quantum(&mut self, body_id: usize) -> bool {
+        if !self.quantum.is_enabled() {
+            return false;
+        }
+        // The borrow of the body cannot overlap the draw: the draw
+        // advances the field's stream.
+        if self
+            .bodies
+            .get(body_id)
+            .filter(|b| b.id == body_id)
+            .is_none()
+        {
+            return false;
+        }
+        let Some(x) = self.quantum.sample_position() else {
+            return false;
+        };
+        let v = self.quantum.velocity_at(x);
+        let body = &mut self.bodies[body_id];
+        body.transform.position.x = x;
+        body.velocity.x = v;
+        body.is_sleeping = false;
+        true
     }
 
     /// Work out which sensor pairs began and which ended (3D).

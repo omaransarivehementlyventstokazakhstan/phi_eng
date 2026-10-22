@@ -8,6 +8,30 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The game-facing quantum layer.** A wavefunction a game can
+  touch: Born-rule sampling that follows the probability distribution
+  (the same seed gives the same shots on every platform and in both
+  languages), the Bohmian velocity a driven body surfs, and a rigid
+  body the world places on the grid with the flow velocity --
+  `World2/3::drive_body_by_quantum`. The Bohmian force
+  (`QuantumField::force_at`) lets a game integrate the push itself.
+
+  The Madelung fluid brings the hydrodynamic face of the wavefunction
+  as its own laboratory: the quantum potential on a periodic grid, an
+  explicit step that conserves the mass, a measured dispersion that
+  matches the analytic frequency to 5%, and a classical limit that
+  recovers the ordinary fluid exactly. The density and the phase travel
+  out through the native bridge for a renderer to draw.
+
+  The native bridge exposes the drive, the force query and the two
+  feeds (`phieng_world[_3]_quantum_drive_body/force_at/density/phase`,
+  plus the managed `PhiNativeWorld(3)` wrappers). The full SPH-particle
+  coupling of the quantum pressure is deliberately not here: it needs
+  its own stability study, and this stage ships the mechanics a game
+  needs without it.
+
+  Mirrored Rust<->C# tests: **M49-M56** (`crates/engine/tests/quantum_game.rs`,
+  `tests/PhiEng.Tests/QuantumGameTests.cs`).
 - **The gates and circuits.** The engine can now do quantum
   computation: the single-qubit gates (H, X, Y, Z, S, T, RX, RY, RZ,
   U3), the entangling gates (CNOT, CZ, SWAP, Toffoli, Fredkin), the

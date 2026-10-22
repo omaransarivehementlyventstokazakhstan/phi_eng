@@ -7635,3 +7635,214 @@ pub unsafe extern "C" fn phieng_world3_quantum_sample(
     world_ref.quantum.sample(draws);
     n as u32
 }
+
+// ==== Quantum game-facing surface: the driven body, the force query,
+// ==== and the visualisation feed ====
+
+/// Drives a body by the world's quantum field (2D): the body's x
+/// position becomes a Born-rule draw, its x velocity the Bohmian flow.
+///
+/// Returns 1 on success, 0 for a null world, an unknown body, or a
+/// field that is off.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined
+/// behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_drive_body(world: *mut World2, body_id: u32) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    if world_ref.drive_body_by_quantum(body_id as usize) {
+        1
+    } else {
+        0
+    }
+}
+
+/// The Bohmian force at `x` in a 2D world: `-d(V + Q)/dx`.
+///
+/// Returns 0.0 for a null world, a non-finite `x`, or a field that is
+/// off.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null,
+/// clean `0.0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_force_at(world: *const World2, x: f32) -> f32 {
+    if world.is_null() || !valid(x) {
+        return 0.0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    if !world_ref.quantum.is_enabled() {
+        return 0.0;
+    }
+    world_ref.quantum.force_at(x)
+}
+
+/// Copy the wavefunction's density out of a 2D world.
+///
+/// The squared modulus of each amplitude: what a renderer draws.
+/// Returns the number written; a null `out` asks for the count alone.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_density(
+    world: *const World2,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let density = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.density(density);
+    n as u32
+}
+
+/// Copy the wavefunction's phase out of a 2D world.
+///
+/// The argument of each amplitude in `(-pi, pi]`: what a renderer
+/// colours the fringes with. Returns the number written; a null `out`
+/// asks for the count alone.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_phase(
+    world: *const World2,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let phase = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.phase(phase);
+    n as u32
+}
+
+/// Drives a body by the world's quantum field (3D).
+///
+/// See [`phieng_world_quantum_drive_body`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0`). Use-after-free and forged pointers are undefined
+/// behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_drive_body(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    if world_ref.drive_body_by_quantum(body_id as usize) {
+        1
+    } else {
+        0
+    }
+}
+
+/// The Bohmian force at `x` in a 3D world.
+///
+/// See [`phieng_world_quantum_force_at`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null,
+/// clean `0.0`).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_force_at(
+    world: *const phieng_dynamics::World3,
+    x: f32,
+) -> f32 {
+    if world.is_null() || !valid(x) {
+        return 0.0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    if !world_ref.quantum.is_enabled() {
+        return 0.0;
+    }
+    world_ref.quantum.force_at(x)
+}
+
+/// Copy the wavefunction's density out of a 3D world.
+///
+/// See [`phieng_world_quantum_density`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_density(
+    world: *const phieng_dynamics::World3,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let density = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.density(density);
+    n as u32
+}
+
+/// Copy the wavefunction's phase out of a 3D world.
+///
+/// See [`phieng_world_quantum_phase`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_phase(
+    world: *const phieng_dynamics::World3,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let phase = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.phase(phase);
+    n as u32
+}

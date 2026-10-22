@@ -1513,4 +1513,59 @@ public float OccluderTransmittance;
         IntPtr world,
         float* @out,
         uint cap);
+
+    // ---- Quantum game-facing surface (mirrors the phieng_world[_3]_quantum_*
+    // drive/force/density/phase functions in ffi.rs) ----
+
+    /// <returns>1 on success, 0 for a null world, an unknown body, or a field that is off.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world_quantum_drive_body(
+        IntPtr world,
+        uint bodyId);
+
+    /// <returns>The Bohmian force at x, or 0.0 for a null world, a bad x, or a field that is off.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial float phieng_world_quantum_force_at(
+        IntPtr world,
+        float x);
+
+    /// <returns>Number of density entries written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_quantum_density(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>Number of phase entries written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_quantum_phase(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>1 on success, 0 for a null world, an unknown body, or a field that is off.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial int phieng_world3_quantum_drive_body(
+        IntPtr world,
+        uint bodyId);
+
+    /// <returns>The Bohmian force at x, or 0.0 for a null world, a bad x, or a field that is off.</returns>
+    [LibraryImport(LibraryName)]
+    internal static partial float phieng_world3_quantum_force_at(
+        IntPtr world,
+        float x);
+
+    /// <returns>Number of density entries written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_quantum_density(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>Number of phase entries written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_quantum_phase(
+        IntPtr world,
+        float* @out,
+        uint cap);
 }
