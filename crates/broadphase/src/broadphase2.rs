@@ -59,6 +59,20 @@ impl Broadphase2 {
         }
     }
 
+    /// Take a body out of the broad phase.
+    ///
+    /// The world calls this when a body is removed, so the broad phase
+    /// does not keep a body that is no longer there. The grid drops the
+    /// body from its cells; the other backends rebuild every step, so
+    /// there is nothing to drop.
+    pub fn remove_body(&mut self, body_id: usize) {
+        match self {
+            Broadphase2::SpatialHash(h) => h.remove_body(body_id),
+            Broadphase2::BruteForce(b) => b.remove_body(body_id),
+            Broadphase2::DynamicAABBTree(t) => t.remove(body_id),
+        }
+    }
+
     pub fn insert(&mut self, body_id: usize, min: Vec2, max: Vec2) {
         match self {
             Broadphase2::SpatialHash(h) => h.insert(body_id, min, max),

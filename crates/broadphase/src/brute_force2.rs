@@ -20,6 +20,14 @@ impl BruteForce2 {
         self.entries.clear();
     }
 
+    /// Take a body out of the list.
+    ///
+    /// The world calls this when a body is removed, so the list does not
+    /// keep a body that is no longer there.
+    pub fn remove_body(&mut self, body_id: usize) {
+        self.entries.retain(|&(id, _)| id != body_id);
+    }
+
     pub fn insert(&mut self, body_id: usize, min: Vec2, max: Vec2) {
         self.entries.push((body_id, AABB2::new(min, max)));
     }

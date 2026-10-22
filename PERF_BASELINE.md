@@ -278,6 +278,16 @@ The 2D pile gains less because its bodies all move: there is little
 membership to keep. The static-heavy scene is where the grid was
 wasting the most.
 
+**The 2D grid's persistent path was dead in the shipped build until
+this audit.** A profiling switch, left turned off after an
+allocation experiment, had put the 2D grid on the wiping path while
+the 3D grid kept its cells -- so the numbers above were measured in a
+build that no user ran. The switch is gone: the 2D grid keeps its
+cells in the default build, and the measurement was repeated with
+`bench_solver_ab grid` (1500 static bodies, one binary alternating the
+two variants): broadphase **−52 %**, total **−32 %**. The pinned
+hashes are unchanged.
+
 **The strict variant was measured and rejected.** Requiring the AABB
 to be *bit-identical* before a body keeps its cells is more conservative
 — but it is also more work for the same result, because a body that

@@ -80,6 +80,15 @@ pub struct SpatialHash3 {
     seen: Vec<u32>,
     /// The current step, bumped by `begin_frame`.
     epoch: u32,
+    /// Whether a frame is open, between `begin_frame` and `end_frame`.
+    ///
+    /// A second `begin_frame` without an `end_frame` in between would
+    /// move the epoch twice: every body would then look stale to
+    /// `end_frame`, which would empty the grid. The frame would lose
+    /// every pair and the bodies would fall through each other, with
+    /// nothing to show for it. The second `begin_frame` is refused
+    /// instead.
+    frame_open: bool,
     /// Keep the cells across steps and only re-insert the bodies that
     /// moved.
     ///
@@ -160,6 +169,7 @@ impl SpatialHash3 {
             tracked_flag: Vec::new(),
             seen: Vec::new(),
             epoch: 0,
+            frame_open: false,
             #[cfg(feature = "phase-timing")]
             persistent: true,
             #[cfg(feature = "phase-timing")]
@@ -213,6 +223,7 @@ impl SpatialHash3 {
         self.tracked_flag.clear();
         self.seen.clear();
         self.epoch = self.epoch.wrapping_add(1);
+        self.frame_open = false;
     }
 
     /// Begin a step: reset what the step holds, keep what it does not.
@@ -225,14 +236,24 @@ impl SpatialHash3 {
     /// [`Self::clear`] still wipes the grid completely; this is the
     /// step-scoped reset.
     pub fn begin_frame(&mut self) {
+        if self.frame_open {
+            // A frame is already open. Opening a second one would move
+            // the epoch again, and every body would look stale to
+            // `end_frame`, which would empty the grid: the step would
+            // lose every pair and the bodies would fall through each
+            // other. The open frame is kept.
+            return;
+        }
         if !self.keeps_cells() {
             self.clear();
+            self.frame_open = true;
             return;
         }
         self.epoch = self.epoch.wrapping_add(1);
         self.count = 0;
         self.all.clear();
         self.oversized.clear();
+        self.frame_open = true;
     }
 
     /// Whether the grid keeps its cells across steps.
@@ -341,7 +362,9 @@ impl SpatialHash3 {
             if self.keeps_cells() {
                 self.untrack(body_id);
             }
-            self.oversized.push(body_id);
+            if !self.oversized.contains(&body_id) {
+                self.oversized.push(body_id);
+            }
             return;
         }
 
@@ -481,9 +504,17 @@ impl SpatialHash3 {
                     let key = CellKey3::new(cx, cy, cz);
                     let empty = match self.grid.get_mut(&key) {
                         Some(ids) => {
-                            if let Some(pos) = ids.iter().position(|&id| id == body_id) {
-                                ids.swap_remove(pos);
+                            // Every copy goes: a body that is somehow in the cell
+                            // twice would otherwise keep a copy behind, and the
+                            // cell would grow a duplicate.
+                            let mut write = 0;
+                            for read in 0..ids.len() {
+                                if ids[read] != body_id {
+                                    ids[write] = ids[read];
+                                    write += 1;
+                                }
                             }
+                            ids.truncate(write);
                             ids.is_empty()
                         }
                         None => false,
@@ -500,6 +531,13 @@ impl SpatialHash3 {
     }
 
     /// Take a body out of the grid entirely.
+    ///
+    /// The world calls this when a body is removed, so the grid does
+    /// not keep a body that is no longer there.
+    pub fn remove_body(&mut self, body_id: usize) {
+        self.untrack(body_id);
+    }
+
     fn untrack(&mut self, body_id: usize) {
         if !self.tracked_flag.get(body_id).copied().unwrap_or(false) {
             return;
@@ -519,6 +557,7 @@ impl SpatialHash3 {
     /// more has to be taken out of them by hand — otherwise it would
     /// keep pairing with the rest of the scene forever.
     pub fn end_frame(&mut self) {
+        self.frame_open = false;
         if !self.keeps_cells() {
             return;
         }
@@ -572,6 +611,11 @@ impl SpatialHash3 {
         for &o in &self.oversized {
             for &b in &self.all {
                 if o != b {
+                    // Two statics never touch, so the pair is dropped by
+                    // the narrow phase anyway: it is not generated.
+                    if self.is_static(o) && self.is_static(b) {
+                        continue;
+                    }
                     out.push(if o < b { (o, b) } else { (b, o) });
                 }
             }
@@ -621,17 +665,41 @@ impl SpatialHash3 {
                 }
             }
         }
-        if out.len() > before {
-            out[before..].sort_unstable();
-            let tail = &mut out[before..];
-            let mut write = 0;
-            for read in 0..tail.len() {
-                if read == 0 || tail[read] != tail[write - 1] {
-                    tail[write] = tail[read];
-                    write += 1;
-                }
+        // A body too big for the grid is in no cell at all, so it has to
+        // be asked for separately.
+        out.extend(self.oversized.iter().copied());
+        // Being in the same cell only means the boxes are neighbours:
+        // the boxes themselves still have to overlap. The other
+        // backends test that, so the grid has to as well, or the three
+        // would answer the same question three different ways.
+        let mut write = before;
+        for read in before..out.len() {
+            let id = out[read];
+            if self.aabb_overlaps(id, aabb) {
+                out[write] = id;
+                write += 1;
             }
-            out.truncate(before + write);
+        }
+        out.truncate(write);
+        // A body that spans several cells is in each of them.
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Whether a body's recorded AABB overlaps the query box.
+    ///
+    /// A body without a recorded AABB cannot be filtered out.
+    fn aabb_overlaps(&self, body_id: usize, aabb: &AABB3) -> bool {
+        match self.aabbs.get(body_id) {
+            Some((min, max)) => {
+                min.x <= aabb.max.x
+                    && max.x >= aabb.min.x
+                    && min.y <= aabb.max.y
+                    && max.y >= aabb.min.y
+                    && min.z <= aabb.max.z
+                    && max.z >= aabb.min.z
+            }
+            None => true,
         }
     }
 
@@ -717,6 +785,11 @@ impl SpatialHash3 {
         for &o in &self.oversized {
             for &b in &self.all {
                 if o != b && Self::aabbs_overlap(o, b, &self.aabbs) {
+                    // Two statics never touch, so the pair is dropped by
+                    // the narrow phase anyway: it is not generated.
+                    if self.is_static(o) && self.is_static(b) {
+                        continue;
+                    }
                     out.push(if o < b { (o, b) } else { (b, o) });
                 }
             }
@@ -963,5 +1036,43 @@ mod tests {
         // with the far body.
         assert!(a.contains(&(4, 5)));
         assert!(!a.iter().any(|&(x, y)| x == 6 || y == 6));
+    }
+
+    #[test]
+    fn the_shipped_grid_keeps_its_cells_across_a_step() {
+        // The shipped build must keep the cells: the persistent path is
+        // the one that ships, and a build that wiped them would do the
+        // work twice.
+        let mut hash = SpatialHash3::new(1.0);
+        hash.begin_frame();
+        hash.insert(0, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, 0.6, 0.6));
+        hash.end_frame();
+
+        // The next frame starts. The cells still hold the body: the
+        // grid kept them, it did not wipe and rebuild them.
+        hash.begin_frame();
+        assert!(
+            hash.grid.values().any(|ids| ids.contains(&0)),
+            "the cells must survive a step"
+        );
+    }
+
+    #[test]
+    fn a_second_begin_frame_does_not_empty_the_grid() {
+        // Opening a second frame while one is open would move the epoch
+        // again, and every body would look stale: the grid would empty
+        // itself and the bodies would fall through each other.
+        let mut hash = SpatialHash3::new(1.0);
+        hash.begin_frame();
+        hash.insert(0, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, 0.6, 0.6));
+
+        // The second frame is refused: the first one is still open.
+        hash.begin_frame();
+        hash.end_frame();
+
+        assert!(
+            hash.grid.values().any(|ids| ids.contains(&0)),
+            "the body must still be in the grid"
+        );
     }
 }
