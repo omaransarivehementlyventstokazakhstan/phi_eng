@@ -122,6 +122,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               Zeeman splitting and Larmor precession, the bosonic ladder,
               the fermionic anticommutation that is the Pauli principle,
               the Fermi gas, and the spin rotations)
+    M65-M72  entanglement and quantum information (mirrored both
+              languages: the Bell states, half a pair maximally mixed,
+              the von Neumann entropy, the CHSH game pinned past the
+              classical bound, the noisy channels, the Lindblad step and
+              its trace, the mixed-state ladder, and the three-qubit
+              partial traces)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

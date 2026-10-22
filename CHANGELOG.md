@@ -8,6 +8,23 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Entanglement and quantum information.** Density matrices join
+  state vectors: the maximally mixed state, the partial trace that
+  answers what a subset of qubits looks like alone, the purity, the von
+  Neumann entropy, the noisy channels (depolarising, amplitude damping,
+  dephasing) and the Lindblad master equation for open-system
+  evolution. The Bell states and the CHSH game turn entanglement into a
+  number: the seeded game is pinned at 1696 wins in 2000 rounds, past
+  every classical strategy's 3/4.
+
+  The loops visit kept and traced indices in ascending order on both
+  engines, so the reduced matrices agree bit-for-bit -- including the
+  pinned half-pair. One subtlety is documented where it lives: a Z-jump
+  dephases at twice its rate, because LρL† and -{L†L,ρ}/2 move the
+  off-diagonal the same way.
+
+  Mirrored Rust<->C# tests: **M65-M72** (`crates/engine/tests/quantum_info.rs`,
+  `tests/PhiEng.Tests/QuantumInfoTests.cs`).
 - **Spin and particles.** The spin-1/2 degree of freedom gets its
   own home: the Pauli matrices as observables, the Stern-Gerlach
   measurement of `S_z`, the Zeeman Hamiltonian of a uniform field, the

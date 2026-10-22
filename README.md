@@ -419,6 +419,11 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **Entanglement and quantum information (both languages):**
+  density matrices, the partial trace, purity, von Neumann entropy, the
+  noisy channels and the Lindblad master equation, plus the Bell states
+  and the CHSH game -- pinned at 1696 wins in 2000 rounds, past the
+  classical 3/4. Pinned by M65-M72 (Rust<->C# parity).
 - **Spin and particles (both languages):** the Pauli matrices as
   observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
   the Rabi flop and Larmor precession, plus second quantization: the

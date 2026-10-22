@@ -181,7 +181,11 @@ parity checker's ID list, and the native DLL restaged.
       is a single-qubit state, so the gate layer is reused; the
       Stern-Gerlach reports true for up because the register reports
       true for |1>.
-- [ ] **Stage H** — entanglement and information.
+- [x] **Stage H** — entanglement and information.
+      `crates/quantum/src/{density,entanglement}.rs`, mirrored by
+      `src/PhiEng.Quantum/{Density,Entanglement}.cs`. Pinned by M65-M72.
+      A Z-jump dephases at twice its rate; the CHSH count is pinned,
+      not just bounded.
 - [ ] **Stage I** — the 3D grid and the fields.
 - [ ] **Stage J** — the advanced.
 

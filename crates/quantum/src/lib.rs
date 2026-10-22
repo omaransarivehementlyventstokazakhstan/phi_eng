@@ -31,6 +31,8 @@
 //! repository root.
 
 pub mod circuit;
+pub mod density;
+pub mod entanglement;
 pub mod evolution;
 pub mod fft;
 pub mod field;
@@ -47,6 +49,8 @@ pub mod spin;
 pub mod state;
 
 pub use circuit::*;
+pub use density::*;
+pub use entanglement::*;
 pub use evolution::*;
 pub use fft::*;
 pub use field::*;
