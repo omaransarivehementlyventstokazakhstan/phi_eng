@@ -35,11 +35,11 @@ fn m01_complex_arithmetic_is_portable() {
     assert_eq!(cbits(a + b), (0x3f40_0000, 0x3fa0_0000));
     assert_eq!(cbits(a - b), (0x4010_0000, 0xc0b8_0000));
     assert_eq!(cbits(a * b), (0x40d8_0000, 0x40de_0000));
-    assert_eq!(cbits(a / b), (0x3f0a_9d59, 0xbf06_de48));
+    assert_eq!(cbits(a / b), (0xbf33_d30b, 0xbe8e_5c68));
     assert_eq!(cbits(a * 2.5), (0x4070_0000, 0xc0b4_0000));
     assert_eq!(cbits(-a), (0xbfc0_0000, 0x4010_0000));
     assert_eq!(cbits(a.conj()), (0x3fc0_0000, 0x4010_0000));
-    assert_eq!(cbits(a.inv()), (0xbe9d_89d9, 0xbe52_0d21));
+    assert_eq!(cbits(a.inv()), (0x3e52_0d21, 0x3e9d_89d9));
     assert_eq!(bits(a.abs()), 0x402d_1104);
     assert_eq!(bits(a.norm_sqr()), 0x40ea_0000);
     let (r, theta) = a.to_polar();

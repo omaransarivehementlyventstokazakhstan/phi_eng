@@ -38,11 +38,11 @@ public class QuantumMathTests
         Assert.Equal((0x3f400000u, 0x3fa00000u), CBits(Complex32.Add(a, b)));
         Assert.Equal((0x40100000u, 0xc0b80000u), CBits(Complex32.Subtract(a, b)));
         Assert.Equal((0x40d80000u, 0x40de0000u), CBits(Complex32.Multiply(a, b)));
-        Assert.Equal((0x3f0a9d59u, 0xbf06de48u), CBits(Complex32.Divide(a, b)));
+        Assert.Equal((0xbf33d30bu, 0xbe8e5c68u), CBits(Complex32.Divide(a, b)));
         Assert.Equal((0x40700000u, 0xc0b40000u), CBits(Complex32.Scale(a, 2.5f)));
         Assert.Equal((0xbfc00000u, 0x40100000u), CBits(Complex32.Negate(a)));
         Assert.Equal((0x3fc00000u, 0x40100000u), CBits(Complex32.Conjugate(a)));
-        Assert.Equal((0xbe9d89d9u, 0xbe520d21u), CBits(Complex32.Inverse(a)));
+        Assert.Equal((0x3e520d21u, 0x3e9d89d9u), CBits(Complex32.Inverse(a)));
         Assert.Equal(0x402d1104u, Bits(Complex32.Abs(a)));
         Assert.Equal(0x40ea0000u, Bits(Complex32.NormSqr(a)));
         var (r, theta) = Complex32.ToPolar(a);

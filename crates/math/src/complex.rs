@@ -274,6 +274,15 @@ impl std::ops::Div for Complex32 {
     /// to a spurious zero. Dividing by exactly zero gives a NaN, which
     /// is the safe answer: an infinity in an amplitude would poison
     /// the state it lands in.
+    ///
+    /// The two branches differ in more than the ratio. With `r = d/c`
+    /// the denominator is `(c² + d²)/c`, so the numerator has to be
+    /// `(a + b r) / (b - a r)`; with `r = c/d` the denominator is
+    /// `(c² + d²)/d`, so the numerator has to be `(a r + b) / (b r - a)`.
+    /// Swapping the two gives a quotient that is close to the right
+    /// answer in one of the two branches and wrong in the other — and
+    /// wrong in a way that is easy to miss, because the wrong branch
+    /// still returns a finite number.
     #[inline]
     fn div(self, o: Self) -> Self {
         let (c, d) = (o.re, o.im);
@@ -283,12 +292,12 @@ impl std::ops::Div for Complex32 {
                 return Self::new(f32::NAN, f32::NAN);
             }
             let r = d / c;
-            let den = c * r + d;
-            Self::new((self.re * r + self.im) / den, (self.im * r - self.re) / den)
+            let den = c + d * r;
+            Self::new((self.re + self.im * r) / den, (self.im - self.re * r) / den)
         } else {
             let r = c / d;
             let den = c * r + d;
-            Self::new((self.re + self.im * r) / den, (self.im - self.re * r) / den)
+            Self::new((self.re * r + self.im) / den, (self.im * r - self.re) / den)
         }
     }
 }
@@ -342,13 +351,13 @@ mod tests {
         );
         assert_eq!(
             ((a / b).re.to_bits(), (a / b).im.to_bits()),
-            (0x3f0a9d59, 0xbf06de48),
+            (0xbf33d30b, 0xbe8e5c68),
             "the quotient is not portable"
         );
         assert_eq!(a.abs().to_bits(), 0x402d1104, "the modulus is not portable");
         assert_eq!(
-            a.inv().re.to_bits(),
-            0xbe9d89d9,
+            (a.inv().re.to_bits(), a.inv().im.to_bits()),
+            (0x3e520d21, 0x3e9d89d9),
             "the reciprocal is not portable"
         );
 

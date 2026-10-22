@@ -75,15 +75,18 @@ public struct Complex32 : IEquatable<Complex32>
                 // Both components are zero: the quotient is a NaN.
                 return new Complex32(float.NaN, float.NaN);
             }
+            // r = d/c and the denominator is (c^2 + d^2)/c, so the
+            // quotient's numerator is multiplied by c and divided by
+            // (c^2 + d^2) - without ever forming that square.
             float r = d / c;
-            float den = c * r + d;
-            return new Complex32((a.Re * r + a.Im) / den, (a.Im * r - a.Re) / den);
+            float den = c + d * r;
+            return new Complex32((a.Re + a.Im * r) / den, (a.Im - a.Re * r) / den);
         }
         else
         {
             float r = c / d;
             float den = c * r + d;
-            return new Complex32((a.Re + a.Im * r) / den, (a.Im - a.Re * r) / den);
+            return new Complex32((a.Re * r + a.Im) / den, (a.Im * r - a.Re) / den);
         }
     }
 
