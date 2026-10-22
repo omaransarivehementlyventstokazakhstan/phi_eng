@@ -8,6 +8,31 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The quantum math layer.** The engine can now do arithmetic over
+  the complex numbers, which is what quantum mechanics *is*: a state is
+  a vector of complex amplitudes, an observable is a complex matrix, and
+  the evolution is an exponential of a complex operator. There was no
+  complex type in the engine at all before this.
+
+  `phieng-math` gains `Complex32` (an `f32` real and imaginary part) and
+  `DeterministicRng` (xoshiro256++, seeded with splitmix64) -- the
+  generator a sampled measurement needs, so that the same seed gives the
+  same draw on every platform.
+
+  The complex transcendentals are built only from the deterministic
+  helpers and never from the platform math library, and two formulas
+  that would overflow a naive implementation are written the stable way
+  in both languages: the modulus scales by the larger component first,
+  and the division uses Smith's algorithm. The managed mirror
+  (`PhiEng.Math.Complex32` and `PhiEng.Math.DeterministicRng`) performs
+  the same arithmetic in the same order, so the Rust core and the
+  managed mirror agree to the last bit.
+
+  This is the foundation the rest of the quantum stack stands on: the
+  plan is in `QUANTUM_PLAN.md`.
+
+  Mirrored Rust<->C# tests: **M01-M08** (`crates/engine/tests/quantum_math.rs`,
+  `tests/PhiEng.Tests/QuantumMathTests.cs`).
 - **Ray casts.** The world can now be asked what a ray hits first: the
   query a game needs to pick a body under the mouse, to fire a hitscan
   or to sweep a character controller. `World2/3::raycast` tests the ray

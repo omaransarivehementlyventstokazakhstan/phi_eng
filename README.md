@@ -419,6 +419,18 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **Complex arithmetic and a seeded RNG (both languages):** the
+  foundation the quantum stack stands on. `phieng-math` gains
+  `Complex32` (an `f32` real and imaginary part) and `DeterministicRng`
+  (xoshiro256++, seeded with splitmix64) -- the generator a sampled
+  measurement needs, so the same seed gives the same draw on every
+  platform. The complex transcendentals are built only from the
+  deterministic helpers, never from the platform math library, and the
+  managed mirror (`PhiEng.Math.Complex32`,
+  `PhiEng.Math.DeterministicRng`) performs the same arithmetic in the
+  same order, so the two engines agree to the last bit. Pinned by M01-M08
+  (Rust<->C# parity). The plan for the rest of the quantum stack is in
+  `QUANTUM_PLAN.md`.
 - **Ray casts (2D and 3D, both languages):** `World2/3::raycast` returns
   the first thing a ray hits, with the contact point and the surface
   normal; the collision filter applies, so a query can ignore the

@@ -74,6 +74,13 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               exp/ln as mutual inverses - the properties that make
               rigid-body trajectories platform-independent and
               Rust/C#-identical)
+    M01-M08  the quantum math layer (mirrored both languages: the
+              complex arithmetic's pinned bit patterns, the complex
+              transcendentals' pinned bit patterns, the edge cases
+              where a naive formula overflows, the random number
+              generator's pinned stream, reproducible seeding, the
+              float mapping, the normal deviate, and a stream that
+              resumes exactly from a saved state)
     U01-U12  radiation model expansion (mirrored both languages: the
               legacy view-factor model is the default and matches the
               historical formula, the symmetric model matches it for
