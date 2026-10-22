@@ -1014,7 +1014,7 @@ public sealed class PhiNativeWorld : IDisposable
             int count = NativeMethods.phieng_world_contact_event_count(_handle);
             if (count <= 0) return Array.Empty<(uint, uint, int, Vector2, Vector2)>();
             var result = new (uint, uint, int, Vector2, Vector2)[count];
-            var buffer = new float[6];
+            var buffer = new float[7];
             for (int i = 0; i < count; i++)
             {
                 fixed (float* p = buffer)
@@ -1025,7 +1025,7 @@ public sealed class PhiNativeWorld : IDisposable
                     }
                 }
                 result[i] = ((uint)buffer[0], (uint)buffer[1], (int)buffer[2],
-                    new Vector2(buffer[3], buffer[4]), Vector2.Zero);
+                    new Vector2(buffer[3], buffer[4]), new Vector2(buffer[5], buffer[6]));
             }
             return result;
         }

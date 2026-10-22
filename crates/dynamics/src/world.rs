@@ -97,11 +97,19 @@ struct ScratchBuffers2D {
     /// The contacts a sensor pair reported, kept apart from the solved
     /// ones: a sensor reports contacts but never pushes.
     sensor_contacts: Vec<ContactConstraint>,
-    /// The sensor pairs that were touching last step, so the events can
-    /// say which of them ended.
-    last_sensor_pairs: Vec<(usize, usize)>,
-    /// The sensor pairs touching this step.
-    sensor_pairs: Vec<(usize, usize)>,
+    /// The sensor pairs that were touching last step, with the contact
+    /// each of them reported, so the events can say which of them ended
+    /// and where they were.
+    last_sensor_touching: Vec<(usize, usize, Vec2, Vec2)>,
+    /// The sensor pairs touching this step, with their contacts.
+    sensor_touching: Vec<(usize, usize, Vec2, Vec2)>,
+    /// The sensor pairs that ended this step, with their last contact.
+    sensor_ended: Vec<(usize, usize, Vec2, Vec2)>,
+    /// The pairs that already reported a *began* event this step.
+    ///
+    /// A pair that touches at several points began touching once, so the
+    /// event is only pushed for the first of them.
+    announced_pairs: FxHashMap<(u32, u32), ()>,
     /// The contact events of this step.
     events: Vec<ContactEvent2>,
     /// The last known contact of every pair, kept so an *ended* event
@@ -120,8 +128,10 @@ impl ScratchBuffers2D {
             joint_pairs: Vec::with_capacity(256),
             pairs: Vec::with_capacity(16384),
             sensor_contacts: Vec::with_capacity(1024),
-            last_sensor_pairs: Vec::with_capacity(1024),
-            sensor_pairs: Vec::with_capacity(1024),
+            last_sensor_touching: Vec::with_capacity(1024),
+            sensor_touching: Vec::with_capacity(1024),
+            sensor_ended: Vec::with_capacity(1024),
+            announced_pairs: FxHashMap::default(),
             events: Vec::with_capacity(1024),
             last_contacts: Vec::with_capacity(8192),
             verts_a: Vec::with_capacity(1024),
@@ -147,6 +157,7 @@ impl ScratchBuffers2D {
         self.aabbs.clear();
         self.stale.clear();
         self.sensor_contacts.clear();
+        self.announced_pairs.clear();
         self.events.clear();
     }
 }
@@ -243,15 +254,6 @@ pub struct World2 {
     scratch: ScratchBuffers2D,
 }
 
-/// The contact data of a sensor pair, if it has one (3D).
-fn sensor_contact_3d(contacts: &[ContactConstraint3D], key: (usize, usize)) -> (Vec3, Vec3) {
-    contacts
-        .iter()
-        .find(|c| (c.body_a, c.body_b) == key)
-        .map(|c| (c.point, c.normal))
-        .unwrap_or((Vec3::ZERO, Vec3::ZERO))
-}
-
 /// The two bodies of a pair, in a canonical order.
 ///
 /// The narrow phase does not promise an order, so the events put the
@@ -264,15 +266,6 @@ fn event_pair(a: usize, b: usize) -> (u32, u32) {
     } else {
         (b as u32, a as u32)
     }
-}
-
-/// The contact data of a sensor pair, if it has one.
-fn sensor_contact_2d(contacts: &[ContactConstraint], key: (usize, usize)) -> (Vec2, Vec2) {
-    contacts
-        .iter()
-        .find(|c| (c.body_a, c.body_b) == key)
-        .map(|c| (c.point, c.normal))
-        .unwrap_or((Vec2::ZERO, Vec2::ZERO))
 }
 
 /// What a world ray cast hit.
@@ -425,7 +418,6 @@ impl World2 {
         if body_id >= self.bodies.len() {
             return;
         }
-        let last = self.bodies.len() - 1;
         // Drop joints touching the removed body first (they hold stale ids).
         self.joints.retain(|j| {
             let (a, b) = j.bodies();
@@ -441,26 +433,71 @@ impl World2 {
         for joint in self.joints.iter_mut() {
             joint.shift(body_id);
         }
-        if body_id == last {
-            // Tail removed: no index shift; drop only removed pair keys.
-            self.contact_cache
-                .retain(|&(a, b), _| a != body_id && b != body_id);
-        } else {
-            // Swap-remove moved `last` into `body_id`: substitute, drop
-            // keys touching the removed body, re-canonicalize. The
-            // substitution is injective on survivors (the only colliding
-            // preimage is the dropped key itself), so no merge can occur;
-            // `extend` is belt-and-braces against future key-scheme edits.
-            for ((a, b), entries) in std::mem::take(&mut self.contact_cache) {
-                if a == body_id || b == body_id {
-                    continue;
+        // The body list shifts down above the gap, so every survivor
+        // above it drops by one. The pair keys are remapped through the
+        // same shift, and the pairs that touched the removed body are
+        // dropped: those contacts are gone. The shift is injective on
+        // the survivors, so no two keys can land on the same pair and
+        // no merge can occur; `extend` is belt-and-braces against
+        // future key-scheme edits.
+        // The pairs that touched the removed body are gone: their
+        // contacts ended with the body.
+        let mut dropped: Vec<(usize, usize)> = Vec::new();
+        if self.collect_contact_events {
+            for key in self.contact_cache.keys() {
+                if key.0 == body_id || key.1 == body_id {
+                    dropped.push(*key);
                 }
-                let na = if a == last { body_id } else { a };
-                let nb = if b == last { body_id } else { b };
-                let key = if na < nb { (na, nb) } else { (nb, na) };
-                self.contact_cache.entry(key).or_default().extend(entries);
+            }
+            dropped.sort_unstable();
+        }
+        for ((a, b), entries) in std::mem::take(&mut self.contact_cache) {
+            if a == body_id || b == body_id {
+                continue;
+            }
+            let na = if a > body_id { a - 1 } else { a };
+            let nb = if b > body_id { b - 1 } else { b };
+            let key = if na < nb { (na, nb) } else { (nb, na) };
+            self.contact_cache.entry(key).or_default().extend(entries);
+        }
+        if self.collect_contact_events {
+            for (a, b) in dropped {
+                let (point, normal) = self
+                    .scratch
+                    .last_contacts
+                    .iter()
+                    .find(|&&(ka, kb, _, _)| ka == a && kb == b)
+                    .map(|&(_, _, p, n)| (p, n))
+                    .unwrap_or((Vec2::ZERO, Vec2::ZERO));
+                let (ea, eb) = event_pair(a, b);
+                self.scratch.events.push(ContactEvent2 {
+                    body_a: ea,
+                    body_b: eb,
+                    kind: super::body::ContactEventKind::Ended,
+                    point,
+                    normal,
+                });
             }
         }
+        // The sensor pairs are remapped through the same shift, and the
+        // ones that touched the removed body are dropped: they are gone.
+        for list in [
+            &mut self.scratch.sensor_touching,
+            &mut self.scratch.last_sensor_touching,
+        ] {
+            list.retain(|&(a, b, _, _)| a != body_id && b != body_id);
+            for entry in list.iter_mut() {
+                if entry.0 > body_id {
+                    entry.0 -= 1;
+                }
+                if entry.1 > body_id {
+                    entry.1 -= 1;
+                }
+            }
+        }
+        // The broad phase holds the body too: it has to let go of it, or
+        // it would keep pairing with the rest of the scene.
+        self.broadphase.remove_body(body_id);
     }
 
     /// Parallel island solve path (see [`crate::island`]).
@@ -800,6 +837,12 @@ impl World2 {
                 (super::collision_tier::CollisionTier::Tier5_GJK_EPA, false)
             };
             for &(a, b) in &self.scratch.pairs {
+                // A pair can name a body that is no longer there: the
+                // broad phase holds bodies across the step in which they
+                // are removed. Such a pair is skipped, not indexed.
+                if a >= self.bodies.len() || b >= self.bodies.len() {
+                    continue;
+                }
                 // Static-static pairs can never produce an impulse (zero
                 // effective mass in every direction), so skip the narrowphase
                 // for them entirely. Bit-identical: their constraints would
@@ -858,9 +901,10 @@ impl World2 {
         // contacts *or* had them last step — a sensor that just left
         // something has no contacts now, and that is exactly when its
         // "ended" event is due.
-        if self.collect_contact_events
-            && (!self.scratch.sensor_contacts.is_empty()
-                || !self.scratch.last_sensor_pairs.is_empty())
+        // The state is kept whether or not the events are collected: a
+        // pair that was already touching when the collection was switched
+        // on must not be reported as a new touch.
+        if !self.scratch.sensor_contacts.is_empty() || !self.scratch.last_sensor_touching.is_empty()
         {
             self.sensor_events_2d();
         }
@@ -917,14 +961,20 @@ impl World2 {
                 // this step: that is the event a trigger wants.
                 if is_new && self.collect_contact_events {
                     let c = &self.scratch.constraints[i];
+                    let (point, normal) = (c.point, c.normal);
                     let (ea, eb) = event_pair(a, b);
-                    self.scratch.events.push(ContactEvent2 {
-                        body_a: ea,
-                        body_b: eb,
-                        kind: super::body::ContactEventKind::Began,
-                        point: c.point,
-                        normal: c.normal,
-                    });
+                    // One event per *pair*: a pair that touches at two
+                    // points began touching once.
+                    let key = (ea, eb);
+                    if self.scratch.announced_pairs.insert(key, ()).is_none() {
+                        self.scratch.events.push(ContactEvent2 {
+                            body_a: ea,
+                            body_b: eb,
+                            kind: super::body::ContactEventKind::Began,
+                            point,
+                            normal,
+                        });
+                    }
                 }
                 // A new pair with a sleeping party wakes it (with a
                 // cascade) so it can respond to the newcomer. The wake
@@ -1030,7 +1080,20 @@ impl World2 {
             // now stopped touching: that is the other half of the
             // event. The contact data is the pair's last known one.
             if self.collect_contact_events {
-                for &(a, b) in self.scratch.stale.iter() {
+                // The pairs are sorted, so the events come out in the
+                // same order however the cache was walked.
+                self.scratch.stale.sort_unstable();
+                for k in 0..self.scratch.stale.len() {
+                    let (a, b) = self.scratch.stale[k];
+                    // A pair that has become a sensor is left to the
+                    // sensor state machine: two machines must not both
+                    // speak for the same pair.
+                    if a < self.bodies.len()
+                        && b < self.bodies.len()
+                        && (self.bodies[a].is_sensor || self.bodies[b].is_sensor)
+                    {
+                        continue;
+                    }
                     let (point, normal) = self
                         .scratch
                         .last_contacts
@@ -1265,15 +1328,24 @@ impl World2 {
     /// The ray is tested against every body's current shape; the body
     /// that is hit first (the smallest `t`) wins. A body the filter does
     /// not accept is not considered. A ray that starts inside a shape
-    /// does not hit it.
+    /// does not hit it. A sensor is not solid: the ray passes through
+    /// it, as it would through a hole.
+    ///
+    /// The ray reaches `max_t` along its own direction: a direction that
+    /// is not a unit vector therefore scales the range.
     ///
     /// The scan is over the *current* body positions, not the broad
     /// phase's grid, which holds the positions from before the last
     /// solve.
-    pub fn raycast(&self, ray: &Ray2, filter: &QueryFilter) -> Option<WorldRayHit2> {
+    pub fn raycast(&self, ray: &Ray2, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit2> {
         let mut best: Option<WorldRayHit2> = None;
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            if body.is_sensor {
+                // A sensor is a trigger volume, not a solid: a ray
+                // passes through it.
                 continue;
             }
             let Some(shape) = body.shape.as_ref() else {
@@ -1300,6 +1372,10 @@ impl World2 {
                 }
             };
             let Some(hit) = hit else { continue };
+            if hit.t > max_t {
+                // The body is out of the ray's range.
+                continue;
+            }
             let nearer = match best {
                 Some(current) => hit.t < current.t,
                 None => true,
@@ -1331,24 +1407,28 @@ impl World2 {
     /// produced them -- the sorted pair order -- and so are last step's,
     /// so the two lists merge instead of being searched.
     fn sensor_events_2d(&mut self) {
+        let collect = self.collect_contact_events;
         let scratch = &mut self.scratch;
 
-        // The pairs touching a sensor now, in order and without repeats.
-        scratch.sensor_pairs.clear();
+        // The pairs touching a sensor now, in order and without repeats,
+        // with the contact each of them reported.
+        scratch.sensor_touching.clear();
         for c in &scratch.sensor_contacts {
             let key = (c.body_a, c.body_b);
-            if scratch.sensor_pairs.last() != Some(&key) {
-                scratch.sensor_pairs.push(key);
+            if scratch.sensor_touching.last().map(|e| (e.0, e.1)) != Some(key) {
+                scratch
+                    .sensor_touching
+                    .push((c.body_a, c.body_b, c.point, c.normal));
             }
         }
 
         // Merge the two sorted lists and report what changed.
         let mut i = 0;
         let mut j = 0;
-        let mut ended: Vec<(usize, usize)> = Vec::new();
-        while i < scratch.sensor_pairs.len() || j < scratch.last_sensor_pairs.len() {
-            let now = scratch.sensor_pairs.get(i).copied();
-            let before = scratch.last_sensor_pairs.get(j).copied();
+        scratch.sensor_ended.clear();
+        while i < scratch.sensor_touching.len() || j < scratch.last_sensor_touching.len() {
+            let now = scratch.sensor_touching.get(i).map(|e| (e.0, e.1));
+            let before = scratch.last_sensor_touching.get(j).map(|e| (e.0, e.1));
             match (now, before) {
                 (Some(c), Some(p)) if c == p => {
                     i += 1;
@@ -1356,56 +1436,69 @@ impl World2 {
                 }
                 (Some(c), Some(p)) => {
                     if c < p {
-                        let (point, normal) = sensor_contact_2d(&scratch.sensor_contacts, c);
+                        let entry = scratch.sensor_touching[i];
+                        if collect {
+                            let (ea, eb) = event_pair(c.0, c.1);
+                            scratch.events.push(ContactEvent2 {
+                                body_a: ea,
+                                body_b: eb,
+                                kind: super::body::ContactEventKind::Began,
+                                point: entry.2,
+                                normal: entry.3,
+                            });
+                        }
+                        i += 1;
+                    } else {
+                        // The pair ended: it keeps the last contact it
+                        // had, so the event can say where it was.
+                        let entry = scratch.last_sensor_touching[j];
+                        scratch.sensor_ended.push(entry);
+                        j += 1;
+                    }
+                }
+                (Some(c), None) => {
+                    let entry = scratch.sensor_touching[i];
+                    if collect {
                         let (ea, eb) = event_pair(c.0, c.1);
                         scratch.events.push(ContactEvent2 {
                             body_a: ea,
                             body_b: eb,
                             kind: super::body::ContactEventKind::Began,
-                            point,
-                            normal,
+                            point: entry.2,
+                            normal: entry.3,
                         });
-                        i += 1;
-                    } else {
-                        ended.push(p);
-                        j += 1;
                     }
-                }
-                (Some(c), None) => {
-                    let (point, normal) = sensor_contact_2d(&scratch.sensor_contacts, c);
-                    let (ea, eb) = event_pair(c.0, c.1);
-                    scratch.events.push(ContactEvent2 {
-                        body_a: ea,
-                        body_b: eb,
-                        kind: super::body::ContactEventKind::Began,
-                        point,
-                        normal,
-                    });
                     i += 1;
                 }
-                (None, Some(p)) => {
-                    ended.push(p);
+                (None, Some(_p)) => {
+                    let entry = scratch.last_sensor_touching[j];
+                    scratch.sensor_ended.push(entry);
                     j += 1;
                 }
                 (None, None) => break,
             }
         }
 
-        // The pairs that ended keep the last contact they had.
-        for key in ended {
-            let (point, normal) = sensor_contact_2d(&scratch.sensor_contacts, key);
-            let (ea, eb) = event_pair(key.0, key.1);
-            scratch.events.push(ContactEvent2 {
-                body_a: ea,
-                body_b: eb,
-                kind: super::body::ContactEventKind::Ended,
-                point,
-                normal,
-            });
+        // The pairs that ended are reported after the ones that began.
+        for k in 0..scratch.sensor_ended.len() {
+            let entry = scratch.sensor_ended[k];
+            if collect {
+                let (ea, eb) = event_pair(entry.0, entry.1);
+                scratch.events.push(ContactEvent2 {
+                    body_a: ea,
+                    body_b: eb,
+                    kind: super::body::ContactEventKind::Ended,
+                    point: entry.2,
+                    normal: entry.3,
+                });
+            }
         }
 
         // This step's sensor pairs are next step's.
-        std::mem::swap(&mut scratch.sensor_pairs, &mut scratch.last_sensor_pairs);
+        std::mem::swap(
+            &mut scratch.sensor_touching,
+            &mut scratch.last_sensor_touching,
+        );
     }
 
     /// Wake a body and cascade through its contact partners and joint
@@ -2049,11 +2142,19 @@ pub struct World3 {
     /// The contacts a sensor pair reported, kept apart from the
     /// solved ones: a sensor reports contacts but never pushes.
     scratch_sensor_contacts: Vec<ContactConstraint3D>,
-    /// The sensor pairs that were touching last step, so the events
-    /// can say which of them ended.
-    scratch_last_sensor_pairs: Vec<(usize, usize)>,
-    /// The sensor pairs touching this step.
-    scratch_sensor_pairs: Vec<(usize, usize)>,
+    /// The sensor pairs that were touching last step, with the contact
+    /// each of them reported, so the events can say which of them ended
+    /// and where they were.
+    scratch_last_sensor_touching: Vec<(usize, usize, Vec3, Vec3)>,
+    /// The sensor pairs touching this step, with their contacts.
+    scratch_sensor_touching: Vec<(usize, usize, Vec3, Vec3)>,
+    /// The sensor pairs that ended this step, with their last contact.
+    scratch_sensor_ended: Vec<(usize, usize, Vec3, Vec3)>,
+    /// The pairs that already reported a *began* event this step.
+    ///
+    /// A pair that touches at several points began touching once, so the
+    /// event is only pushed for the first of them.
+    scratch_announced_pairs: FxHashMap<(u32, u32), ()>,
     /// The contact events of this step.
     scratch_events: Vec<ContactEvent3>,
     /// The last known contact of every pair, kept so an *ended*
@@ -2109,8 +2210,10 @@ impl World3 {
             epa_buffers: phieng_collision::epa::EpaBuffers::new(),
             scratch_stale: Vec::new(),
             scratch_sensor_contacts: Vec::new(),
-            scratch_last_sensor_pairs: Vec::new(),
-            scratch_sensor_pairs: Vec::new(),
+            scratch_last_sensor_touching: Vec::new(),
+            scratch_sensor_touching: Vec::new(),
+            scratch_sensor_ended: Vec::new(),
+            scratch_announced_pairs: FxHashMap::default(),
             scratch_events: Vec::new(),
             scratch_last_contacts: Vec::new(),
         }
@@ -2200,7 +2303,6 @@ impl World3 {
         if body_id >= self.bodies.len() {
             return;
         }
-        let last = self.bodies.len() - 1;
         // Drop joints touching the removed body first (they hold stale ids).
         self.joints.retain(|j| {
             let (a, b) = j.bodies();
@@ -2214,20 +2316,67 @@ impl World3 {
             body.id = index;
         }
         self.next_body_id = self.bodies.len();
-        if body_id == last {
-            self.contact_cache
-                .retain(|&(a, b), _| a != body_id && b != body_id);
-        } else {
-            for ((a, b), entries) in std::mem::take(&mut self.contact_cache) {
-                if a == body_id || b == body_id {
-                    continue;
+        // The body list shifts down above the gap, so every survivor
+        // above it drops by one. The pair keys are remapped through the
+        // same shift, and the pairs that touched the removed body are
+        // dropped: those contacts are gone.
+        // The pairs that touched the removed body are gone: their
+        // contacts ended with the body.
+        let mut dropped: Vec<(usize, usize)> = Vec::new();
+        if self.collect_contact_events {
+            for key in self.contact_cache.keys() {
+                if key.0 == body_id || key.1 == body_id {
+                    dropped.push(*key);
                 }
-                let na = if a == last { body_id } else { a };
-                let nb = if b == last { body_id } else { b };
-                let key = if na < nb { (na, nb) } else { (nb, na) };
-                self.contact_cache.entry(key).or_default().extend(entries);
+            }
+            dropped.sort_unstable();
+        }
+        for ((a, b), entries) in std::mem::take(&mut self.contact_cache) {
+            if a == body_id || b == body_id {
+                continue;
+            }
+            let na = if a > body_id { a - 1 } else { a };
+            let nb = if b > body_id { b - 1 } else { b };
+            let key = if na < nb { (na, nb) } else { (nb, na) };
+            self.contact_cache.entry(key).or_default().extend(entries);
+        }
+        if self.collect_contact_events {
+            for (a, b) in dropped {
+                let (point, normal) = self
+                    .scratch_last_contacts
+                    .iter()
+                    .find(|&&(ka, kb, _, _)| ka == a && kb == b)
+                    .map(|&(_, _, p, n)| (p, n))
+                    .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+                let (ea, eb) = event_pair(a, b);
+                self.scratch_events.push(ContactEvent3 {
+                    body_a: ea,
+                    body_b: eb,
+                    kind: super::body::ContactEventKind::Ended,
+                    point,
+                    normal,
+                });
             }
         }
+        // The sensor pairs are remapped through the same shift, and the
+        // ones that touched the removed body are dropped: they are gone.
+        for list in [
+            &mut self.scratch_sensor_touching,
+            &mut self.scratch_last_sensor_touching,
+        ] {
+            list.retain(|&(a, b, _, _)| a != body_id && b != body_id);
+            for entry in list.iter_mut() {
+                if entry.0 > body_id {
+                    entry.0 -= 1;
+                }
+                if entry.1 > body_id {
+                    entry.1 -= 1;
+                }
+            }
+        }
+        // The broad phase holds the body too: it has to let go of it, or
+        // it would keep pairing with the rest of the scene.
+        self.broadphase.remove_body(body_id);
     }
 
     /// Step the physics simulation
@@ -2336,6 +2485,11 @@ impl World3 {
         #[cfg(feature = "phase-timing")]
         let mut timings = super::phase_timing::PhaseTimings::default();
 
+        // The events of the last step are gone: the list holds the
+        // events of this step and of no other.
+        self.scratch_events.clear();
+        self.scratch_announced_pairs.clear();
+
         // 0. Resolve a Hybrid broadphase request (see World2::step_inner).
         self.resolve_broadphase_mode();
 
@@ -2399,6 +2553,12 @@ impl World3 {
         sensor_contacts.clear();
         timed!(timings.narrowphase, {
             for &(a, b) in &pairs {
+                // A pair can name a body that is no longer there: the
+                // broad phase holds bodies across the step in which they
+                // are removed. Such a pair is skipped, not indexed.
+                if a >= self.bodies.len() || b >= self.bodies.len() {
+                    continue;
+                }
                 // Static-static pairs can never produce an impulse (zero
                 // effective mass in every direction); skip the narrowphase.
                 // Bit-identical: their constraints would solve to zero.
@@ -2460,10 +2620,10 @@ impl World3 {
         // contacts *or* had them last step — a sensor that just left
         // something has no contacts now, and that is exactly when its
         // "ended" event is due.
-        if self.collect_contact_events
-            && (!self.scratch_sensor_contacts.is_empty()
-                || !self.scratch_last_sensor_pairs.is_empty())
-        {
+        // The state is kept whether or not the events are collected: a
+        // pair that was already touching when the collection was switched
+        // on must not be reported as a new touch.
+        if !sensor_contacts.is_empty() || !self.scratch_last_sensor_touching.is_empty() {
             self.sensor_events_3d(&sensor_contacts);
         }
 
@@ -2510,13 +2670,19 @@ impl World3 {
                 // this step: that is the event a trigger wants.
                 if is_new && self.collect_contact_events {
                     let (ea, eb) = event_pair(a, b);
-                    self.scratch_events.push(ContactEvent3 {
-                        body_a: ea,
-                        body_b: eb,
-                        kind: super::body::ContactEventKind::Began,
-                        point: constraint.point,
-                        normal: constraint.normal,
-                    });
+                    let (point, normal) = (constraint.point, constraint.normal);
+                    // One event per *pair*: a pair that touches at two
+                    // points began touching once.
+                    let key = (ea, eb);
+                    if self.scratch_announced_pairs.insert(key, ()).is_none() {
+                        self.scratch_events.push(ContactEvent3 {
+                            body_a: ea,
+                            body_b: eb,
+                            kind: super::body::ContactEventKind::Began,
+                            point,
+                            normal,
+                        });
+                    }
                 }
                 // A new pair with a sleeping party wakes it (with a
                 // cascade) so it can respond to the newcomer. The wake
@@ -2608,7 +2774,20 @@ impl World3 {
             // now stopped touching: that is the other half of the
             // event. The contact data is the pair's last known one.
             if self.collect_contact_events {
-                for &(a, b) in self.scratch_stale.iter() {
+                // The pairs are sorted, so the events come out in the
+                // same order however the cache was walked.
+                self.scratch_stale.sort_unstable();
+                for k in 0..self.scratch_stale.len() {
+                    let (a, b) = self.scratch_stale[k];
+                    // A pair that has become a sensor is left to the
+                    // sensor state machine: two machines must not both
+                    // speak for the same pair.
+                    if a < self.bodies.len()
+                        && b < self.bodies.len()
+                        && (self.bodies[a].is_sensor || self.bodies[b].is_sensor)
+                    {
+                        continue;
+                    }
                     let (point, normal) = self
                         .scratch_last_contacts
                         .iter()
@@ -2745,6 +2924,7 @@ impl World3 {
         self.scratch_constraints = constraints;
         self.scratch_points = points;
         self.scratch_clip_tmp = clip_tmp;
+        self.scratch_sensor_contacts = sensor_contacts;
         self.epa_buffers = epa_buffers;
     }
 
@@ -2777,6 +2957,30 @@ impl World3 {
     #[cfg(feature = "phase-timing")]
     pub fn broadphase_cell_count(&self) -> usize {
         self.broadphase.cell_count()
+    }
+
+    /// Profiling only: turn the grid's persistent cells on or off.
+    ///
+    /// The persistent grid keeps its cells across steps and only
+    /// re-inserts the bodies that moved; the other behaviour wipes
+    /// every cell and re-inserts every body each step. The pair set is
+    /// the same either way, so the trajectory does not change; only the
+    /// amount of work does.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_persistent(&mut self, persistent: bool) {
+        self.broadphase.set_persistent(persistent);
+    }
+
+    /// Profiling only: whether the persistent grid only skips a body
+    /// whose AABB is bit-identical.
+    ///
+    /// The alternative skips any body whose cell range is unchanged,
+    /// which is a pure integer comparison: the cells a body occupies are
+    /// exactly the cells of its range, so an unchanged range means an
+    /// unchanged membership. Both produce the same pairs.
+    #[cfg(feature = "phase-timing")]
+    pub fn set_broadphase_persistent_strict(&mut self, strict: bool) {
+        self.broadphase.set_persistent_strict(strict);
     }
 
     /// Resolve [`BroadphaseMode::Hybrid`] to a concrete 3D backend from the
@@ -3263,10 +3467,15 @@ impl World3 {
     /// See [`World2::raycast`]. The convex shapes (a convex hull and a
     /// convex mesh) are not tested yet: a ray that would hit one is
     /// reported as a miss.
-    pub fn raycast(&self, ray: &Ray3, filter: &QueryFilter) -> Option<WorldRayHit3> {
+    pub fn raycast(&self, ray: &Ray3, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit3> {
         let mut best: Option<WorldRayHit3> = None;
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            if body.is_sensor {
+                // A sensor is a trigger volume, not a solid: a ray
+                // passes through it.
                 continue;
             }
             let Some(shape) = body.shape.as_ref() else {
@@ -3287,8 +3496,13 @@ impl World3 {
                     radius,
                     half_length,
                 } => {
-                    // The capsule axis is the body's local Y.
-                    let axis = body.transform.rotation * Vec3::Y * *half_length;
+                    // The capsule axis is the body's local Y. The
+                    // rotation is spelled out so the managed mirror does
+                    // exactly the same arithmetic: the two agree to the
+                    // last bit.
+                    let axis =
+                        phieng_collision::query::rotate_vec3(body.transform.rotation, Vec3::Y)
+                            * *half_length;
                     ray_capsule3(
                         ray.origin,
                         ray.direction,
@@ -3300,6 +3514,10 @@ impl World3 {
                 Shape3::ConvexHull { .. } | Shape3::ConvexMesh { .. } => None,
             };
             let Some(hit) = hit else { continue };
+            if hit.t > max_t {
+                // The body is out of the ray's range.
+                continue;
+            }
             let nearer = match best {
                 Some(current) => hit.t < current.t,
                 None => true,
@@ -3327,20 +3545,27 @@ impl World3 {
 
     /// Work out which sensor pairs began and which ended (3D).
     fn sensor_events_3d(&mut self, contacts: &[ContactConstraint3D]) {
-        self.scratch_sensor_pairs.clear();
+        let collect = self.collect_contact_events;
+
+        // The pairs touching a sensor now, in order and without repeats,
+        // with the contact each of them reported.
+        self.scratch_sensor_touching.clear();
         for c in contacts {
             let key = (c.body_a, c.body_b);
-            if self.scratch_sensor_pairs.last() != Some(&key) {
-                self.scratch_sensor_pairs.push(key);
+            if self.scratch_sensor_touching.last().map(|e| (e.0, e.1)) != Some(key) {
+                self.scratch_sensor_touching
+                    .push((c.body_a, c.body_b, c.point, c.normal));
             }
         }
 
+        // Merge the two sorted lists and report what changed.
         let mut i = 0;
         let mut j = 0;
-        let mut ended: Vec<(usize, usize)> = Vec::new();
-        while i < self.scratch_sensor_pairs.len() || j < self.scratch_last_sensor_pairs.len() {
-            let now = self.scratch_sensor_pairs.get(i).copied();
-            let before = self.scratch_last_sensor_pairs.get(j).copied();
+        self.scratch_sensor_ended.clear();
+        while i < self.scratch_sensor_touching.len() || j < self.scratch_last_sensor_touching.len()
+        {
+            let now = self.scratch_sensor_touching.get(i).map(|e| (e.0, e.1));
+            let before = self.scratch_last_sensor_touching.get(j).map(|e| (e.0, e.1));
             match (now, before) {
                 (Some(c), Some(p)) if c == p => {
                     i += 1;
@@ -3348,56 +3573,68 @@ impl World3 {
                 }
                 (Some(c), Some(p)) => {
                     if c < p {
-                        let (point, normal) = sensor_contact_3d(contacts, c);
+                        let entry = self.scratch_sensor_touching[i];
+                        if collect {
+                            let (ea, eb) = event_pair(c.0, c.1);
+                            self.scratch_events.push(ContactEvent3 {
+                                body_a: ea,
+                                body_b: eb,
+                                kind: super::body::ContactEventKind::Began,
+                                point: entry.2,
+                                normal: entry.3,
+                            });
+                        }
+                        i += 1;
+                    } else {
+                        // The pair ended: it keeps the last contact it
+                        // had, so the event can say where it was.
+                        let entry = self.scratch_last_sensor_touching[j];
+                        self.scratch_sensor_ended.push(entry);
+                        j += 1;
+                    }
+                }
+                (Some(c), None) => {
+                    let entry = self.scratch_sensor_touching[i];
+                    if collect {
                         let (ea, eb) = event_pair(c.0, c.1);
                         self.scratch_events.push(ContactEvent3 {
                             body_a: ea,
                             body_b: eb,
                             kind: super::body::ContactEventKind::Began,
-                            point,
-                            normal,
+                            point: entry.2,
+                            normal: entry.3,
                         });
-                        i += 1;
-                    } else {
-                        ended.push(p);
-                        j += 1;
                     }
-                }
-                (Some(c), None) => {
-                    let (point, normal) = sensor_contact_3d(contacts, c);
-                    let (ea, eb) = event_pair(c.0, c.1);
-                    self.scratch_events.push(ContactEvent3 {
-                        body_a: ea,
-                        body_b: eb,
-                        kind: super::body::ContactEventKind::Began,
-                        point,
-                        normal,
-                    });
                     i += 1;
                 }
-                (None, Some(p)) => {
-                    ended.push(p);
+                (None, Some(_p)) => {
+                    let entry = self.scratch_last_sensor_touching[j];
+                    self.scratch_sensor_ended.push(entry);
                     j += 1;
                 }
                 (None, None) => break,
             }
         }
 
-        for key in ended {
-            let (point, normal) = sensor_contact_3d(&self.scratch_sensor_contacts, key);
-            let (ea, eb) = event_pair(key.0, key.1);
-            self.scratch_events.push(ContactEvent3 {
-                body_a: ea,
-                body_b: eb,
-                kind: super::body::ContactEventKind::Ended,
-                point,
-                normal,
-            });
+        // The pairs that ended are reported after the ones that began.
+        for k in 0..self.scratch_sensor_ended.len() {
+            let entry = self.scratch_sensor_ended[k];
+            if collect {
+                let (ea, eb) = event_pair(entry.0, entry.1);
+                self.scratch_events.push(ContactEvent3 {
+                    body_a: ea,
+                    body_b: eb,
+                    kind: super::body::ContactEventKind::Ended,
+                    point: entry.2,
+                    normal: entry.3,
+                });
+            }
         }
 
+        // This step's sensor pairs are next step's.
         std::mem::swap(
-            &mut self.scratch_sensor_pairs,
-            &mut self.scratch_last_sensor_pairs,
+            &mut self.scratch_sensor_touching,
+            &mut self.scratch_last_sensor_touching,
         );
     }
 

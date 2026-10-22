@@ -25,11 +25,10 @@ This project follows [Semantic Versioning](https://semver.org/) and
   The query runs against the *current* body positions, not the broad
   phase's grid, which holds the positions from before the last solve.
 
-  FFI `phieng_world[_3]_raycast` (a null output array asks for the
-  count alone) plus the managed `World2/3.Raycast` and
-  `PhiNativeWorld(3).Raycast`.
+  FFI `phieng_world[_3]_raycast` plus the managed `World2/3.Raycast`
+  and `PhiNativeWorld(3).Raycast`.
 
-  Mirrored Rust↔C# tests: **X07–X12** (`crates/engine/tests/raycast.rs`,
+  Mirrored Rust↔C# tests: **X07–X16** (`crates/engine/tests/raycast.rs`,
   `tests/PhiEng.Tests/RaycastTests.cs`).
 - **Contact events and trigger sensors.** A body can now be made a
   *sensor*: it reports its contacts as events and never pushes, so it
@@ -883,6 +882,74 @@ This project follows [Semantic Versioning](https://semver.org/) and
   equilibrium, conductivity scaling, zero-conductivity no-flow,
   temperature clamping (max/min), static-body thermal reservoir,
   disabled-config no-op, conduction disabled, determinism.
+
+### Fixed
+- **The persistent grid now ships.** The 2D grid's persistent path was
+  dead code in the default build -- a profiling switch left over from
+  an experiment had been left turned off -- so the shipped engine was
+  still wiping and rebuilding every cell each step while the 3D grid
+  kept its cells. The 2D grid now keeps them too: the static-heavy
+  scene's broad phase is **52 % cheaper** and the step **32 % cheaper**
+  (measured with `bench_solver_ab grid`, 1500 static bodies, one
+  binary alternating the two variants). The trajectory does not change:
+  the pinned hashes are unchanged.
+- **A second frame cannot empty the grid.** Opening a second frame
+  before closing the first moved the epoch twice, so every body looked
+  stale and the grid dropped all of them: the step lost every pair and
+  the bodies fell through each other, with nothing to show for it. The
+  second frame is refused now.
+- **The grid's scene query answers the question the other backends
+  answer.** The grid reported every body whose *cell* overlapped the
+  query box -- too many -- and missed the bodies too big for the grid
+  altogether -- too few. It tests the boxes themselves now, and asks
+  the oversized bodies too.
+- **A removed body leaves the broad phase.** The grid kept the bodies
+  the world no longer had until the next step dropped them, and the
+  narrow phase indexed the body array without a bounds check. The
+  world now tells the broad phase when a body goes, and the narrow
+  phase skips a pair that names a body that is not there.
+- **The contact cache is remapped through the shift, not a swap.**
+  Removing a body shifted the body ids down, but the cache keys were
+  remapped as if the last body had been moved into the gap: every
+  survivor above the gap kept its old id, and the warm-start impulses
+  of a pair were re-keyed onto a pair that had never touched.
+- **The 3D sensors report their contacts.** The 3D sensor path was
+  dead: the guard that decided whether the diff ran read a buffer that
+  had already been emptied, so the 3D never reported a sensor event.
+- **One *began* event per pair.** A pair that touches at two points
+  began touching once, but it reported two events -- one per contact
+  point. Both languages.
+- **The events are the events of the last step.** The 3D list was never
+  cleared: it held every event since the world was created, and grew
+  without bound.
+- **A removed body ends the contacts it had.** The pairs that touched
+  it were dropped silently; they now report an *ended* event. Both
+  languages.
+- **Turning the events on mid-run no longer floods the sensors.** The
+  sensor state is kept whether or not the events are collected, so a
+  pair that was already touching is not reported as a new touch.
+- **An *ended* event says where the pair was.** The event carried a
+  zero point and normal; it now carries the pair's last known contact.
+  Both languages.
+- **A ray that starts inside a shape does not hit it.** A ray that
+  started inside a circle, a sphere or a capsule reported the way out,
+  with the normal pointing away from the ray -- the opposite of every
+  other shape, and of what the documentation said. Both languages.
+- **A sensor is not solid.** A ray passed through a trigger volume and
+  reported it as a hit. Both languages.
+- **The ray cast has a range in the Rust API too**, and the two
+  languages agree on what it means: the distance along the direction as
+  it was given.
+- **The 2D contact event carries its normal.** The FFI wrote a zero
+  where the normal should have been, and the doc said otherwise.
+- **The collision filter is Box2D's rule.** Two bodies on the same
+  group always collide, whatever their masks say -- the group
+  overrides the masks. Both languages.
+- **The managed mirror reads snapshot v14.** The Rust core writes the
+  sensor flag as schema 14; the managed mirror was still at 13 and
+  refused to read a file the engine had just written.
+- **The 3D ray cast reads eight floats**, the number the
+  documentation said, not nine.
 
 ## [0.4.0] - 2026-10-16
 

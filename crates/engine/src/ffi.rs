@@ -1899,13 +1899,13 @@ pub unsafe extern "C" fn phieng_world3_set_body_sensor(
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world_set_collect_contact_events(
     world: *mut World2,
-    collect: bool,
+    collect: u8,
 ) -> i32 {
     if world.is_null() {
         return 0;
     }
     let world_ref: &mut World2 = unsafe { &mut *world };
-    world_ref.collect_contact_events = collect;
+    world_ref.collect_contact_events = collect != 0;
     1
 }
 
@@ -1917,13 +1917,13 @@ pub unsafe extern "C" fn phieng_world_set_collect_contact_events(
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world3_set_collect_contact_events(
     world: *mut phieng_dynamics::World3,
-    collect: bool,
+    collect: u8,
 ) -> i32 {
     if world.is_null() {
         return 0;
     }
     let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
-    world_ref.collect_contact_events = collect;
+    world_ref.collect_contact_events = collect != 0;
     1
 }
 
@@ -1938,16 +1938,18 @@ pub unsafe extern "C" fn phieng_world_contact_event_count(world: *const World2) 
         return 0;
     }
     let world_ref: &World2 = unsafe { &*world };
-    world_ref.contact_events().len() as i32
+    i32::try_from(world_ref.contact_events().len()).unwrap_or(i32::MAX)
 }
 
 /// Copy a contact event out (2D).
 ///
-/// `out` receives body_a, body_b, kind (0 = began, 1 = ended), the
-/// contact point and the contact normal. Returns 1 on success, 0 on any
-/// invalid input.
+/// `out` receives seven floats: body_a, body_b, kind (0 = began, 1 =
+/// ended), the contact point (x, y) and the contact normal (x, y).
+/// Returns 1 on success, 0 on any invalid input.
+///
 /// # Safety
-/// See [`phieng_world_set_body_transform`].
+/// `out` must point to seven writable `f32`s. See also
+/// [`phieng_world_set_body_transform`].
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world_get_contact_event(
     world: *const World2,
@@ -1961,7 +1963,7 @@ pub unsafe extern "C" fn phieng_world_get_contact_event(
     let Some(event) = world_ref.contact_events().get(index as usize) else {
         return 0;
     };
-    let out = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 7) };
     out[0] = event.body_a as f32;
     out[1] = event.body_b as f32;
     out[2] = match event.kind {
@@ -1970,7 +1972,8 @@ pub unsafe extern "C" fn phieng_world_get_contact_event(
     };
     out[3] = event.point.x;
     out[4] = event.point.y;
-    out[5] = 0.0;
+    out[5] = event.normal.x;
+    out[6] = event.normal.y;
     1
 }
 
@@ -1987,16 +1990,18 @@ pub unsafe extern "C" fn phieng_world3_contact_event_count(
         return 0;
     }
     let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
-    world_ref.contact_events().len() as i32
+    i32::try_from(world_ref.contact_events().len()).unwrap_or(i32::MAX)
 }
 
 /// Copy a contact event out (3D).
 ///
-/// `out` receives body_a, body_b, kind (0 = began, 1 = ended) and the
-/// contact point and normal. Returns 1 on success, 0 on any invalid
-/// input.
+/// `out` receives nine floats: body_a, body_b, kind (0 = began, 1 =
+/// ended), the contact point (x, y, z) and the contact normal (x, y, z).
+/// Returns 1 on success, 0 on any invalid input.
+///
 /// # Safety
-/// See [`phieng_world3_set_body_transform`].
+/// `out` must point to nine writable `f32`s. See also
+/// [`phieng_world3_set_body_transform`].
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world3_get_contact_event(
     world: *const phieng_dynamics::World3,
@@ -2028,16 +2033,22 @@ pub unsafe extern "C" fn phieng_world3_get_contact_event(
 
 /// Cast a ray into the world and return the first thing it hits (2D).
 ///
-/// The hit is written to `out` as body id, distance, contact point
-/// (x, y) and contact normal (x, y). Returns 1 on a hit, 0 on a miss
-/// and -1 on invalid input.
+/// The hit is written to `out` as six floats: body id, distance along
+/// the ray, contact point (x, y) and contact normal (x, y). Returns 1 on
+/// a hit, 0 on a miss and -1 on invalid input.
+///
+/// The distance is the parameter along the direction as it was given:
+/// a direction that is not a unit vector scales the range, and so does
+/// `max_t`.
 ///
 /// `group` and `mask` are the query's collision filter: a body is only
 /// considered when it accepts the query's group and the query's mask
-/// accepts the body's group.
+/// accepts the body's group. A sensor is not solid: the ray passes
+/// through it.
 ///
 /// # Safety
-/// See [`phieng_world_set_body_transform`].
+/// `out` must point to six writable `f32`s. See also
+/// [`phieng_world_set_body_transform`].
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world_raycast(
     world: *const World2,
@@ -2067,12 +2078,9 @@ pub unsafe extern "C" fn phieng_world_raycast(
         glam::Vec2::new(direction_x, direction_y),
     );
     let filter = phieng_dynamics::body::QueryFilter { group, mask };
-    let Some(hit) = world_ref.raycast(&ray, &filter) else {
+    let Some(hit) = world_ref.raycast(&ray, &filter, max_t) else {
         return 0;
     };
-    if hit.t > max_t {
-        return 0;
-    }
     let out = unsafe { std::slice::from_raw_parts_mut(out, 6) };
     out[0] = hit.body as f32;
     out[1] = hit.t;
@@ -2085,12 +2093,17 @@ pub unsafe extern "C" fn phieng_world_raycast(
 
 /// Cast a ray into the world and return the first thing it hits (3D).
 ///
-/// The hit is written to `out` as body id, distance, contact point
-/// (x, y, z) and contact normal (x, y, z). Returns 1 on a hit, 0 on a
-/// miss and -1 on invalid input.
+/// The hit is written to `out` as eight floats: body id, distance along
+/// the ray, contact point (x, y, z) and contact normal (x, y, z).
+/// Returns 1 on a hit, 0 on a miss and -1 on invalid input.
+///
+/// The distance is the parameter along the direction as it was given:
+/// a direction that is not a unit vector scales the range, and so does
+/// `max_t`.
 ///
 /// # Safety
-/// See [`phieng_world3_set_body_transform`].
+/// `out` must point to eight writable `f32`s. See also
+/// [`phieng_world3_set_body_transform`].
 #[no_mangle]
 pub unsafe extern "C" fn phieng_world3_raycast(
     world: *const phieng_dynamics::World3,
@@ -2124,13 +2137,10 @@ pub unsafe extern "C" fn phieng_world3_raycast(
         glam::Vec3::new(direction_x, direction_y, direction_z),
     );
     let filter = phieng_dynamics::body::QueryFilter { group, mask };
-    let Some(hit) = world_ref.raycast(&ray, &filter) else {
+    let Some(hit) = world_ref.raycast(&ray, &filter, max_t) else {
         return 0;
     };
-    if hit.t > max_t {
-        return 0;
-    }
-    let out = unsafe { std::slice::from_raw_parts_mut(out, 9) };
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 8) };
     out[0] = hit.body as f32;
     out[1] = hit.t;
     out[2] = hit.point.x;

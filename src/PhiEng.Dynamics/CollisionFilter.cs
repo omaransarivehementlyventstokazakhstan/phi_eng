@@ -5,9 +5,10 @@ namespace PhiEng.Dynamics;
 /// accepts.
 ///
 /// Two bodies may collide only when each accepts the other's layer, the
-/// rule every layered physics engine uses (Box2D, Bullet). A body that
-/// accepts one layer therefore collides only with the bodies on it, and
-/// one side is enough to veto the pair.
+/// rule every layered physics engine uses (Box2D, Bullet), with one
+/// addition: two bodies on the same group always collide, whatever
+/// their masks say. A body that accepts one layer therefore collides
+/// only with the bodies on it, and one side is enough to veto the pair.
 ///
 /// Mirrors Rust <c>phieng_dynamics::body::collision_filter_allows</c>.
 /// </summary>
@@ -21,7 +22,14 @@ public static class CollisionFilter
 
     /// <summary>Whether two bodies with the given filters may collide.</summary>
     public static bool Allows(uint groupA, uint maskA, uint groupB, uint maskB)
-        => (groupA & maskB) != 0 && (groupB & maskA) != 0;
+    {
+        // The same group overrides the masks.
+        if (groupA == groupB && groupA != 0)
+        {
+            return true;
+        }
+        return (groupA & maskB) != 0 && (groupB & maskA) != 0;
+    }
 
     /// <summary>Whether two bodies with the given filters may collide.</summary>
     public static bool Allows(RigidBody2 a, RigidBody2 b)

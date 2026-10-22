@@ -92,15 +92,22 @@ fn cross2(a: Vec2, b: Vec2) -> f32 {
 /// A ray that starts inside the circle does not hit it: the hit is for
 /// a ray that enters.
 pub fn ray_circle2(origin: Vec2, direction: Vec2, center: Vec2, radius: f32) -> Option<RayHit2> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
     let m = origin - center;
     let a = direction.dot(direction);
-    if a <= 0.0 {
+    if !a.is_finite() || a <= 0.0 {
         return None;
     }
     let b = 2.0 * m.dot(direction);
     let c = m.dot(m) - radius * radius;
+    if c < 0.0 {
+        // The ray starts inside the circle: it does not hit it.
+        return None;
+    }
     let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
+    if !disc.is_finite() || disc < 0.0 {
         return None;
     }
     let root = disc.sqrt();
@@ -175,6 +182,21 @@ pub fn ray_obb2(
     Some(RayHit2 { t, point, normal })
 }
 
+/// Twice the signed area of a polygon.
+///
+/// Zero for a polygon whose vertices are collinear, or all the same
+/// point: such a polygon has no inside and is not a shape.
+fn polygon_area2(vertices: &[Vec2]) -> f32 {
+    let n = vertices.len();
+    let mut area = 0.0f32;
+    for i in 0..n {
+        let a = vertices[i];
+        let b = vertices[(i + 1) % n];
+        area += cross2(a, b);
+    }
+    area
+}
+
 /// Ray against a convex polygon (2D).
 ///
 /// The vertices may be in either winding order: the normal is always
@@ -182,6 +204,10 @@ pub fn ray_obb2(
 pub fn ray_polygon2(origin: Vec2, direction: Vec2, vertices: &[Vec2]) -> Option<RayHit2> {
     let n = vertices.len();
     if n < 3 {
+        return None;
+    }
+    if polygon_area2(vertices) == 0.0 {
+        // The polygon has no area: it is a line, not a shape.
         return None;
     }
     if point_in_convex_polygon2(origin, vertices) {
@@ -260,15 +286,22 @@ pub fn point_in_convex_polygon2(point: Vec2, vertices: &[Vec2]) -> bool {
 ///
 /// A ray that starts inside the sphere does not hit it.
 pub fn ray_sphere3(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Option<RayHit3> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
     let m = origin - center;
     let a = direction.dot(direction);
-    if a <= 0.0 {
+    if !a.is_finite() || a <= 0.0 {
         return None;
     }
     let b = 2.0 * m.dot(direction);
     let c = m.dot(m) - radius * radius;
+    if c < 0.0 {
+        // The ray starts inside the sphere: it does not hit it.
+        return None;
+    }
     let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
+    if !disc.is_finite() || disc < 0.0 {
         return None;
     }
     let root = disc.sqrt();
@@ -284,6 +317,18 @@ pub fn ray_sphere3(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> 
     Some(RayHit3 { t, point, normal })
 }
 
+/// Rotate a vector by a quaternion, spelled out.
+///
+/// The managed mirror does exactly this arithmetic, so the two produce
+/// the same bits: a library rotation would round differently in the two
+/// languages and the answers would differ in the last bit.
+#[inline]
+pub fn rotate_vec3(q: glam::Quat, v: Vec3) -> Vec3 {
+    let u = Vec3::new(q.x, q.y, q.z);
+    let t = u.cross(v) + q.w * v;
+    v + 2.0 * u.cross(t)
+}
+
 /// Ray against an oriented box (3D).
 ///
 /// `rotation` is the box's orientation and `half_extents` its size
@@ -295,10 +340,12 @@ pub fn ray_obb3(
     rotation: glam::Quat,
     half_extents: Vec3,
 ) -> Option<RayHit3> {
-    // The box's own axes, the same ones the OBB-OBB test uses.
-    let ax = rotation * Vec3::X;
-    let ay = rotation * Vec3::Y;
-    let az = rotation * Vec3::Z;
+    // The box's own axes, the same ones the OBB-OBB test uses. The
+    // rotation is spelled out, so the managed mirror can do exactly the
+    // same arithmetic: the two agree to the last bit.
+    let ax = rotate_vec3(rotation, Vec3::X);
+    let ay = rotate_vec3(rotation, Vec3::Y);
+    let az = rotate_vec3(rotation, Vec3::Z);
     // The ray in the box's frame.
     let offset = origin - center;
     let o = Vec3::new(offset.dot(ax), offset.dot(ay), offset.dot(az));
@@ -356,11 +403,23 @@ pub fn ray_capsule3(
     b: Vec3,
     radius: f32,
 ) -> Option<RayHit3> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
     let axis = b - a;
     let axis_len_sq = axis.length_squared();
     if axis_len_sq < PARALLEL_EPS {
         // A sphere.
         return ray_sphere3(origin, direction, a, radius);
+    }
+    // The ray starts inside the capsule: it does not hit it.
+    {
+        let o = origin - a;
+        let s = (o.dot(axis) / axis_len_sq).clamp(0.0, 1.0);
+        let closest = a + axis * s;
+        if (origin - closest).length_squared() < radius * radius {
+            return None;
+        }
     }
 
     // The infinite cylinder around the axis, then the two caps.

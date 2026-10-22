@@ -996,7 +996,7 @@ public sealed class PhiNativeWorld3 : IDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
-            var buffer = new float[9];
+            var buffer = new float[8];
             int ok;
             fixed (float* p = buffer)
             {

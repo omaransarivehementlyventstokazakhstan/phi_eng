@@ -190,7 +190,10 @@ motors, and breakable limits. The ray cast covers the analytic shapes
 oriented box and a capsule in 3D) but not the convex ones: a ray that
 would hit a convex hull or a convex mesh is reported as a miss. The
 other shape queries (shape overlap, point test, closest point) are not
-built yet.
+built yet. The ray cast's distance is the parameter along the direction
+as it was given: a direction that is not a unit vector scales the
+range, and so does `max_t`. A caller that wants a distance in world
+units should normalize the direction first.
 Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;

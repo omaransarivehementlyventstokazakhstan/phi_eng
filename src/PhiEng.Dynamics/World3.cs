@@ -118,10 +118,16 @@ public class World3
     private readonly List<bool> _contactTouch = new();
     /// <summary>The contact events of the last step.</summary>
     private readonly List<ContactEvent3> _contactEvents = new();
-    /// <summary>The sensor pairs touching this step.</summary>
-    private List<(int, int)> _sensorPairs = new();
-    /// <summary>The sensor pairs that were touching last step.</summary>
-    private List<(int, int)> _lastSensorPairs = new();
+    /// <summary>The sensor pairs touching this step, with their contacts.</summary>
+    private List<(int, int, Vector3, Vector3)> _sensorTouching = new();
+    /// <summary>The sensor pairs that were touching last step, with their contacts.</summary>
+    private List<(int, int, Vector3, Vector3)> _lastSensorTouching = new();
+    /// <summary>The pairs that already reported a *began* event this step.</summary>
+    private readonly HashSet<(uint, uint)> _announcedPairs = new();
+    /// <summary>The sensor pairs that ended this step, with their last contact.</summary>
+    private readonly List<(int, int, Vector3, Vector3)> _sensorEnded = new();
+    /// <summary>The last known contact of every pair, so an *ended* event can say where the pair was.</summary>
+    private readonly Dictionary<(int, int), (Vector3, Vector3)> _lastContacts = new();
     /// <summary>The contacts a sensor pair reported.</summary>
     private readonly List<ContactConstraint3D> _sensorContacts = new();
 
@@ -229,31 +235,45 @@ public class World3
             j.Shift(bodyId);
             Joints[i] = j;
         }
-        if (bodyId == last)
+        // The pairs that touched the removed body are gone: their
+        // contacts ended with the body.
+        var dead = new List<(int, int)>();
+        foreach (var key in ContactCache.Keys)
+            if (key.Item1 == bodyId || key.Item2 == bodyId) dead.Add(key);
+        dead.Sort();
+        if (CollectContactEvents)
         {
-            var dead = new List<(int, int)>();
-            foreach (var key in ContactCache.Keys)
-                if (key.Item1 == bodyId || key.Item2 == bodyId) dead.Add(key);
-            foreach (var key in dead) ContactCache.Remove(key);
-        }
-        else
-        {
-            var old = new List<((int, int), List<CachedContact3D>)>();
-            foreach (var kv in ContactCache) old.Add((kv.Key, kv.Value));
-            ContactCache.Clear();
-            foreach (var ((a, b), entries) in old)
+            foreach (var key in dead)
             {
-                if (a == bodyId || b == bodyId) continue;
-                int na = a == last ? bodyId : a;
-                int nb = b == last ? bodyId : b;
-                var key = na < nb ? (na, nb) : (nb, na);
-                if (!ContactCache.TryGetValue(key, out var list) || list == null)
-                {
-                    list = new List<CachedContact3D>();
-                    ContactCache[key] = list;
-                }
-                list.AddRange(entries);
+                var pair = EventPair(key.Item1, key.Item2);
+                var lastContact = _lastContacts.TryGetValue(key, out var lc)
+                    ? lc
+                    : (Vector3.Zero, Vector3.Zero);
+                _contactEvents.Add(new ContactEvent3(
+                    pair.Item1, pair.Item2,
+                    ContactEventKind.Ended, lastContact.Item1, lastContact.Item2));
             }
+        }
+
+        // The body list shifts down above the gap, so every survivor
+        // above it drops by one. The pair keys are remapped through the
+        // same shift, and the pairs that touched the removed body are
+        // dropped: those contacts are gone.
+        var old = new List<((int, int), List<CachedContact3D>)>();
+        foreach (var kv in ContactCache) old.Add((kv.Key, kv.Value));
+        ContactCache.Clear();
+        foreach (var ((a, b), entries) in old)
+        {
+            if (a == bodyId || b == bodyId) continue;
+            int na = a > bodyId ? a - 1 : a;
+            int nb = b > bodyId ? b - 1 : b;
+            var key = na < nb ? (na, nb) : (nb, na);
+            if (!ContactCache.TryGetValue(key, out var list) || list == null)
+            {
+                list = new List<CachedContact3D>();
+                ContactCache[key] = list;
+            }
+            list.AddRange(entries);
         }
     }
 
@@ -315,6 +335,9 @@ public class World3
         foreach (var body in Bodies)
         {
             if (!filter.Accepts(body)) continue;
+            // A sensor is a trigger volume, not a solid: a ray passes
+            // through it.
+            if (body.IsSensor) continue;
             if (body.Shape == null) continue;
             Vector3 point;
             Vector3 normal;
@@ -460,7 +483,10 @@ public class World3
         // 3a. A sensor's contacts are events, not contacts: the pair set
         // is compared with last step's, and a pair that is new (or gone)
         // produces an event.
-        if (CollectContactEvents && (_sensorContacts.Count > 0 || _lastSensorPairs.Count > 0))
+        // The state is kept whether or not the events are collected: a
+        // pair that was already touching when the collection was switched
+        // on must not be reported as a new touch.
+        if (_sensorContacts.Count > 0 || _lastSensorTouching.Count > 0)
         {
             SensorEvents();
         }
@@ -482,9 +508,14 @@ public class World3
             if (isNew && CollectContactEvents)
             {
                 var pair = EventPair(c.BodyA, c.BodyB);
-                _contactEvents.Add(new ContactEvent3(
-                    pair.Item1, pair.Item2,
-                    ContactEventKind.Began, c.Point, c.Normal));
+                // One event per *pair*: a pair that touches at two points
+                // began touching once.
+                if (_announcedPairs.Add((pair.Item1, pair.Item2)))
+                {
+                    _contactEvents.Add(new ContactEvent3(
+                        pair.Item1, pair.Item2,
+                        ContactEventKind.Began, c.Point, c.Normal));
+                }
             }
             if (isNew && (Bodies[c.BodyA].IsSleeping || Bodies[c.BodyB].IsSleeping))
             {
@@ -532,6 +563,20 @@ public class World3
                     if (!JointSleepGate(joint)) joint.Solve(Bodies, dt);
         }
 
+        // Remember each pair's last known contact before the lists are
+        // cleared, so an *ended* event can still say where the pair was.
+        if (CollectContactEvents)
+        {
+            _lastContacts.Clear();
+            foreach (var entry in ContactCache)
+            {
+                if (entry.Value.Count > 0)
+                {
+                    var first = entry.Value[0];
+                    _lastContacts[entry.Key] = (first.Point, first.Normal);
+                }
+            }
+        }
         foreach (var list in ContactCache.Values) list.Clear();
         _liveKeys.Clear();
         foreach (var c in constraints)
@@ -556,17 +601,25 @@ public class World3
             _staleKeys.Clear();
             foreach (var key in ContactCache.Keys)
                 if (!_liveKeys.Contains(key)) _staleKeys.Add(key);
+            // The pairs are sorted, so the events come out in the same
+            // order however the cache was walked.
+            _staleKeys.Sort();
             foreach (var key in _staleKeys)
             {
                 // A pair that was touching last step and is not touching
                 // now stopped touching: that is the other half of the
-                // event.
-                if (CollectContactEvents)
+                // event. The contact data is the pair's last known one.
+                if (CollectContactEvents
+                    && !(key.Item1 < Bodies.Count && key.Item2 < Bodies.Count
+                         && (Bodies[key.Item1].IsSensor || Bodies[key.Item2].IsSensor)))
                 {
                     var pair = EventPair(key.Item1, key.Item2);
+                    var lastContact = _lastContacts.TryGetValue(key, out var lc)
+                        ? lc
+                        : (Vector3.Zero, Vector3.Zero);
                     _contactEvents.Add(new ContactEvent3(
                         pair.Item1, pair.Item2,
-                        ContactEventKind.Ended, Vector3.Zero, Vector3.Zero));
+                        ContactEventKind.Ended, lastContact.Item1, lastContact.Item2));
                 }
                 // A vanished pair is lost contact: wake any sleeping party.
                 if ((key.Item1 < Bodies.Count && Bodies[key.Item1].IsSleeping)
@@ -712,20 +765,31 @@ public class World3
     /// </summary>
     private void SensorEvents()
     {
-        _sensorPairs.Clear();
+        bool collect = CollectContactEvents;
+
+        // The pairs touching a sensor now, in order and without repeats,
+        // with the contact each of them reported.
+        _sensorTouching.Clear();
         foreach (var c in _sensorContacts)
         {
             var key = (c.BodyA, c.BodyB);
-            if (_sensorPairs.Count == 0 || _sensorPairs[^1] != key) _sensorPairs.Add(key);
+            if (_sensorTouching.Count == 0
+                || _sensorTouching[^1].Item1 != key.Item1
+                || _sensorTouching[^1].Item2 != key.Item2)
+            {
+                _sensorTouching.Add((c.BodyA, c.BodyB, c.Point, c.Normal));
+            }
         }
 
+        // Merge the two sorted lists and report what changed.
         int i = 0, j = 0;
-        while (i < _sensorPairs.Count || j < _lastSensorPairs.Count)
+        _sensorEnded.Clear();
+        while (i < _sensorTouching.Count || j < _lastSensorTouching.Count)
         {
-            bool hasNow = i < _sensorPairs.Count;
-            bool hadBefore = j < _lastSensorPairs.Count;
-            var now = hasNow ? _sensorPairs[i] : (0, 0);
-            var before = hadBefore ? _lastSensorPairs[j] : (0, 0);
+            bool hasNow = i < _sensorTouching.Count;
+            bool hadBefore = j < _lastSensorTouching.Count;
+            var now = hasNow ? (_sensorTouching[i].Item1, _sensorTouching[i].Item2) : (0, 0);
+            var before = hadBefore ? (_lastSensorTouching[j].Item1, _lastSensorTouching[j].Item2) : (0, 0);
             if (hasNow && hadBefore && now == before)
             {
                 i++;
@@ -733,18 +797,21 @@ public class World3
             }
             else if (hasNow && (!hadBefore || PairLess(now, before)))
             {
-                var pair = EventPair(now.Item1, now.Item2);
-                _contactEvents.Add(new ContactEvent3(
-                    pair.Item1, pair.Item2, ContactEventKind.Began,
-                    SensorPoint(now), SensorNormal(now)));
+                if (collect)
+                {
+                    var entry = _sensorTouching[i];
+                    var pair = EventPair(now.Item1, now.Item2);
+                    _contactEvents.Add(new ContactEvent3(
+                        pair.Item1, pair.Item2, ContactEventKind.Began,
+                        entry.Item3, entry.Item4));
+                }
                 i++;
             }
             else if (hadBefore)
             {
-                var pair = EventPair(before.Item1, before.Item2);
-                _contactEvents.Add(new ContactEvent3(
-                    pair.Item1, pair.Item2, ContactEventKind.Ended,
-                    Vector3.Zero, Vector3.Zero));
+                // The pair ended: it keeps the last contact it had, so
+                // the event can say where it was.
+                _sensorEnded.Add(_lastSensorTouching[j]);
                 j++;
             }
             else
@@ -753,10 +820,21 @@ public class World3
             }
         }
 
+        // The pairs that ended are reported after the ones that began.
+        for (int k = 0; k < _sensorEnded.Count; k++)
+        {
+            if (!collect) break;
+            var entry = _sensorEnded[k];
+            var pair = EventPair(entry.Item1, entry.Item2);
+            _contactEvents.Add(new ContactEvent3(
+                pair.Item1, pair.Item2, ContactEventKind.Ended,
+                entry.Item3, entry.Item4));
+        }
+
         // This step's sensor pairs are next step's.
-        var swap = _sensorPairs;
-        _sensorPairs = _lastSensorPairs;
-        _lastSensorPairs = swap;
+        var swap = _sensorTouching;
+        _sensorTouching = _lastSensorTouching;
+        _lastSensorTouching = swap;
     }
 
     /// <summary>The two bodies of a pair, in a canonical order.</summary>

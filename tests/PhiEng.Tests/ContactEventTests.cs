@@ -5,7 +5,7 @@ using PhiEng.Native;
 namespace PhiEng.Tests;
 
 /// <summary>
-/// Contact-event and sensor tests (Z01–Z08): a contact event says a
+/// Contact-event and sensor tests (Z01–Z12): a contact event says a
 /// pair began or stopped touching, and a sensor reports its contacts as
 /// events and never pushes. Mirrors
 /// <c>crates/engine/tests/contact_events.rs</c> (enforced by
@@ -31,6 +31,11 @@ public class ContactEventTests
         (uint BodyA, uint BodyB, int Kind, Vector2 Point, Vector2 Normal)[] events,
         uint a, uint b, int kind)
         => Array.Exists(events, e => e.BodyA == a && e.BodyB == b && e.Kind == kind);
+
+    /// <summary>Whether the world holds a contact between the two bodies.</summary>
+    private static bool Touches(Dynamics.World2 w, int a, int b)
+        => w.ContactCache.Keys.Any(k =>
+            (k.Item1 == a && k.Item2 == b) || (k.Item1 == b && k.Item2 == a));
 
     /// <summary>Z01: a pair that starts touching produces a *began* event.</summary>
     [Fact]
@@ -163,6 +168,132 @@ public class ContactEventTests
         w.SetBodySensor(id, true);
         Assert.Throws<ArgumentOutOfRangeException>(() => w.SetBodySensor(9999, true));
         w.Step(Dt);
+    }
+
+    /// <summary>
+    /// Z09: a 3D sensor reports its contacts.
+    ///
+    /// The 3D sensor path used to be dead: the guard that decided
+    /// whether the diff ran read a buffer that had already been emptied.
+    /// </summary>
+    [Fact]
+    public void Z09_A3DSensorReportsItsContacts()
+    {
+        var w = new Dynamics.World3();
+        w.Gravity = new Vector3(0.0f, -9.81f, 0.0f);
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        w.CollectContactEvents = true;
+        w.AddStaticBody(
+            new Vector3(0.0f, -1.0f, 0.0f), new Dynamics.BoxShape3(new Vector3(10.0f, 0.5f, 10.0f)));
+        int sensor = w.AddDynamicBody(
+            new Vector3(0.0f, 2.0f, 0.0f), new Dynamics.SphereShape3(0.5f), 1.0f);
+        w.Bodies[sensor].IsSensor = true;
+
+        bool began = false;
+        for (int i = 0; i < 240; i++)
+        {
+            w.Step(Dt);
+            began |= w.ContactEvents.Any(e =>
+                e.BodyA == 0 && e.BodyB == (uint)sensor && e.Kind == Dynamics.ContactEventKind.Began);
+        }
+        Assert.True(began, "the 3D sensor must produce a began event when it lands");
+    }
+
+    /// <summary>
+    /// Z10: one <em>began</em> event per pair, even with two contact points.
+    ///
+    /// A box resting on a box touches at two points: it began touching
+    /// once, so there is one event.
+    /// </summary>
+    [Fact]
+    public void Z10_OneBeganEventPerPair()
+    {
+        var w = new Dynamics.World2();
+        w.Gravity = new Vector2(0.0f, -9.81f);
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        w.CollectContactEvents = true;
+        w.AddStaticBody(
+            new Vector2(0.0f, -1.0f), new Dynamics.BoxShape2(new Vector2(10.0f, 0.5f)));
+        int box = w.AddDynamicBody(
+            new Vector2(0.0f, -0.4f), new Dynamics.BoxShape2(new Vector2(0.5f, 0.5f)), 1.0f);
+
+        int beganInAStep = 0;
+        for (int i = 0; i < 60; i++)
+        {
+            w.Step(Dt);
+            int began = w.ContactEvents.Count(e =>
+                e.BodyA == 0 && e.BodyB == (uint)box && e.Kind == Dynamics.ContactEventKind.Began);
+            beganInAStep = System.Math.Max(beganInAStep, began);
+        }
+        Assert.Equal(1, beganInAStep);
+    }
+
+    /// <summary>
+    /// Z11: the events are the events of the last step, and of no other.
+    ///
+    /// The list is cleared at the start of every step: a scene that
+    /// keeps producing events must not pile them up.
+    /// </summary>
+    [Fact]
+    public void Z11_TheEventsAreOfTheLastStepOnly()
+    {
+        var w = new Dynamics.World2();
+        w.Gravity = new Vector2(0.0f, -9.81f);
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        w.CollectContactEvents = true;
+        w.AddStaticBody(
+            new Vector2(0.0f, -1.0f), new Dynamics.BoxShape2(new Vector2(10.0f, 0.5f)));
+        w.AddDynamicBody(
+            new Vector2(0.0f, 2.0f), new Dynamics.CircleShape(0.5f), 1.0f);
+
+        int maxEvents = 0;
+        for (int i = 0; i < 240; i++)
+        {
+            w.Step(Dt);
+            maxEvents = System.Math.Max(maxEvents, w.ContactEvents.Count);
+        }
+        Assert.True(maxEvents <= 2, $"the events must not pile up (max={maxEvents})");
+    }
+
+    /// <summary>
+    /// Z12: removing a body ends the contacts it had.
+    ///
+    /// The pair is gone, so the contact ended. The Rust core says so
+    /// with an <em>ended</em> event; the managed mirror drops the
+    /// contact silently (it fires no event for a removal), so the
+    /// mirror asserts the contact itself is gone.
+    /// </summary>
+    [Fact]
+    public void Z12_RemovingABodyEndsItsContacts()
+    {
+        var w = new Dynamics.World2();
+        w.Gravity = new Vector2(0.0f, -9.81f);
+        w.LinearSleepThreshold = 0.0f;
+        w.AngularSleepThreshold = 0.0f;
+        w.CollectContactEvents = true;
+        int floor = w.AddStaticBody(
+            new Vector2(0.0f, -1.0f), new Dynamics.BoxShape2(new Vector2(10.0f, 0.5f)));
+        int ball = w.AddDynamicBody(
+            new Vector2(0.0f, -0.4f), new Dynamics.CircleShape(0.5f), 1.0f);
+        for (int i = 0; i < 60; i++)
+        {
+            w.Step(Dt);
+        }
+        Assert.Empty(w.ContactEvents);
+
+        w.RemoveBody(ball);
+        Assert.False(
+            Touches(w, floor, ball),
+            "removing a body must end the contacts it had");
+
+        // And it stays gone.
+        w.Step(Dt);
+        Assert.False(
+            Touches(w, floor, ball),
+            "a removed body must not keep its contacts");
     }
 
     /// <summary>

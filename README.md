@@ -418,24 +418,28 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_body_sensor,
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
-  flag persists in schema v14. Pinned by Z01–Z08 (Rust↔C# parity).
+  flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
 - **Ray casts (2D and 3D, both languages):** `World2/3::raycast` returns
   the first thing a ray hits, with the contact point and the surface
   normal; the collision filter applies, so a query can ignore the
-  layers it does not care about. The shape math is analytic and exact
+  layers it does not care about. A ray that starts inside a shape does
+  not hit it, a sensor is not solid (the ray passes through it), and
+  the ray has a range. The shape math is analytic and exact
   (a circle, an oriented box and a convex polygon in 2D; a sphere, an
   oriented box and a capsule in 3D) and lives in
   `phieng_collision::query`, mirrored by `PhiEng.Collision.Query` so the
   two agree bit for bit. The convex shapes are not ray-cast yet. FFI
   `phieng_world[_3]_raycast` plus the managed `World2/3.Raycast` and
-  `PhiNativeWorld(3).Raycast`. Pinned by X07–X12 (Rust↔C# parity).
+  `PhiNativeWorld(3).Raycast`. Pinned by X07–X16 (Rust↔C# parity).
 - **Scene queries (2D and 3D, both languages):** `World2/3::overlap_aabb`
   returns the bodies whose AABB overlaps a query box, in ascending id
   order, honouring the collision filter. The query runs against the
   *current* body positions — the broad phase's grid holds the positions
   from before the last solve, so a query must not report against those.
   Every broad-phase backend also answers an AABB query of its own, and
-  all three answer alike. FFI `phieng_world[_3]_overlap_aabb` (a null
+  all three answer alike — the grid tests the boxes themselves, so it
+  does not report a body whose cell merely neighbours the query box.
+  FFI `phieng_world[_3]_overlap_aabb` (a null
   output array asks for the count alone) plus managed
   `World2/3.OverlapAabb` and `PhiNativeWorld(3).OverlapAabb`. Pinned by
   X01–X06 (Rust↔C# parity).

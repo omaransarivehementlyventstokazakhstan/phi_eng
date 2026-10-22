@@ -22,6 +22,20 @@ public static class Query
     private static float Cross2(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
 
     /// <summary>
+    /// Rotate a vector by a quaternion, spelled out.
+    ///
+    /// The native core does exactly this arithmetic, so the two produce
+    /// the same bits: a library rotation would round differently in the
+    /// two languages and the answers would differ in the last bit.
+    /// </summary>
+    public static Vector3 Rotate(Vector3 v, Quaternion q)
+    {
+        var u = new Vector3(q.X, q.Y, q.Z);
+        var t = Vector3.Cross(u, v) + q.W * v;
+        return v + 2.0f * Vector3.Cross(u, t);
+    }
+
+    /// <summary>
     /// Ray against a circle. A ray that starts inside the circle does
     /// not hit it: the hit is for a ray that enters.
     /// </summary>
@@ -31,16 +45,25 @@ public static class Query
         t = 0.0f;
         point = Vector2.Zero;
         normal = Vector2.Zero;
+        if (!float.IsFinite(radius) || radius <= 0.0f)
+        {
+            return false;
+        }
         var m = origin - center;
         var a = Vector2.Dot(direction, direction);
-        if (a <= 0.0f)
+        if (!(a > 0.0f) || !float.IsFinite(a))
         {
             return false;
         }
         var b = 2.0f * Vector2.Dot(m, direction);
         var c = Vector2.Dot(m, m) - radius * radius;
+        if (c < 0.0f)
+        {
+            // The ray starts inside the circle: it does not hit it.
+            return false;
+        }
         var disc = b * b - 4.0f * a * c;
-        if (disc < 0.0f)
+        if (!float.IsFinite(disc) || disc < 0.0f)
         {
             return false;
         }
@@ -77,8 +100,10 @@ public static class Query
         var inv = new Matrix3x2(
             rotation.M11, rotation.M21, rotation.M12,
             rotation.M22, rotation.M31, rotation.M32);
-        var o = Vector2.Transform(origin - center, inv);
-        var d = Vector2.Transform(direction, inv);
+        // A direction has no translation: the matrix's own offset must
+        // not be applied to it.
+        var o = Vector2.Transform(origin - center, inv) - Vector2.Transform(Vector2.Zero, inv);
+        var d = Vector2.TransformNormal(direction, inv);
 
         var tEnter = float.MinValue;
         var tExit = float.MaxValue;
@@ -263,16 +288,25 @@ public static class Query
         t = 0.0f;
         point = Vector3.Zero;
         normal = Vector3.Zero;
+        if (!float.IsFinite(radius) || radius <= 0.0f)
+        {
+            return false;
+        }
         var m = origin - center;
         var a = Vector3.Dot(direction, direction);
-        if (a <= 0.0f)
+        if (!(a > 0.0f) || !float.IsFinite(a))
         {
             return false;
         }
         var b = 2.0f * Vector3.Dot(m, direction);
         var c = Vector3.Dot(m, m) - radius * radius;
+        if (c < 0.0f)
+        {
+            // The ray starts inside the sphere: it does not hit it.
+            return false;
+        }
         var disc = b * b - 4.0f * a * c;
-        if (disc < 0.0f)
+        if (!float.IsFinite(disc) || disc < 0.0f)
         {
             return false;
         }
@@ -303,10 +337,12 @@ public static class Query
         t = 0.0f;
         point = Vector3.Zero;
         normal = Vector3.Zero;
-        // The box's own axes, the same ones the OBB-OBB test uses.
-        var ax = Vector3.Transform(Vector3.UnitX, rotation);
-        var ay = Vector3.Transform(Vector3.UnitY, rotation);
-        var az = Vector3.Transform(Vector3.UnitZ, rotation);
+        // The box's own axes, the same ones the OBB-OBB test uses. The
+        // rotation is spelled out, so the native core can do exactly the
+        // same arithmetic: the two agree to the last bit.
+        var ax = Rotate(Vector3.UnitX, rotation);
+        var ay = Rotate(Vector3.UnitY, rotation);
+        var az = Rotate(Vector3.UnitZ, rotation);
         // The ray in the box's frame.
         var offset = origin - center;
         var o = new Vector3(Vector3.Dot(offset, ax), Vector3.Dot(offset, ay), Vector3.Dot(offset, az));
@@ -395,12 +431,26 @@ public static class Query
         t = 0.0f;
         point = Vector3.Zero;
         normal = Vector3.Zero;
+        if (!float.IsFinite(radius) || radius <= 0.0f)
+        {
+            return false;
+        }
         var axis = b - a;
         var axisLenSq = axis.LengthSquared();
         if (axisLenSq < ParallelEps)
         {
             // A sphere.
             return RaySphere(origin, direction, a, radius, out t, out point, out normal);
+        }
+        // The ray starts inside the capsule: it does not hit it.
+        {
+            var rel = origin - a;
+            var s = System.Math.Clamp(Vector3.Dot(rel, axis) / axisLenSq, 0.0f, 1.0f);
+            var closest = a + axis * s;
+            if ((origin - closest).LengthSquared() < radius * radius)
+            {
+                return false;
+            }
         }
 
         // The infinite cylinder around the axis, then the two caps.

@@ -20,16 +20,22 @@ pub const DEFAULT_COLLISION_MASK: u32 = u32::MAX;
 
 /// Whether two bodies with the given filters may collide.
 ///
-/// The rule is the one every grouped physics engine uses (Box2D,
-/// Bullet): each body must accept the other's group. A body that
-/// accepts everything therefore collides with everything, and a body
-/// that accepts one group collides only with the bodies on it — one
-/// side is enough to veto the pair.
+/// The rule is Box2D's: two bodies on the same group always collide —
+/// the group overrides the masks — and otherwise each body must accept
+/// the other's group. A body that accepts everything therefore
+/// collides with everything, and a body that accepts one group collides
+/// only with the bodies on it, unless the two share a group — one side
+/// is enough to veto the pair.
 ///
 /// A group is one bit, so the test is a bitwise AND of the two group
-/// flags against the other's mask.
+/// flags against the other's mask. (Box2D's own groups are categories
+/// rather than bits; the rule is the same either way.)
 #[inline]
 pub const fn collision_filter_allows(group_a: u32, mask_a: u32, group_b: u32, mask_b: u32) -> bool {
+    // The same group overrides the masks.
+    if group_a == group_b && group_a != 0 {
+        return true;
+    }
     (group_a & mask_b) != 0 && (group_b & mask_a) != 0
 }
 

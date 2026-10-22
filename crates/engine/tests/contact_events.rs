@@ -290,3 +290,168 @@ fn z08_ffi_sensor_flag_and_events() {
         phieng_world_free(world);
     }
 }
+
+/// Z09: a 3D sensor reports its contacts.
+///
+/// The 3D sensor path used to be dead: the guard that decided whether
+/// the diff ran read a buffer that had already been emptied.
+#[test]
+fn z09_a_3d_sensor_reports_its_contacts() {
+    let mut w = World3::new();
+    w.gravity = glam::Vec3::new(0.0, -9.81, 0.0);
+    w.linear_sleep_threshold = 0.0;
+    w.angular_sleep_threshold = 0.0;
+    w.collect_contact_events = true;
+    w.add_static_body(
+        glam::Vec3::new(0.0, -1.0, 0.0),
+        Shape3::Box {
+            half_extents: glam::Vec3::new(10.0, 0.5, 10.0),
+        },
+    )
+    .expect("valid shape");
+    let sensor = w
+        .add_dynamic_body(
+            glam::Vec3::new(0.0, 2.0, 0.0),
+            Shape3::Sphere { radius: 0.5 },
+            1.0,
+        )
+        .expect("valid shape");
+    w.bodies[sensor].is_sensor = true;
+
+    let mut began = false;
+    for _ in 0..240 {
+        w.step(DT);
+        if w.contact_events().iter().any(|e| {
+            e.body_a == 0 && e.body_b == sensor as u32 && e.kind == ContactEventKind::Began
+        }) {
+            began = true;
+        }
+    }
+    assert!(
+        began,
+        "the 3D sensor must produce a began event when it lands"
+    );
+}
+
+/// Z10: one *began* event per pair, even with two contact points.
+///
+/// A box resting on a box touches at two points: it began touching
+/// once, so there is one event.
+#[test]
+fn z10_one_began_event_per_pair() {
+    let mut w = World2::new();
+    w.gravity = glam::Vec2::new(0.0, -9.81);
+    w.linear_sleep_threshold = 0.0;
+    w.angular_sleep_threshold = 0.0;
+    w.collect_contact_events = true;
+    w.add_static_body(
+        glam::Vec2::new(0.0, -1.0),
+        Shape2::Box {
+            half_extents: glam::Vec2::new(10.0, 0.5),
+        },
+    )
+    .expect("valid shape");
+    let box_id = w
+        .add_dynamic_body(
+            glam::Vec2::new(0.0, -0.4),
+            Shape2::Box {
+                half_extents: glam::Vec2::new(0.5, 0.5),
+            },
+            1.0,
+        )
+        .expect("valid shape");
+
+    let mut began_in_a_step = 0usize;
+    for _ in 0..60 {
+        w.step(DT);
+        let began = w
+            .contact_events()
+            .iter()
+            .filter(|e| {
+                e.body_a == 0 && e.body_b == box_id as u32 && e.kind == ContactEventKind::Began
+            })
+            .count();
+        began_in_a_step = began_in_a_step.max(began);
+    }
+    assert_eq!(
+        began_in_a_step, 1,
+        "a pair that began touching reports it once"
+    );
+}
+
+/// Z11: the events are the events of the last step, and of no other.
+///
+/// The list is cleared at the start of every step: a scene that keeps
+/// producing events must not pile them up.
+#[test]
+fn z11_the_events_are_of_the_last_step_only() {
+    let mut w = World2::new();
+    w.gravity = glam::Vec2::new(0.0, -9.81);
+    w.linear_sleep_threshold = 0.0;
+    w.angular_sleep_threshold = 0.0;
+    w.collect_contact_events = true;
+    w.add_static_body(
+        glam::Vec2::new(0.0, -1.0),
+        Shape2::Box {
+            half_extents: glam::Vec2::new(10.0, 0.5),
+        },
+    )
+    .expect("valid shape");
+    w.add_dynamic_body(
+        glam::Vec2::new(0.0, 2.0),
+        Shape2::Circle { radius: 0.5 },
+        1.0,
+    )
+    .expect("valid shape");
+
+    let mut max_events = 0usize;
+    for _ in 0..240 {
+        w.step(DT);
+        max_events = max_events.max(w.contact_events().len());
+    }
+    assert!(
+        max_events <= 2,
+        "the events must not pile up (max={})",
+        max_events
+    );
+}
+
+/// Z12: removing a body ends the contacts it had.
+///
+/// The pair is gone, so the contact ended: the event says so.
+#[test]
+fn z12_removing_a_body_ends_its_contacts() {
+    let mut w = World2::new();
+    w.gravity = glam::Vec2::new(0.0, -9.81);
+    w.linear_sleep_threshold = 0.0;
+    w.angular_sleep_threshold = 0.0;
+    w.collect_contact_events = true;
+    let floor = w
+        .add_static_body(
+            glam::Vec2::new(0.0, -1.0),
+            Shape2::Box {
+                half_extents: glam::Vec2::new(10.0, 0.5),
+            },
+        )
+        .expect("valid shape");
+    let ball = w
+        .add_dynamic_body(
+            glam::Vec2::new(0.0, -0.4),
+            Shape2::Circle { radius: 0.5 },
+            1.0,
+        )
+        .expect("valid shape");
+    for _ in 0..60 {
+        w.step(DT);
+    }
+    assert!(
+        w.contact_events().is_empty(),
+        "a resting pair produces no events"
+    );
+
+    w.remove_body(ball);
+    let ended = w.contact_events().iter().any(|e| {
+        e.body_a == floor as u32 && e.body_b == ball as u32 && e.kind == ContactEventKind::Ended
+    });
+    assert!(ended, "removing a body must end the contacts it had");
+}
