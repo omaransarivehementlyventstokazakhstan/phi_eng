@@ -13,6 +13,7 @@
     <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
     <ProjectReference Include="..\PhiEng.Collision\PhiEng.Collision.csproj" />
     <ProjectReference Include="..\PhiEng.Broadphase\PhiEng.Broadphase.csproj" />
+    <ProjectReference Include="..\PhiEng.Quantum\PhiEng.Quantum.csproj" />
   </ItemGroup>
 
 </Project>

@@ -68,9 +68,9 @@ done.
 | --- | --- | --- |
 | **A** | The complex layer and the seeded random generator (`phieng-math`). | M01–M08 |
 | **B** | States, operators, dense matrices, the Hermitian Jacobi solver. | M09–M16 |
-| **C** | The stationary 1D Schrödinger equation: the grid, the potentials, the Hamiltonian, the Sturm bisection, the imaginary-time ground state. | M17–M26 |
+| **C** | The stationary 1D Schrödinger equation: the grid, the potentials, the Hamiltonian, the Sturm bisection, the inverse-iteration ground state. | M17–M26 |
 | **D** | The time evolution: Crank–Nicolson, the split operator, the deterministic FFT, the first FFI exports, snapshot v15. | M27–M34 |
-| **E** | The gates and circuits: the qubits, the Bloch sphere, the gates, the measurement, the algorithms. | M35–M44 |
+| **E** | The gates and circuits: the qubits, the Bloch sphere, the gates, the measurement, the algorithms. | M39–M48 |
 | **F** | The game-facing layer: Born-rule bodies, the Madelung quantum-fluid, the visualisation feed. | M45–M52 |
 | **G** | Spin and particles: the Pauli algebra, the Stern–Gerlach, the second quantisation. | M53–M60 |
 | **H** | Entanglement and quantum information: the Bell states, the CHSH game, the density matrices, the Lindblad master equation. | M61–M68 |
@@ -158,7 +158,12 @@ parity checker's ID list, and the native DLL restaged.
       from the inverse iteration, not the relaxation: the relaxation
       converges at a rate set by the ratio of the spectral width to the
       gap, and the width of a discretised Hamiltonian is enormous.
-- [ ] **Stage D** — the time evolution, the FFI, snapshot v15.
+- [x] **Stage D** — the time evolution, the FFI, snapshot v15.
+      `crates/quantum/src/{fft,evolution,field}.rs`, the `QuantumField`
+      on `World2`/`World3`, the `phieng_world[_3]_quantum_*` exports
+      with the managed `PhiNativeWorld(3)` wrappers, and schema v15.
+      Pinned by M27-M38. The split operator's kinetic sine comes from
+      the deterministic trigonometry, never the platform libm.
 - [ ] **Stage E** — the gates and circuits.
 - [ ] **Stage F** — the game-facing layer.
 - [ ] **Stage G** — spin and particles.

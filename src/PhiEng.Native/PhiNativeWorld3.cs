@@ -1,5 +1,6 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Quantum;
 
 namespace PhiEng.Native;
 
@@ -1619,6 +1620,126 @@ public sealed class PhiNativeWorld3 : IDisposable
                 Dose = ffi.Dose,
                 CaptureProgress = ffi.CaptureProgress,
             };
+        }
+    }
+
+    /// <summary>Configure the native world's quantum field (rebuilds its wavefunction in the ground state).</summary>
+    public unsafe void SetQuantumConfig(QuantumConfig config)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var ffi = new NativeMethods.QuantumConfigFfi
+            {
+                Enabled = config.Enabled ? (byte)1 : (byte)0,
+                Method = (uint)config.Method,
+                Boundary = (uint)config.Boundary,
+                GridSize = (uint)config.GridSize,
+                DomainMin = config.DomainMin,
+                DomainMax = config.DomainMax,
+                Mass = config.Mass,
+                Hbar = config.Hbar,
+                Omega = config.Omega,
+                Seed = config.Seed,
+            };
+            int ok = NativeMethods.phieng_world3_quantum_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new ArgumentException("Native world rejected quantum config (check ranges).");
+            }
+        }
+    }
+
+    /// <summary>Read the native world's quantum field configuration.</summary>
+    public unsafe QuantumConfig GetQuantumConfig()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.QuantumConfigFfi ffi;
+            int ok = NativeMethods.phieng_world3_quantum_get_config(_handle, &ffi);
+            if (ok == 0)
+            {
+                throw new InvalidOperationException("Native quantum config read failed.");
+            }
+            return new QuantumConfig
+            {
+                Enabled = ffi.Enabled != 0,
+                Method = (EvolutionMethod)ffi.Method,
+                Boundary = (Boundary1D)ffi.Boundary,
+                GridSize = (int)ffi.GridSize,
+                DomainMin = ffi.DomainMin,
+                DomainMax = ffi.DomainMax,
+                Mass = ffi.Mass,
+                Hbar = ffi.Hbar,
+                Omega = ffi.Omega,
+                Seed = ffi.Seed,
+            };
+        }
+    }
+
+    /// <summary>The native wavefunction's amplitudes, real and imaginary parts.</summary>
+    public unsafe (float[] Re, float[] Im) QuantumState()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_quantum_state(_handle, null, null, 0);
+            if (count == 0) return (Array.Empty<float>(), Array.Empty<float>());
+            var re = new float[count];
+            var im = new float[count];
+            fixed (float* pr = re)
+            fixed (float* pi = im)
+            {
+                uint written = NativeMethods.phieng_world3_quantum_state(_handle, pr, pi, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native quantum state read failed.");
+                }
+            }
+            return (re, im);
+        }
+    }
+
+    /// <summary>The native measurement probabilities (squared moduli).</summary>
+    public unsafe float[] QuantumProbabilities()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_quantum_probability(_handle, null, 0);
+            if (count == 0) return Array.Empty<float>();
+            var probs = new float[count];
+            fixed (float* p = probs)
+            {
+                uint written = NativeMethods.phieng_world3_quantum_probability(_handle, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native quantum probability read failed.");
+                }
+            }
+            return probs;
+        }
+    }
+
+    /// <summary>Draws measurement outcomes from the native wavefunction (Born rule).</summary>
+    public unsafe float[] QuantumSample()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_quantum_sample(_handle, null, 0);
+            if (count == 0) return Array.Empty<float>();
+            var draws = new float[count];
+            fixed (float* p = draws)
+            {
+                uint written = NativeMethods.phieng_world3_quantum_sample(_handle, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native quantum sample failed.");
+                }
+            }
+            return draws;
         }
     }
 

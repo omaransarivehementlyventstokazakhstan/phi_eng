@@ -258,6 +258,7 @@ dependencies = [
  "phieng-broadphase",
  "phieng-collision",
  "phieng-math",
+ "phieng-quantum",
  "serde",
  "serde_json",
 ]

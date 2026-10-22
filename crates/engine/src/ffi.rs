@@ -7236,3 +7236,402 @@ mod tests {
         }
     }
 }
+
+// ==== Quantum field FFI ====
+
+/// The quantum field's configuration, as it crosses the C ABI.
+///
+/// The layout is `#[repr(C)]` and must match the C# `QuantumConfigFfi`
+/// struct field for field: the managed mirror reads and writes the same
+/// bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct QuantumConfigFfi {
+    /// Whether the field evolves at all. 0 = off, 1 = on.
+    pub enabled: u8,
+    /// The evolution method: 0 = Crank-Nicolson, 1 = the split operator.
+    pub method: u32,
+    /// The boundary condition: 0 = Dirichlet, 1 = periodic.
+    pub boundary: u32,
+    /// The number of grid points.
+    pub grid_size: u32,
+    /// The left end of the grid.
+    pub domain_min: f32,
+    /// The right end of the grid.
+    pub domain_max: f32,
+    /// The mass of the particle.
+    pub mass: f32,
+    /// The reduced Planck constant.
+    pub hbar: f32,
+    /// The frequency of the harmonic trap.
+    pub omega: f32,
+    /// The seed of the measurement stream.
+    pub seed: u64,
+}
+
+// Guard the cross-language layout contract: any field change that
+// alters the size breaks the C# mirror silently. Update both sides.
+const _: () = assert!(std::mem::size_of::<QuantumConfigFfi>() == 48);
+
+/// The quantum field's configuration, as the C ABI carries it.
+fn quantum_config_from_ffi(c: &QuantumConfigFfi) -> phieng_quantum::field::QuantumConfig {
+    use phieng_quantum::evolution::EvolutionMethod;
+    use phieng_quantum::hamiltonian::Boundary1D;
+    phieng_quantum::field::QuantumConfig {
+        enabled: c.enabled != 0,
+        grid_size: c.grid_size as usize,
+        domain_min: c.domain_min,
+        domain_max: c.domain_max,
+        mass: c.mass,
+        hbar: c.hbar,
+        omega: c.omega,
+        method: if c.method == 1 {
+            EvolutionMethod::SplitOperator
+        } else {
+            EvolutionMethod::CrankNicolson
+        },
+        boundary: if c.boundary == 1 {
+            Boundary1D::Periodic
+        } else {
+            Boundary1D::Dirichlet
+        },
+        seed: c.seed,
+    }
+}
+
+/// The quantum field's configuration, as the C ABI carries it.
+fn quantum_config_to_ffi(c: &phieng_quantum::field::QuantumConfig) -> QuantumConfigFfi {
+    use phieng_quantum::evolution::EvolutionMethod;
+    use phieng_quantum::hamiltonian::Boundary1D;
+    QuantumConfigFfi {
+        enabled: u8::from(c.enabled),
+        method: if c.method == EvolutionMethod::SplitOperator {
+            1
+        } else {
+            0
+        },
+        boundary: if c.boundary == Boundary1D::Periodic {
+            1
+        } else {
+            0
+        },
+        grid_size: c.grid_size as u32,
+        domain_min: c.domain_min,
+        domain_max: c.domain_max,
+        mass: c.mass,
+        hbar: c.hbar,
+        omega: c.omega,
+        seed: c.seed,
+    }
+}
+
+/// Configure the quantum field of a 2D world.
+///
+/// The wavefunction starts again in the ground state: a new grid is a
+/// new wavefunction. Returns 1 on success, 0 for a null world or an
+/// invalid configuration.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `cfg` must be a valid pointer to a [`QuantumConfigFfi`].
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_config(
+    world: *mut World2,
+    cfg: *const QuantumConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref: &QuantumConfigFfi = unsafe { &*cfg };
+    if cfg_ref.grid_size < 4
+        || cfg_ref.grid_size > 1_000_000
+        || !valid(cfg_ref.domain_min)
+        || !valid(cfg_ref.domain_max)
+        || cfg_ref.domain_max <= cfg_ref.domain_min
+        || !valid(cfg_ref.mass)
+        || !valid(cfg_ref.hbar)
+        || !valid(cfg_ref.omega)
+    {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    world_ref
+        .quantum
+        .configure(quantum_config_from_ffi(cfg_ref));
+    1
+}
+
+/// Read the quantum field's configuration of a 2D world.
+///
+/// Returns 1 on success, 0 for a null world or a null output.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be a valid pointer to a [`QuantumConfigFfi`].
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_get_config(
+    world: *const World2,
+    out: *mut QuantumConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    unsafe {
+        *out = quantum_config_to_ffi(world_ref.quantum.config());
+    }
+    1
+}
+
+/// Copy the wavefunction's amplitudes out of a 2D world.
+///
+/// The real and the imaginary parts go into two separate arrays, each
+/// of `cap` floats; the number of amplitudes written is returned. A
+/// null array asks for the count alone.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out_re` and `out_im` must each be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_state(
+    world: *const World2,
+    out_re: *mut f32,
+    out_im: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let amps = world_ref.quantum.state().amplitudes();
+    let count = amps.len();
+    if out_re.is_null() || out_im.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let re = unsafe { std::slice::from_raw_parts_mut(out_re, n) };
+    let im = unsafe { std::slice::from_raw_parts_mut(out_im, n) };
+    for i in 0..n {
+        re[i] = amps[i].re;
+        im[i] = amps[i].im;
+    }
+    n as u32
+}
+
+/// Copy the measurement probabilities out of a 2D world.
+///
+/// The probability of each outcome: the squared modulus of each
+/// amplitude. The number of probabilities written is returned. A null
+/// array asks for the count alone.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_probability(
+    world: *const World2,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let probs = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.probabilities(probs);
+    n as u32
+}
+
+/// Draw measurement outcomes from a 2D world.
+///
+/// Each draw is an outcome of the Born rule: the basis index whose
+/// probability the draw falls in. The stream is seeded, so the same
+/// seed gives the same draws. The number of draws written is returned;
+/// a null array asks for the count alone.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_quantum_sample(
+    world: *mut World2,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let draws = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.sample(draws);
+    n as u32
+}
+
+/// Configure the quantum field of a 3D world.
+///
+/// See [`phieng_world_quantum_config`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `cfg` must be a valid pointer to a [`QuantumConfigFfi`].
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const QuantumConfigFfi,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref: &QuantumConfigFfi = unsafe { &*cfg };
+    if cfg_ref.grid_size < 4
+        || cfg_ref.grid_size > 1_000_000
+        || !valid(cfg_ref.domain_min)
+        || !valid(cfg_ref.domain_max)
+        || cfg_ref.domain_max <= cfg_ref.domain_min
+        || !valid(cfg_ref.mass)
+        || !valid(cfg_ref.hbar)
+        || !valid(cfg_ref.omega)
+    {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    world_ref
+        .quantum
+        .configure(quantum_config_from_ffi(cfg_ref));
+    1
+}
+
+/// Read the quantum field's configuration of a 3D world.
+///
+/// See [`phieng_world_quantum_get_config`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be a valid pointer to a [`QuantumConfigFfi`].
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_get_config(
+    world: *const phieng_dynamics::World3,
+    out: *mut QuantumConfigFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    unsafe {
+        *out = quantum_config_to_ffi(world_ref.quantum.config());
+    }
+    1
+}
+
+/// Copy the wavefunction's amplitudes out of a 3D world.
+///
+/// See [`phieng_world_quantum_state`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out_re` and `out_im` must each be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_state(
+    world: *const phieng_dynamics::World3,
+    out_re: *mut f32,
+    out_im: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let amps = world_ref.quantum.state().amplitudes();
+    let count = amps.len();
+    if out_re.is_null() || out_im.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let re = unsafe { std::slice::from_raw_parts_mut(out_re, n) };
+    let im = unsafe { std::slice::from_raw_parts_mut(out_im, n) };
+    for i in 0..n {
+        re[i] = amps[i].re;
+        im[i] = amps[i].im;
+    }
+    n as u32
+}
+
+/// Copy the measurement probabilities out of a 3D world.
+///
+/// See [`phieng_world_quantum_probability`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_probability(
+    world: *const phieng_dynamics::World3,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let probs = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.probabilities(probs);
+    n as u32
+}
+
+/// Draw measurement outcomes from a 3D world.
+///
+/// See [`phieng_world_quantum_sample`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for `cap` floats.
+/// Use-after-free and forged pointers are undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_quantum_sample(
+    world: *mut phieng_dynamics::World3,
+    out: *mut f32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let count = world_ref.quantum.state().dim();
+    if out.is_null() {
+        return count as u32;
+    }
+    let cap = cap as usize;
+    let n = count.min(cap);
+    let draws = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    world_ref.quantum.sample(draws);
+    n as u32
+}

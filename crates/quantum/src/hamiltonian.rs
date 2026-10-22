@@ -64,6 +64,16 @@ impl Hamiltonian1D {
         self
     }
 
+    /// The mass of the particle.
+    pub fn mass(&self) -> f32 {
+        self.mass
+    }
+
+    /// The reduced Planck constant.
+    pub fn hbar(&self) -> f32 {
+        self.hbar
+    }
+
     /// The grid the Hamiltonian lives on.
     pub fn grid(&self) -> &Grid1D {
         &self.grid

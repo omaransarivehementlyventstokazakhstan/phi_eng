@@ -8,6 +8,29 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The time evolution of a wavefunction.** The engine can now
+  advance a wavefunction in time: the Crank-Nicolson method (one
+  complex tridiagonal solve per step -- second order, unconditionally
+  stable, norm-conserving to the rounding) and the split operator (one
+  deterministic radix-2 Fourier transform per step, for the periodic
+  case). The Hamiltonian stays matrix-free, and the steps reuse pooled
+  scratch so a step allocates nothing.
+
+  A `QuantumField` -- the grid, the Hamiltonian, the wavefunction, the
+  seeded measurement stream and the clock -- attaches to `World2` and
+  `World3` and advances with the world's step. It is off by default, so
+  a world that never asks for one keeps its trajectory to the last
+  bit. The native bridge exposes it (`phieng_world[_3]_quantum_config`,
+  `phieng_world[_3]_quantum_state/probability/sample`, plus the managed
+  `PhiNativeWorld(3)` wrappers), and the snapshot carries it as schema
+  v15: the configuration, the clock and the amplitudes, appended at the
+  end of the payload, with the derived density recomputed on load and
+  never stored.
+
+  Mirrored Rust<->C# tests: **M27-M34** (`crates/engine/tests/quantum_evolution.rs`,
+  `tests/PhiEng.Tests/QuantumEvolutionTests.cs`) and **M35-M38**
+  (`crates/engine/tests/quantum_snapshot.rs`,
+  `tests/PhiEng.Tests/SnapshotQuantumTests.cs`).
 - **The stationary Schrodinger equation.** The engine can now solve
   the one-dimensional time-independent Schrodinger equation on a grid:
   a `Hamiltonian1D` (the three-point kinetic stencil plus a potential),

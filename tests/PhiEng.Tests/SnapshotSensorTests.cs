@@ -51,7 +51,8 @@ public class SnapshotSensorTests
         var world = Scene2WithSensor();
         string json = Snapshot.World2ToJson(world, SnapshotLoadMode.Exact);
         // A sensor needs the v14 record, or the flag would be dropped.
-        Assert.Contains("\"schema\": 14", json);
+        // The writer emits the current version (15) for it.
+        Assert.Contains("\"schema\": 15", json);
         Assert.Contains("\"is_sensor\": true", json);
 
         var restored = Snapshot.World2FromJson(json, SnapshotLoadMode.Exact);
@@ -66,7 +67,7 @@ public class SnapshotSensorTests
     {
         var world = Scene2WithSensor();
         byte[] bytes = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
-        Assert.Equal(14u, EnvelopeVersion(bytes));
+        Assert.Equal(15u, EnvelopeVersion(bytes));
 
         var restored = Snapshot.World2FromBinary(bytes, SnapshotLoadMode.Exact);
         Assert.Equal(2, restored.Bodies.Count);
@@ -85,14 +86,14 @@ public class SnapshotSensorTests
         world.Bodies[1].IsSensor = true;
 
         string json = Snapshot.World3ToJson(world, SnapshotLoadMode.Exact);
-        Assert.Contains("\"schema\": 14", json);
+        Assert.Contains("\"schema\": 15", json);
         Assert.Contains("\"is_sensor\": true", json);
         var fromJson = Snapshot.World3FromJson(json, SnapshotLoadMode.Exact);
         Assert.True(fromJson.Bodies[1].IsSensor);
         Assert.False(fromJson.Bodies[0].IsSensor);
 
         byte[] bytes = Snapshot.World3ToBinary(world, SnapshotLoadMode.Exact);
-        Assert.Equal(14u, EnvelopeVersion(bytes));
+        Assert.Equal(15u, EnvelopeVersion(bytes));
         var fromBinary = Snapshot.World3FromBinary(bytes, SnapshotLoadMode.Exact);
         Assert.True(fromBinary.Bodies[1].IsSensor);
         Assert.False(fromBinary.Bodies[0].IsSensor);
@@ -103,10 +104,11 @@ public class SnapshotSensorTests
     public void SchemaNumberFollowsTheRustRule()
     {
         // The Rust writer (world2_dto / world3_dto) picks the schema
-        // like this: the current version (14) when the world uses any
+        // like this: the current version (15) when the world uses any
         // of the newer blocks — thermal, the nuclear state, a
-        // collision filter or a sensor — else 7 for non-default solver
-        // flags, 6 for CCD, 5 for ambient, 4 for gravity, else 3.
+        // collision filter, a sensor or a quantum field — else 7 for
+        // non-default solver flags, 6 for CCD, 5 for ambient, 4 for
+        // gravity, else 3.
         Assert.Equal(3u, SchemaOf(Scene2()));
 
         var flagged = Scene2();
@@ -128,36 +130,36 @@ public class SnapshotSensorTests
         Assert.Equal(4u, SchemaOf(gravity));
 
         // A collision filter is a v13 feature, but the current Rust
-        // writer emits the current version for it (14), not 13.
+        // writer emits the current version for it (15), not 13.
         var filtered = Scene2();
         filtered.Bodies[1].CollisionGroup = 4u;
-        Assert.Equal(14u, SchemaOf(filtered));
+        Assert.Equal(15u, SchemaOf(filtered));
 
         // A sensor is the v14 feature: the current version.
-        Assert.Equal(14u, SchemaOf(Scene2WithSensor()));
+        Assert.Equal(15u, SchemaOf(Scene2WithSensor()));
     }
 
-    /// <summary>The reader accepts a schema-14 file and still refuses a newer one.</summary>
+    /// <summary>The reader accepts a schema-15 file and still refuses a newer one.</summary>
     [Fact]
-    public void SchemaV14FileIsAccepted()
+    public void SchemaV15FileIsAccepted()
     {
         // The managed mirror used to stop at v13, so a file the Rust
-        // core writes today could not be loaded at all. A v14 file
-        // must load, and a v15 file must still be refused.
+        // core writes today could not be loaded at all. The current
+        // version must load, and the next one must still be refused.
         var world = Scene2WithSensor();
         byte[] bytes = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
-        Assert.Equal(14u, EnvelopeVersion(bytes));
+        Assert.Equal(15u, EnvelopeVersion(bytes));
         var restored = Snapshot.World2FromBinary(bytes, SnapshotLoadMode.Exact);
         Assert.True(restored.Bodies[1].IsSensor);
 
         byte[] future = (byte[])bytes.Clone();
-        BitConverter.GetBytes(15u).CopyTo(future, 4);
+        BitConverter.GetBytes(16u).CopyTo(future, 4);
         Assert.Throws<ArgumentException>(
             () => Snapshot.World2FromBinary(future, SnapshotLoadMode.Exact));
     }
 
     /// <summary>
-    /// The Rust core writes a schema-14 file for a world with a sensor
+    /// The Rust core writes a schema-15 file for a world with a sensor
     /// body, and the managed mirror reads that file and keeps the flag.
     /// This is the cross-boundary proof that the two layouts agree.
     /// </summary>
@@ -224,12 +226,17 @@ public class SnapshotSensorTests
     {
         // The schema-13 body record is the schema-14 one without the
         // trailing sensor byte, so a schema-13 file is rebuilt by
-        // dropping that byte from the schema-14 payload.
+        // dropping that byte from the schema-14 payload. The schema-14
+        // payload is the schema-15 one without the quantum block, which
+        // is the last thing in the payload.
         var world = new World2();
         world.Gravity = new Vector2(0.0f, -9.81f);
         world.AddDynamicBody(new Vector2(0.0f, 2.0f), new CircleShape(0.5f), 1.0f);
         world.Bodies[0].IsSensor = true;
-        byte[] v14 = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
+        byte[] v15 = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
+        Assert.Equal(15u, EnvelopeVersion(v15));
+
+        byte[] v14 = DowngradeToSchema14(v15);
         Assert.Equal(14u, EnvelopeVersion(v14));
 
         byte[] v13 = DowngradeToSchema13(v14, world);
@@ -243,6 +250,39 @@ public class SnapshotSensorTests
         Assert.Equal(new Vector2(0.0f, 2.0f), restored.Bodies[0].Transform.Position);
         Assert.Equal(CollisionFilter.DefaultGroup, restored.Bodies[0].CollisionGroup);
         Assert.Equal(CollisionFilter.DefaultMask, restored.Bodies[0].CollisionMask);
+    }
+
+    /// <summary>
+    /// Rebuilds a schema-15 binary snapshot as a schema-14 one.
+    ///
+    /// The quantum block is the last thing in the payload, so the
+    /// schema-14 payload is the schema-15 payload without it. The block's
+    /// length is found by trial: the reader accepts exactly one
+    /// truncation that still decodes, and that truncation is the block.
+    /// </summary>
+    private static byte[] DowngradeToSchema14(byte[] v15)
+    {
+        int len = (int)BitConverter.ToUInt32(v15, 9);
+        byte[] payload = new byte[len];
+        Array.Copy(v15, 13, payload, 0, len);
+
+        byte[]? found = null;
+        for (int cut = 1; cut <= payload.Length; cut++)
+        {
+            byte[] candidate = new byte[payload.Length - cut];
+            Array.Copy(payload, 0, candidate, 0, payload.Length - cut);
+            try
+            {
+                Snapshot.World2FromBinary(
+                    Envelope(14u, candidate), SnapshotLoadMode.Exact);
+            }
+            catch (ArgumentException) { continue; }
+            catch (EndOfStreamException) { continue; }
+            Assert.Null(found);
+            found = Envelope(14u, candidate);
+        }
+        Assert.NotNull(found);
+        return found!;
     }
 
     /// <summary>

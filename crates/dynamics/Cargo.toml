@@ -13,6 +13,7 @@ categories = ["physics", "game-development"]
 
 [dependencies]
 phieng-math = { path = "../math", version = "0.4.0" }
+phieng-quantum = { path = "../quantum", version = "0.4.0" }
 phieng-collision = { path = "../collision", version = "0.4.0" }
 phieng-broadphase = { path = "../broadphase", version = "0.4.0" }
 glam = { workspace = true }

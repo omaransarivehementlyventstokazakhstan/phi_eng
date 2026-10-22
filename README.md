@@ -419,6 +419,15 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **The time evolution of a wavefunction (both languages):** the
+  Crank-Nicolson method (one complex tridiagonal solve per step --
+  second order, unconditionally stable, norm-conserving to the rounding)
+  and the split operator (one deterministic radix-2 Fourier transform
+  per step, for the periodic case). A `QuantumField` attaches to
+  `World2` and `World3` and advances with the world's step; it is off by
+  default, so an untouched world keeps its trajectory to the last bit.
+  The native bridge exposes it and the snapshot carries it as schema
+  v15. Pinned by M27-M38 (Rust<->C# parity).
 - **The stationary Schrodinger equation (both languages):** a
   `Hamiltonian1D` (the three-point kinetic stencil plus a potential),
   the potentials (a harmonic trap, a square well, a step, a double well,

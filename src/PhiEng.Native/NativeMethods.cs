@@ -1426,4 +1426,91 @@ public float OccluderTransmittance;
         float* positions,
         byte* phases,
         uint count);
+
+    // ---- Quantum field (mirrors the phieng_world[_3]_quantum_* functions in ffi.rs) ----
+
+    /// <summary>Quantum field config struct. Mirrors Rust <c>QuantumConfigFfi</c> — never reorder.
+    /// Field order matches the Rust <c>#[repr(C)]</c> layout exactly (48 bytes with the trailing seed).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct QuantumConfigFfi
+    {
+        public byte Enabled;
+        public uint Method;
+        public uint Boundary;
+        public uint GridSize;
+        public float DomainMin;
+        public float DomainMax;
+        public float Mass;
+        public float Hbar;
+        public float Omega;
+        public ulong Seed;
+    }
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_quantum_config(
+        IntPtr world,
+        QuantumConfigFfi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_quantum_get_config(
+        IntPtr world,
+        QuantumConfigFfi* @out);
+
+    /// <returns>Number of amplitudes written; with null arrays, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_quantum_state(
+        IntPtr world,
+        float* outRe,
+        float* outIm,
+        uint cap);
+
+    /// <returns>Number of probabilities written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_quantum_probability(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>Number of draws written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_quantum_sample(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>1 on success, 0 for null world/struct or out-of-range input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_quantum_config(
+        IntPtr world,
+        QuantumConfigFfi* cfg);
+
+    /// <returns>1 on success, 0 for null world/out.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_quantum_get_config(
+        IntPtr world,
+        QuantumConfigFfi* @out);
+
+    /// <returns>Number of amplitudes written; with null arrays, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_quantum_state(
+        IntPtr world,
+        float* outRe,
+        float* outIm,
+        uint cap);
+
+    /// <returns>Number of probabilities written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_quantum_probability(
+        IntPtr world,
+        float* @out,
+        uint cap);
+
+    /// <returns>Number of draws written; with a null array, the count alone.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_quantum_sample(
+        IntPtr world,
+        float* @out,
+        uint cap);
 }

@@ -1,5 +1,6 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Quantum;
 using PhiEng.Collision;
 using PhiEng.Math;
 
@@ -72,6 +73,13 @@ public class World3
 
     /// <summary>SPH fluid state (data only; stepping lives in Rust).</summary>
     public FluidState3 Fluid { get; } = new();
+
+    /// <summary>
+    /// The quantum wavefunction. Disabled by default, so a world that
+    /// never asks for a wavefunction behaves exactly as it did before the
+    /// field existed.
+    /// </summary>
+    public QuantumField Quantum { get; } = new(QuantumConfig.Default);
 
     private const float ContactMatchDistSq = 0.04f;
 
@@ -405,6 +413,15 @@ public class World3
             {
                 StepInner(sub);
             }
+        }
+
+        // 7e. The quantum wavefunction advances with the world's step. The
+        // field is off by default, so this is a branch and not a
+        // behaviour change: a world that never asks for a wavefunction
+        // keeps its trajectory to the last bit.
+        if (Quantum.IsEnabled)
+        {
+            Quantum.Step(dt);
         }
 
         // 8. Advance the simulation clock (drives time-varying ambient fields).

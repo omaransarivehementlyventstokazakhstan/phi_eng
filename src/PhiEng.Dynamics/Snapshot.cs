@@ -1,5 +1,7 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Math;
+using PhiEng.Quantum;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -42,17 +44,19 @@ public static class Snapshot
     /// (radiation occlusion, forced convection, thermal expansion) and
     /// the per-body applied expansion factor; v13 adds the per-body
     /// collision filter (layer and mask); v14 adds the per-body sensor
-    /// flag.
+    /// flag; v15 adds the quantum field block (the configuration, the
+    /// field's clock and the wavefunction's amplitudes), appended at the
+    /// end of the payload.
     /// Writers emit v3 for default worlds, v4 for gravity-only worlds, v5
     /// for ambient/fluid worlds, v6 for CCD worlds (byte-compatible with
     /// older files), v7 for worlds with non-default solver switches, and
-    /// v14 for worlds with an active thermal config, any non-default
+    /// v15 for worlds with an active thermal config, any non-default
     /// thermal sub-feature, the nuclear block, a non-default collision
-    /// filter or a sensor body. The binary layout is byte-identical to the
-    /// Rust writer's, so a file written by either engine loads in the
-    /// other.
+    /// filter, a sensor body or a quantum field. The binary layout is
+    /// byte-identical to the Rust writer's, so a file written by either
+    /// engine loads in the other.
     /// </summary>
-    public const uint SchemaVersion = 14;
+    public const uint SchemaVersion = 15;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -117,6 +121,20 @@ public static class Snapshot
     public const uint SensorsSchemaVersion = 14;
 
     /// <summary>
+    /// Schema that introduced the quantum field block (v15): the field's
+    /// configuration and its wavefunction. Must match Rust
+    /// <c>SNAPSHOT_SCHEMA_QUANTUM</c>.
+    /// </summary>
+    /// <remarks>
+    /// The block is appended at the end of the payload, so every earlier
+    /// payload still decodes. This gate is deliberately a named constant
+    /// and NOT <see cref="SchemaVersion"/>: tracking the current version
+    /// would silently retarget it whenever the schema is bumped, breaking
+    /// every older payload.
+    /// </remarks>
+    public const uint QuantumSchemaVersion = 15;
+
+    /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
     /// they load as defaults. Anything outside [3, 6] is rejected.
     /// </summary>
@@ -148,6 +166,14 @@ public static class Snapshot
     /// round-trip can never produce an unloadable file.
     /// </summary>
     private const int MaxNuclideTable = 4096;
+
+    /// <summary>
+    /// The maximum number of grid points a quantum field may carry. The
+    /// writer refuses a larger grid and the reader rejects one, so a
+    /// save/load round-trip can never produce an unloadable file.
+    /// </summary>
+    private const int MaxQuantumGrid = 1_000_000;
+
     private static readonly byte[] Magic = [(byte)'P', (byte)'H', (byte)'E', (byte)'1'];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -462,6 +488,84 @@ public static class Snapshot
         [JsonPropertyName("dose")] public float Dose { get; set; }
 
         [JsonPropertyName("capture_progress")] public float CaptureProgress { get; set; }
+    }
+
+    /// <summary>
+    /// Schema v15 quantum configuration DTO. The field names mirror the
+    /// Rust <c>QuantumConfigDto</c>; <c>method</c> and <c>boundary</c>
+    /// are the enum discriminants (0 = Crank-Nicolson/Dirichlet, 1 = the
+    /// split operator/periodic).
+    /// </summary>
+    private sealed class QuantumConfigDto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+
+        [JsonPropertyName("method")] public uint Method { get; set; }
+
+        [JsonPropertyName("boundary")] public uint Boundary { get; set; }
+
+        [JsonPropertyName("grid_size")] public uint GridSize { get; set; } = 256;
+
+        [JsonPropertyName("domain_min")] public float DomainMin { get; set; } = -10.0f;
+
+        [JsonPropertyName("domain_max")] public float DomainMax { get; set; } = 10.0f;
+
+        [JsonPropertyName("mass")] public float Mass { get; set; } = 1.0f;
+
+        [JsonPropertyName("hbar")] public float Hbar { get; set; } = 1.0f;
+
+        [JsonPropertyName("omega")] public float Omega { get; set; } = 1.0f;
+
+        [JsonPropertyName("seed")] public ulong Seed { get; set; } = 1;
+
+        /// <summary>
+        /// True when the configuration still holds its default value.
+        /// </summary>
+        public bool IsDefault()
+        {
+            var d = QuantumConfig.Default;
+            return Enabled == d.Enabled
+                && Method == (uint)d.Method
+                && Boundary == (uint)d.Boundary
+                && GridSize == (uint)d.GridSize
+                && DomainMin == d.DomainMin
+                && DomainMax == d.DomainMax
+                && Mass == d.Mass
+                && Hbar == d.Hbar
+                && Omega == d.Omega
+                && Seed == d.Seed;
+        }
+    }
+
+    /// <summary>
+    /// Schema v15 quantum field DTO: the configuration, the field's clock
+    /// and the wavefunction's amplitudes.
+    /// </summary>
+    /// <remarks>
+    /// The amplitudes are stored as two arrays - the real and the
+    /// imaginary parts - so the file holds plain floats. The density (the
+    /// squared modulus of each amplitude) is DERIVED, never stored.
+    /// </remarks>
+    private sealed class QuantumDto
+    {
+        [JsonPropertyName("config")] public QuantumConfigDto Config { get; set; } = new();
+
+        [JsonPropertyName("time")] public float Time { get; set; }
+
+        [JsonPropertyName("real")] public List<float> Real { get; set; } = new();
+
+        [JsonPropertyName("imag")] public List<float> Imag { get; set; } = new();
+
+        /// <summary>
+        /// True when the field holds nothing: no configuration of its own,
+        /// no clock and no wavefunction.
+        /// </summary>
+        /// <remarks>
+        /// The block is elided then, so a world that never asked for a
+        /// wavefunction keeps the bytes it had before the field existed.
+        /// </remarks>
+        public bool IsDefault() =>
+            Config.IsDefault() && Time == 0.0f && Real.Count == 0 && Imag.Count == 0;
     }
 
     private sealed class ThermalExtrasDto
@@ -897,6 +1001,12 @@ public static class Snapshot
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
 
         [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
+
+        /// <summary>
+        /// The quantum field's configuration and wavefunction (schema v15).
+        /// </summary>
+        [JsonPropertyName("quantum")] public QuantumDto Quantum { get; set; } = new();
+
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -964,8 +1074,13 @@ public static class Snapshot
             // Schema v14: a body that is a sensor needs the v14 record,
             // or the flag would be silently dropped on save.
             bool hasSensors = w.Bodies.Any(b => b.IsSensor);
+            // Schema v15: the quantum field's configuration and
+            // wavefunction need the v15 block, or they would be silently
+            // dropped on save.
+            QuantumDto quantum = QuantumFrom(w.Quantum);
+            bool hasQuantum = !quantum.IsDefault();
             uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
-                || hasSensors
+                || hasSensors || hasQuantum
                 ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
@@ -1080,6 +1195,7 @@ public static class Snapshot
                     ExpansionCoefficient = w.Thermal.ExpansionCoefficient,
                     ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
+                Quantum = quantum,
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -1311,6 +1427,10 @@ public static class Snapshot
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
 
         [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
+
+        /// <summary>See <c>World2Dto.Quantum</c>.</summary>
+        [JsonPropertyName("quantum")] public QuantumDto Quantum { get; set; } = new();
+
         /// <summary>
         /// Broad-phase backend tag (schema v8). The managed engine has no
         /// broad-phase concept; it always carries the Rust default so a
@@ -1375,8 +1495,13 @@ public static class Snapshot
             // Schema v14: a body that is a sensor needs the v14 record,
             // or the flag would be silently dropped on save.
             bool hasSensors = w.Bodies.Any(b => b.IsSensor);
+            // Schema v15: the quantum field's configuration and
+            // wavefunction need the v15 block, or they would be silently
+            // dropped on save.
+            QuantumDto quantum = QuantumFrom(w.Quantum);
+            bool hasQuantum = !quantum.IsDefault();
             uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
-                || hasSensors
+                || hasSensors || hasQuantum
                 ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
@@ -1491,6 +1616,7 @@ public static class Snapshot
                     ExpansionCoefficient = w.Thermal.ExpansionCoefficient,
                     ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
+                Quantum = quantum,
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -1936,6 +2062,118 @@ public static class Snapshot
         }).ToList(),
     };
 
+    /// <summary>
+    /// Builds the schema v15 quantum DTO from a world's field.
+    /// </summary>
+    /// <remarks>
+    /// A field that is off and holds the default configuration is the
+    /// default DTO: the block is elided and the world keeps its old
+    /// bytes. Its wavefunction is the ground state, which the loader
+    /// rebuilds from the configuration.
+    /// </remarks>
+    private static QuantumDto QuantumFrom(QuantumField field)
+    {
+        var config = new QuantumConfigDto
+        {
+            Enabled = field.Config.Enabled,
+            Method = (uint)field.Config.Method,
+            Boundary = (uint)field.Config.Boundary,
+            GridSize = (uint)field.Config.GridSize,
+            DomainMin = field.Config.DomainMin,
+            DomainMax = field.Config.DomainMax,
+            Mass = field.Config.Mass,
+            Hbar = field.Config.Hbar,
+            Omega = field.Config.Omega,
+            Seed = field.Config.Seed,
+        };
+        if (config.IsDefault() && !field.IsEnabled)
+        {
+            return new QuantumDto();
+        }
+        var dto = new QuantumDto { Config = config, Time = field.Time };
+        foreach (var a in field.State.Amplitudes)
+        {
+            dto.Real.Add(a.Re);
+            dto.Imag.Add(a.Im);
+        }
+        return dto;
+    }
+
+    /// <summary>
+    /// Rebuilds an engine quantum configuration from the schema v15 DTO.
+    /// </summary>
+    private static QuantumConfig QuantumConfigFrom(QuantumConfigDto c)
+    {
+        if (c.GridSize > MaxQuantumGrid)
+        {
+            throw new ArgumentException(
+                $"Quantum grid too large: {c.GridSize} points (max {MaxQuantumGrid}).");
+        }
+        EvolutionMethod method = c.Method switch
+        {
+            0 => EvolutionMethod.CrankNicolson,
+            1 => EvolutionMethod.SplitOperator,
+            _ => throw new ArgumentException($"Unknown quantum evolution method {c.Method}."),
+        };
+        Boundary1D boundary = c.Boundary switch
+        {
+            0 => Boundary1D.Dirichlet,
+            1 => Boundary1D.Periodic,
+            _ => throw new ArgumentException($"Unknown quantum boundary condition {c.Boundary}."),
+        };
+        return new QuantumConfig
+        {
+            Enabled = c.Enabled,
+            GridSize = (int)c.GridSize,
+            DomainMin = Fin(c.DomainMin, "quantum_domain_min"),
+            DomainMax = Fin(c.DomainMax, "quantum_domain_max"),
+            Mass = Fin(c.Mass, "quantum_mass"),
+            Hbar = Fin(c.Hbar, "quantum_hbar"),
+            Omega = Fin(c.Omega, "quantum_omega"),
+            Method = method,
+            Boundary = boundary,
+            Seed = c.Seed,
+        };
+    }
+
+    /// <summary>
+    /// Restores a world's quantum field (schema v15).
+    /// </summary>
+    /// <remarks>
+    /// The structure is restored exactly: the configuration and the
+    /// wavefunction's amplitudes. The density is derived from the
+    /// amplitudes, never stored.
+    /// </remarks>
+    private static void ApplyQuantum(QuantumField field, QuantumDto q)
+    {
+        // Nothing to restore: the field stays off, exactly as a world
+        // that never asked for a wavefunction.
+        if (q.IsDefault()) return;
+        field.Configure(QuantumConfigFrom(q.Config));
+        field.SetTime(q.Time);
+        if (q.Real.Count == 0 && q.Imag.Count == 0)
+        {
+            // No wavefunction in the file: the ground state the
+            // configuration just built stands.
+            return;
+        }
+        if (q.Real.Count != q.Imag.Count)
+        {
+            throw new ArgumentException("Quantum real and imaginary amplitude counts disagree.");
+        }
+        Complex32[] amplitudes = field.StateMut.Amplitudes;
+        if (amplitudes.Length != q.Real.Count)
+        {
+            throw new ArgumentException(
+                $"Quantum amplitude count {q.Real.Count} disagrees with the grid's {amplitudes.Length}.");
+        }
+        for (int i = 0; i < amplitudes.Length; i++)
+        {
+            amplitudes[i].Re = q.Real[i];
+            amplitudes[i].Im = q.Imag[i];
+        }
+    }
+
     /// <summary>Rebuilds a material, carrying the thermal properties.</summary>
     private static PhysicsMaterial MaterialFrom(MaterialDto m) => new(
         Fin(m.Friction, "friction"),
@@ -2165,6 +2403,12 @@ public static class Snapshot
             }
         }
         ApplyFluid2(w, dto.Fluid);
+        // Schema v15: the quantum field. An older payload carries no
+        // block, so the field stays off.
+        if (dto.Schema >= QuantumSchemaVersion)
+        {
+            ApplyQuantum(w.Quantum, dto.Quantum);
+        }
         return w;
     }
 
@@ -2423,6 +2667,11 @@ public static class Snapshot
             }
         }
         ApplyFluid3(w, dto.Fluid);
+        // Schema v15: the quantum field (see World2FromDto).
+        if (dto.Schema >= QuantumSchemaVersion)
+        {
+            ApplyQuantum(w.Quantum, dto.Quantum);
+        }
         return w;
     }
 
@@ -2975,6 +3224,12 @@ public static class Snapshot
             }
         }
         WriteFluid2(w, dto.Fluid, dto.Schema);
+        // Schema v15: the quantum field block, appended at the end of the
+        // payload (own block, so every earlier payload still decodes).
+        if (dto.Schema >= QuantumSchemaVersion)
+        {
+            WriteQuantum(w, dto.Quantum);
+        }
     }
 
     private static void WriteFluidConfig2(BinaryWriter w, FluidConfig2Dto c, uint version)
@@ -3163,6 +3418,76 @@ public static class Snapshot
         return f;
     }
 
+    /// <summary>
+    /// Writes the schema v15 quantum block: the configuration, the field's
+    /// clock and the wavefunction's amplitudes.
+    /// </summary>
+    /// <remarks>
+    /// The block is appended at the end of the payload, so every earlier
+    /// payload still decodes.
+    /// </remarks>
+    private static void WriteQuantum(BinaryWriter w, QuantumDto q)
+    {
+        if (q.Real.Count != q.Imag.Count)
+        {
+            throw new ArgumentException("Quantum real and imaginary amplitude counts disagree.");
+        }
+        // The reader rejects a longer wavefunction, so the writer must
+        // refuse it too: a save must never produce a file the same
+        // engine cannot load.
+        if (q.Real.Count > MaxQuantumGrid)
+        {
+            throw new ArgumentException(
+                $"Quantum wavefunction too long: {q.Real.Count} amplitudes (max {MaxQuantumGrid}).");
+        }
+        w.Write(q.Config.Enabled ? (byte)1 : (byte)0);
+        w.Write(q.Config.Method);
+        w.Write(q.Config.Boundary);
+        w.Write(q.Config.GridSize);
+        w.Write(q.Config.DomainMin);
+        w.Write(q.Config.DomainMax);
+        w.Write(q.Config.Mass);
+        w.Write(q.Config.Hbar);
+        w.Write(q.Config.Omega);
+        w.Write(q.Config.Seed);
+        w.Write(q.Time);
+        w.Write(q.Real.Count);
+        foreach (var r in q.Real) w.Write(r);
+        foreach (var i in q.Imag) w.Write(i);
+    }
+
+    /// <summary>
+    /// Reads the schema v15 quantum block.
+    /// </summary>
+    /// <remarks>
+    /// An older payload carries no block, so the field stays off.
+    /// </remarks>
+    private static QuantumDto ReadQuantum(BinaryReader r, uint version)
+    {
+        var q = new QuantumDto();
+        if (version < QuantumSchemaVersion) return q;
+        q.Config = new QuantumConfigDto
+        {
+            Enabled = r.ReadByte() != 0,
+            Method = r.ReadUInt32(),
+            Boundary = r.ReadUInt32(),
+            GridSize = r.ReadUInt32(),
+            DomainMin = r.ReadSingle(),
+            DomainMax = r.ReadSingle(),
+            Mass = r.ReadSingle(),
+            Hbar = r.ReadSingle(),
+            Omega = r.ReadSingle(),
+            Seed = r.ReadUInt64(),
+        };
+        q.Time = r.ReadSingle();
+        int count = r.ReadInt32();
+        if (count < 0 || count > MaxQuantumGrid)
+            throw new ArgumentException("Quantum amplitude count out of range.");
+        for (int i = 0; i < count; i++) q.Real.Add(r.ReadSingle());
+        for (int i = 0; i < count; i++) q.Imag.Add(r.ReadSingle());
+        return q;
+    }
+
     private static World2Dto ReadWorld2Payload(BinaryReader r, uint version)
     {
         var dto = new World2Dto
@@ -3286,6 +3611,9 @@ public static class Snapshot
             dto.Contacts.Add(c);
         }
         dto.Fluid = ReadFluid2(r, version);
+        // Schema v15: the quantum field block (at the end of the
+        // payload).
+        dto.Quantum = ReadQuantum(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;
@@ -3646,6 +3974,11 @@ public static class Snapshot
             }
         }
         WriteFluid3(w, dto.Fluid, dto.Schema);
+        // Schema v15: the quantum field block (see WriteWorld2Payload).
+        if (dto.Schema >= QuantumSchemaVersion)
+        {
+            WriteQuantum(w, dto.Quantum);
+        }
     }
 
     private static World3Dto ReadWorld3Payload(BinaryReader r, uint version)
@@ -3764,6 +4097,8 @@ public static class Snapshot
             dto.Contacts.Add(c);
         }
         dto.Fluid = ReadFluid3(r, version);
+        // Schema v15: the quantum field block (see ReadWorld2Payload).
+        dto.Quantum = ReadQuantum(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;

@@ -29,6 +29,9 @@
 //! otherwise; loaders accept both, filling v3 gravity state with
 //! defaults. JSON additive fields carry `#[serde(default)]` (same
 //! precedent as fluid/joints); binary stays strict per version.
+//! v15 adds the quantum field block (the configuration, the field's
+//! clock and the wavefunction's amplitudes), appended at the end of the
+//! payload so every earlier payload still decodes.
 
 use glam::{Mat2, Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -56,7 +59,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 14;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 15;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -86,6 +89,10 @@ const SNAPSHOT_SCHEMA_NUCLEAR: u32 = 12;
 const SNAPSHOT_SCHEMA_COLLISION_FILTERS: u32 = 13;
 /// Schema that introduced the per-body sensor flag (v14).
 const SNAPSHOT_SCHEMA_SENSORS: u32 = 14;
+/// Schema that introduced the quantum field block (v15): the field's
+/// configuration and its wavefunction. Its own block, appended at the
+/// end of the payload, so every earlier payload still decodes.
+const SNAPSHOT_SCHEMA_QUANTUM: u32 = 15;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -1662,6 +1669,332 @@ fn nuclear_body_from_dto(d: &NuclearBodyDto) -> super::nuclear::NuclearState {
     }
 }
 
+// ---- Quantum field DTOs (schema v15) ----
+
+/// The maximum number of grid points a quantum field may carry.
+///
+/// The writer refuses a larger grid and the reader rejects one, so a
+/// save/load round-trip can never produce an unloadable file.
+const MAX_QUANTUM_GRID: usize = 1_000_000;
+
+/// The default number of grid points (the engine's default grid).
+fn default_quantum_grid_size() -> u32 {
+    phieng_quantum::field::QuantumConfig::default().grid_size as u32
+}
+
+/// The default left end of the grid.
+fn default_quantum_domain_min() -> f32 {
+    phieng_quantum::field::QuantumConfig::default().domain_min
+}
+
+/// The default right end of the grid.
+fn default_quantum_domain_max() -> f32 {
+    phieng_quantum::field::QuantumConfig::default().domain_max
+}
+
+/// The default mass of the particle.
+fn default_quantum_mass() -> f32 {
+    phieng_quantum::field::QuantumConfig::default().mass
+}
+
+/// The default reduced Planck constant.
+fn default_quantum_hbar() -> f32 {
+    phieng_quantum::field::QuantumConfig::default().hbar
+}
+
+/// The default frequency of the harmonic trap.
+fn default_quantum_omega() -> f32 {
+    phieng_quantum::field::QuantumConfig::default().omega
+}
+
+/// The default seed of the measurement stream.
+fn default_quantum_seed() -> u64 {
+    phieng_quantum::field::QuantumConfig::default().seed
+}
+
+/// Schema v15 quantum configuration DTO.
+///
+/// The field names mirror [`phieng_quantum::field::QuantumConfig`];
+/// `method` and `boundary` are the enum discriminants (0 =
+/// Crank-Nicolson/Dirichlet, 1 = the split operator/periodic).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct QuantumConfigDto {
+    /// Master switch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    /// The evolution method: 0 = Crank-Nicolson, 1 = the split
+    /// operator.
+    #[serde(default)]
+    pub method: u32,
+    /// The boundary condition: 0 = Dirichlet, 1 = periodic.
+    #[serde(default)]
+    pub boundary: u32,
+    /// The number of grid points.
+    #[serde(
+        default = "default_quantum_grid_size",
+        skip_serializing_if = "is_default_quantum_grid_size"
+    )]
+    pub grid_size: u32,
+    /// The left end of the grid.
+    #[serde(
+        default = "default_quantum_domain_min",
+        skip_serializing_if = "is_default_quantum_domain_min"
+    )]
+    pub domain_min: f32,
+    /// The right end of the grid.
+    #[serde(
+        default = "default_quantum_domain_max",
+        skip_serializing_if = "is_default_quantum_domain_max"
+    )]
+    pub domain_max: f32,
+    /// The mass of the particle.
+    #[serde(
+        default = "default_quantum_mass",
+        skip_serializing_if = "is_default_quantum_mass"
+    )]
+    pub mass: f32,
+    /// The reduced Planck constant.
+    #[serde(
+        default = "default_quantum_hbar",
+        skip_serializing_if = "is_default_quantum_hbar"
+    )]
+    pub hbar: f32,
+    /// The frequency of the harmonic trap.
+    #[serde(
+        default = "default_quantum_omega",
+        skip_serializing_if = "is_default_quantum_omega"
+    )]
+    pub omega: f32,
+    /// The seed of the measurement stream.
+    #[serde(
+        default = "default_quantum_seed",
+        skip_serializing_if = "is_default_quantum_seed"
+    )]
+    pub seed: u64,
+}
+
+/// `skip_serializing_if` companion for the grid size.
+fn is_default_quantum_grid_size(v: &u32) -> bool {
+    *v == default_quantum_grid_size()
+}
+
+/// `skip_serializing_if` companion for the left end of the grid.
+fn is_default_quantum_domain_min(v: &f32) -> bool {
+    *v == default_quantum_domain_min()
+}
+
+/// `skip_serializing_if` companion for the right end of the grid.
+fn is_default_quantum_domain_max(v: &f32) -> bool {
+    *v == default_quantum_domain_max()
+}
+
+/// `skip_serializing_if` companion for the mass.
+fn is_default_quantum_mass(v: &f32) -> bool {
+    *v == default_quantum_mass()
+}
+
+/// `skip_serializing_if` companion for the reduced Planck constant.
+fn is_default_quantum_hbar(v: &f32) -> bool {
+    *v == default_quantum_hbar()
+}
+
+/// `skip_serializing_if` companion for the trap's frequency.
+fn is_default_quantum_omega(v: &f32) -> bool {
+    *v == default_quantum_omega()
+}
+
+/// `skip_serializing_if` companion for the measurement seed.
+fn is_default_quantum_seed(v: &u64) -> bool {
+    *v == default_quantum_seed()
+}
+
+impl QuantumConfigDto {
+    /// True when the configuration still holds its default value.
+    fn is_default(&self) -> bool {
+        let d = Self::default();
+        self.enabled == d.enabled
+            && self.method == d.method
+            && self.boundary == d.boundary
+            && self.grid_size == d.grid_size
+            && self.domain_min == d.domain_min
+            && self.domain_max == d.domain_max
+            && self.mass == d.mass
+            && self.hbar == d.hbar
+            && self.omega == d.omega
+            && self.seed == d.seed
+    }
+}
+
+impl Default for QuantumConfigDto {
+    /// Must be the *engine* default, not a zero-valued struct: an
+    /// absent field in an older file means "the field is off", and a
+    /// zero-sized grid would not be the grid a world starts with.
+    fn default() -> Self {
+        let c = phieng_quantum::field::QuantumConfig::default();
+        Self {
+            enabled: c.enabled,
+            method: c.method as u32,
+            boundary: c.boundary as u32,
+            grid_size: c.grid_size as u32,
+            domain_min: c.domain_min,
+            domain_max: c.domain_max,
+            mass: c.mass,
+            hbar: c.hbar,
+            omega: c.omega,
+            seed: c.seed,
+        }
+    }
+}
+
+/// Schema v15 quantum field DTO: the configuration, the field's clock
+/// and the wavefunction's amplitudes.
+///
+/// The amplitudes are stored as two arrays — the real and the
+/// imaginary parts — so the file holds plain floats. The density (the
+/// squared modulus of each amplitude) is DERIVED, never stored.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct QuantumDto {
+    /// The field's configuration.
+    #[serde(default)]
+    pub config: QuantumConfigDto,
+    /// The time the wavefunction has been evolved for.
+    #[serde(default)]
+    pub time: f32,
+    /// The real parts of the amplitudes.
+    #[serde(default)]
+    pub real: Vec<f32>,
+    /// The imaginary parts of the amplitudes.
+    #[serde(default)]
+    pub imag: Vec<f32>,
+}
+
+impl QuantumDto {
+    /// True when the field holds nothing: no configuration of its own,
+    /// no clock and no wavefunction.
+    ///
+    /// The block is elided then, so a world that never asked for a
+    /// wavefunction keeps the bytes it had before the field existed.
+    fn is_default(&self) -> bool {
+        self.config.is_default() && self.time == 0.0 && self.real.is_empty() && self.imag.is_empty()
+    }
+}
+
+/// Build the schema v15 quantum DTO from a world's field.
+fn quantum_dto(field: &phieng_quantum::field::QuantumField) -> QuantumDto {
+    let config = quantum_config_dto(field.config());
+    // A field that is off and holds the default configuration is the
+    // default DTO: the block is elided and the world keeps its old
+    // bytes. Its wavefunction is the ground state, which the loader
+    // rebuilds from the configuration.
+    if config.is_default() && !field.is_enabled() {
+        return QuantumDto::default();
+    }
+    let amplitudes = field.state().amplitudes();
+    QuantumDto {
+        config,
+        time: field.time(),
+        real: amplitudes.iter().map(|a| a.re).collect(),
+        imag: amplitudes.iter().map(|a| a.im).collect(),
+    }
+}
+
+/// Build the schema v15 quantum configuration DTO from the engine's.
+fn quantum_config_dto(c: &phieng_quantum::field::QuantumConfig) -> QuantumConfigDto {
+    QuantumConfigDto {
+        enabled: c.enabled,
+        method: c.method as u32,
+        boundary: c.boundary as u32,
+        grid_size: c.grid_size as u32,
+        domain_min: c.domain_min,
+        domain_max: c.domain_max,
+        mass: c.mass,
+        hbar: c.hbar,
+        omega: c.omega,
+        seed: c.seed,
+    }
+}
+
+/// Rebuild an engine quantum configuration from the schema v15 DTO.
+fn quantum_config_from_dto(
+    c: &QuantumConfigDto,
+) -> Result<phieng_quantum::field::QuantumConfig, SnapshotError> {
+    use phieng_quantum::evolution::EvolutionMethod;
+    use phieng_quantum::hamiltonian::Boundary1D;
+    finite(c.domain_min, "quantum.domain_min")?;
+    finite(c.domain_max, "quantum.domain_max")?;
+    finite(c.mass, "quantum.mass")?;
+    finite(c.hbar, "quantum.hbar")?;
+    finite(c.omega, "quantum.omega")?;
+    if c.grid_size as usize > MAX_QUANTUM_GRID {
+        return corrupt(format!(
+            "quantum grid too large: {} points (max {MAX_QUANTUM_GRID})",
+            c.grid_size
+        ));
+    }
+    let method = match c.method {
+        0 => EvolutionMethod::CrankNicolson,
+        1 => EvolutionMethod::SplitOperator,
+        other => return corrupt(format!("unknown quantum evolution method {other}")),
+    };
+    let boundary = match c.boundary {
+        0 => Boundary1D::Dirichlet,
+        1 => Boundary1D::Periodic,
+        other => return corrupt(format!("unknown quantum boundary condition {other}")),
+    };
+    Ok(phieng_quantum::field::QuantumConfig {
+        enabled: c.enabled,
+        grid_size: c.grid_size as usize,
+        domain_min: c.domain_min,
+        domain_max: c.domain_max,
+        mass: c.mass,
+        hbar: c.hbar,
+        omega: c.omega,
+        method,
+        boundary,
+        seed: c.seed,
+    })
+}
+
+/// Restore a world's quantum field (schema v15).
+///
+/// The structure is restored exactly: the configuration and the
+/// wavefunction's amplitudes. The density is derived from the
+/// amplitudes, never stored.
+fn apply_quantum(
+    field: &mut phieng_quantum::field::QuantumField,
+    q: &QuantumDto,
+) -> Result<(), SnapshotError> {
+    // Nothing to restore: the field stays off, exactly as a world that
+    // never asked for a wavefunction.
+    if q.is_default() {
+        return Ok(());
+    }
+    let config = quantum_config_from_dto(&q.config)?;
+    field.configure(config);
+    field.set_time(q.time);
+    if q.real.is_empty() && q.imag.is_empty() {
+        // No wavefunction in the file: the ground state the
+        // configuration just built stands.
+        return Ok(());
+    }
+    if q.real.len() != q.imag.len() {
+        return corrupt("quantum real and imaginary amplitude counts disagree");
+    }
+    let amplitudes = field.state_mut().amplitudes_mut();
+    if amplitudes.len() != q.real.len() {
+        return corrupt(format!(
+            "quantum amplitude count {} disagrees with the grid's {}",
+            q.real.len(),
+            amplitudes.len()
+        ));
+    }
+    for (a, (re, im)) in amplitudes.iter_mut().zip(q.real.iter().zip(q.imag.iter())) {
+        a.re = *re;
+        a.im = *im;
+    }
+    Ok(())
+}
+
 /// Broad-phase backend tag used by schema-everything worlds (the default
 /// grid). Tag values are part of the schema: 0 brute force, 1 spatial
 /// hash, 2 dynamic tree, 3 hybrid — matching
@@ -2079,6 +2412,11 @@ struct World2Dto {
     /// Nuclear configuration and nuclide table (schema v12).
     #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
     nuclear: NuclearConfigDto,
+    /// The quantum field's configuration and wavefunction (schema v15).
+    /// Omitted (and defaulted) for pre-v15 files so default output
+    /// stays byte-identical.
+    #[serde(default, skip_serializing_if = "QuantumDto::is_default")]
+    quantum: QuantumDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2189,6 +2527,10 @@ struct World3Dto {
     /// Nuclear configuration and nuclide table (schema v12).
     #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
     nuclear: NuclearConfigDto,
+    /// The quantum field's configuration and wavefunction (schema v15).
+    /// See `World2Dto::quantum`.
+    #[serde(default, skip_serializing_if = "QuantumDto::is_default")]
+    quantum: QuantumDto,
     dt: f32,
     linear_sleep_threshold: f32,
     angular_sleep_threshold: f32,
@@ -2930,6 +3272,10 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // Schema v14: a body that is a sensor needs the v14 record, or
     // the flag would be silently dropped on save.
     let has_sensors = w.bodies.iter().any(|b| b.is_sensor);
+    // Schema v15: the quantum field's configuration and wavefunction
+    // need the v15 block, or they would be silently dropped on save.
+    let quantum = quantum_dto(&w.quantum);
+    let has_quantum = !quantum.is_default();
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
@@ -2938,6 +3284,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         || has_nuclear
         || has_collision_filters
         || has_sensors
+        || has_quantum
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -2963,6 +3310,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
         nuclear: nuclear_config_dto(&w.nuclear.config),
+        quantum,
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -3173,6 +3521,10 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     // Schema v14: a body that is a sensor needs the v14 record, or
     // the flag would be silently dropped on save.
     let has_sensors = w.bodies.iter().any(|b| b.is_sensor);
+    // Schema v15: the quantum field's configuration and wavefunction
+    // need the v15 block, or they would be silently dropped on save.
+    let quantum = quantum_dto(&w.quantum);
+    let has_quantum = !quantum.is_default();
     let schema = if has_thermal
         || has_broadphase_mode
         || has_collision_tier
@@ -3181,6 +3533,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         || has_nuclear
         || has_collision_filters
         || has_sensors
+        || has_quantum
     {
         SNAPSHOT_SCHEMA_VERSION
     } else if has_solver_flags {
@@ -3206,6 +3559,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
         nuclear: nuclear_config_dto(&w.nuclear.config),
+        quantum,
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
         dt: w.dt,
@@ -4217,6 +4571,11 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     // The nuclear block: a default payload carries the default
     // configuration, so applying it unconditionally is equivalent.
     w.nuclear.config = nuclear_config_from_dto(&dto.nuclear);
+    // Schema v15: the quantum field. An older payload carries no
+    // block, so the field stays off.
+    if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
+        apply_quantum(&mut w.quantum, &dto.quantum)?;
+    }
     Ok(w)
 }
 
@@ -4283,6 +4642,10 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     // The nuclear block: a default payload carries the default
     // configuration, so applying it unconditionally is equivalent.
     w.nuclear.config = nuclear_config_from_dto(&dto.nuclear);
+    // Schema v15: the quantum field (see `world2_from_dto`).
+    if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
+        apply_quantum(&mut w.quantum, &dto.quantum)?;
+    }
     Ok(w)
 }
 
@@ -4295,6 +4658,10 @@ fn write_u8(out: &mut Vec<u8>, v: u8) {
 }
 
 fn write_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+fn write_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
@@ -4328,6 +4695,13 @@ impl<'a> Reader<'a> {
     fn read_u32(&mut self) -> Result<u32, SnapshotError> {
         let b = self.take(4)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, SnapshotError> {
+        let b = self.take(8)?;
+        Ok(u64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
     }
 
     fn read_f32(&mut self) -> Result<f32, SnapshotError> {
@@ -4987,6 +5361,11 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         }
     }
     encode_fluid2(&mut p, &dto.fluid, dto.schema);
+    // Schema v15: the quantum field block, appended at the end of the
+    // payload (own block, so every earlier payload still decodes).
+    if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
+        encode_quantum(&mut p, &dto.quantum)?;
+    }
     Ok(encode_envelope(KIND_WORLD2, dto.schema, &p))
 }
 
@@ -5465,6 +5844,89 @@ fn decode_fluid3(r: &mut Reader, version: u32) -> Result<Fluid3Dto, SnapshotErro
         });
     }
     Ok(Fluid3Dto { config, particles })
+}
+
+/// Encode the schema v15 quantum block: the configuration, the field's
+/// clock and the wavefunction's amplitudes.
+///
+/// The block is appended at the end of the payload, so every earlier
+/// payload still decodes.
+fn encode_quantum(out: &mut Vec<u8>, q: &QuantumDto) -> Result<(), SnapshotError> {
+    if q.real.len() != q.imag.len() {
+        return Err(SnapshotError::Corrupt(
+            "quantum real and imaginary amplitude counts disagree".into(),
+        ));
+    }
+    // The reader rejects a longer wavefunction, so the writer must
+    // refuse it too: a save must never produce a file the same engine
+    // cannot load.
+    if q.real.len() > MAX_QUANTUM_GRID {
+        return Err(SnapshotError::Corrupt(format!(
+            "quantum wavefunction too long: {} amplitudes (max {MAX_QUANTUM_GRID})",
+            q.real.len()
+        )));
+    }
+    write_u8(out, u8::from(q.config.enabled));
+    write_u32(out, q.config.method);
+    write_u32(out, q.config.boundary);
+    write_u32(out, q.config.grid_size);
+    write_f32(out, q.config.domain_min);
+    write_f32(out, q.config.domain_max);
+    write_f32(out, q.config.mass);
+    write_f32(out, q.config.hbar);
+    write_f32(out, q.config.omega);
+    write_u64(out, q.config.seed);
+    write_f32(out, q.time);
+    write_u32(out, q.real.len() as u32);
+    for r in &q.real {
+        write_f32(out, *r);
+    }
+    for i in &q.imag {
+        write_f32(out, *i);
+    }
+    Ok(())
+}
+
+/// Decode the schema v15 quantum block.
+///
+/// An older payload carries no block, so the field stays off.
+fn decode_quantum(r: &mut Reader, version: u32) -> Result<QuantumDto, SnapshotError> {
+    if version < SNAPSHOT_SCHEMA_QUANTUM {
+        return Ok(QuantumDto::default());
+    }
+    let config = QuantumConfigDto {
+        enabled: r.read_u8()? != 0,
+        method: r.read_u32()?,
+        boundary: r.read_u32()?,
+        grid_size: r.read_u32()?,
+        domain_min: r.read_f32()?,
+        domain_max: r.read_f32()?,
+        mass: r.read_f32()?,
+        hbar: r.read_f32()?,
+        omega: r.read_f32()?,
+        seed: r.read_u64()?,
+    };
+    let time = r.read_f32()?;
+    let count = r.read_u32()? as usize;
+    if count > MAX_QUANTUM_GRID {
+        return Err(SnapshotError::Parse(
+            "quantum amplitude count exceeds the limit".into(),
+        ));
+    }
+    let mut real = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        real.push(r.read_f32()?);
+    }
+    let mut imag = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        imag.push(r.read_f32()?);
+    }
+    Ok(QuantumDto {
+        config,
+        time,
+        real,
+        imag,
+    })
 }
 
 fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
@@ -6230,6 +6692,9 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
             v
         },
         fluid: decode_fluid2(&mut r, version)?,
+        // Schema v15: the quantum field block (at the end of the
+        // payload).
+        quantum: decode_quantum(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(
@@ -6440,6 +6905,10 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         }
     }
     encode_fluid3(&mut p, &dto.fluid, dto.schema);
+    // Schema v15: the quantum field block (see `encode_world2`).
+    if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
+        encode_quantum(&mut p, &dto.quantum)?;
+    }
     Ok(encode_envelope(KIND_WORLD3, dto.schema, &p))
 }
 
@@ -6738,6 +7207,8 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             v
         },
         fluid: decode_fluid3(&mut r, version)?,
+        // Schema v15: the quantum field block (see `world2_from_binary`).
+        quantum: decode_quantum(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(

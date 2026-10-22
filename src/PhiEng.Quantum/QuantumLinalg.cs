@@ -191,25 +191,9 @@ public static partial class QuantumLinalg
     /// undefined.
     /// </para>
     /// <para>
-    /// <b>A divergence from the Rust, and why.</b> The Rust's
-    /// <c>tridiagonal_solve</c> is not the Thomas algorithm it documents:
-    /// its forward sweep computes the pivot as
-    /// <c>diagonal[i] - e * out[i-1]</c>, where <c>out[i-1]</c> already
-    /// holds the <em>modified right-hand side</em> rather than the
-    /// elimination multiplier, and its back substitution then divides by
-    /// nothing - it subtracts <c>e * out[i+1]</c> where the multiplier
-    /// <c>e / pivot</c> belongs. On a four by four system whose solution
-    /// is <c>[1, 2, 3, 4]</c> the Rust returns
-    /// <c>[6.55451, 6.05451, 4.872692, 3.037249]</c>. The consequence
-    /// reaches far: the Rust's inverse iteration overflows and returns
-    /// nothing, so its <c>ground_state</c> silently falls back to the
-    /// <em>initial</em> ramp instead of a ground state.
-    /// </para>
-    /// <para>
-    /// This mirror implements the algorithm the Rust documents, so the
-    /// stationary Schrödinger equation actually produces a ground state.
-    /// Everything else in this module - the Sturm count, the bisection,
-    /// the eigenvalues - is bit-for-bit identical to the Rust.
+    /// This matches the Rust <c>tridiagonal_solve_with</c> operation for
+    /// operation - the same multipliers, the same pivot, the same back
+    /// substitution - so the two engines agree bit-for-bit.
     /// </para>
     /// </remarks>
     public static bool TridiagonalSolve(

@@ -244,6 +244,11 @@ pub struct World2 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Quantum wavefunction (see [`phieng_quantum::field`]). Disabled by
+    /// default, so a world that never asks for a wavefunction behaves
+    /// exactly as it did before the field existed — down to the last
+    /// bit of its trajectory.
+    pub quantum: phieng_quantum::field::QuantumField,
     /// Per-phase wall-clock accumulators. Only present with the
     /// `phase-timing` feature; the default build has no such field, so
     /// the struct's layout and public API are unchanged.
@@ -321,6 +326,7 @@ impl World2 {
             next_joint_id: 0,
             fluid: super::fluid::FluidState2::new(),
             thermal: super::thermal::ThermalState2::new(),
+            quantum: phieng_quantum::field::QuantumField::default(),
             nuclear: super::nuclear::NuclearState2::new(),
             #[cfg(feature = "phase-timing")]
             phase_timings: super::phase_timing::PhaseTimings::default(),
@@ -1207,6 +1213,14 @@ impl World2 {
             // non-zero (the default), so trajectories stay bit-identical.
             super::thermal::apply_expansion_2d(&mut self.bodies, &thermal_config);
         });
+
+        // 5e. The quantum wavefunction advances with the world's step. The
+        // field is off by default, so this is a branch and not a
+        // behaviour change: a world that never asks for a wavefunction
+        // keeps its trajectory to the last bit.
+        if self.quantum.is_enabled() {
+            self.quantum.step(dt);
+        }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep.
         // Sleep needs slowness AND support (a current contact, tracked
@@ -2117,6 +2131,11 @@ pub struct World3 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Quantum wavefunction (see [`phieng_quantum::field`]). Disabled by
+    /// default, so a world that never asks for a wavefunction behaves
+    /// exactly as it did before the field existed — down to the last
+    /// bit of its trajectory.
+    pub quantum: phieng_quantum::field::QuantumField,
     /// Per-phase wall-clock accumulators. Only present with the
     /// `phase-timing` feature; the default build has no such field, so
     /// the struct's layout and public API are unchanged.
@@ -2197,6 +2216,7 @@ impl World3 {
             next_joint_id: 0,
             fluid: super::fluid3::FluidState3::new(),
             thermal: super::thermal::ThermalState3::new(),
+            quantum: phieng_quantum::field::QuantumField::default(),
             nuclear: super::nuclear::NuclearState2::new(),
             #[cfg(feature = "phase-timing")]
             phase_timings: super::phase_timing::PhaseTimings::default(),
@@ -2884,6 +2904,13 @@ impl World3 {
             // 5d. Thermal expansion (see World2::step_inner).
             super::thermal::apply_expansion_3d(&mut self.bodies, &thermal_config);
         });
+
+        // 5e. The quantum wavefunction advances with the world's step (see
+        // World2::step_inner phase 5e). The field is off by default, so
+        // this is a branch and not a behaviour change.
+        if self.quantum.is_enabled() {
+            self.quantum.step(dt);
+        }
 
         // 6+7. Validate bodies + update sleep in a single fused sweep
         // (bit-identical to validate-all-then-sleep-all; see World2).

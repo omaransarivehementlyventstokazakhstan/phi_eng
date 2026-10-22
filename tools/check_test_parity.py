@@ -95,6 +95,21 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               matrix operations, the eigensolver's spectrum, the
               eigenvectors that rebuild the matrix, and the power
               iteration's dominant eigenvalue)
+    M27-M34  the time evolution (mirrored both languages: the
+              transform round-trips, the Crank-Nicolson method conserves
+              the norm and the energy and converges at the second order,
+              the split operator conserves the norm and refuses a
+              mismatched boundary, the probabilities sum to one, the
+              sampling follows the Born rule, the field is inert until
+              switched on, and the FFI round-trips the configuration and
+              the amplitudes)
+    M35-M38  the quantum field in the snapshot (mirrored both languages:
+              a world with a wavefunction round-trips through the binary
+              and the JSON with its configuration and its amplitudes
+              intact, a world without one keeps the schema it had before
+              the field existed, a file written before v15 loads with the
+              field off, and the bytes the Rust writer produces are the
+              bytes the managed mirror produces)
     U01-U12  radiation model expansion (mirrored both languages: the
               legacy view-factor model is the default and matches the
               historical formula, the symmetric model matches it for
