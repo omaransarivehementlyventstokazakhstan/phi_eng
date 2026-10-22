@@ -40,16 +40,19 @@ public static class Snapshot
     /// tag) and the material/per-body thermal fields; v9 adds the
     /// collision-tier ceiling; v10 adds the thermal sub-feature block
     /// (radiation occlusion, forced convection, thermal expansion) and
-    /// the per-body applied expansion factor.
+    /// the per-body applied expansion factor; v13 adds the per-body
+    /// collision filter (layer and mask); v14 adds the per-body sensor
+    /// flag.
     /// Writers emit v3 for default worlds, v4 for gravity-only worlds, v5
     /// for ambient/fluid worlds, v6 for CCD worlds (byte-compatible with
     /// older files), v7 for worlds with non-default solver switches, and
-    /// v10 for worlds with an active thermal config or any non-default
-    /// thermal sub-feature. The binary layout is byte-identical to the
+    /// v14 for worlds with an active thermal config, any non-default
+    /// thermal sub-feature, the nuclear block, a non-default collision
+    /// filter or a sensor body. The binary layout is byte-identical to the
     /// Rust writer's, so a file written by either engine loads in the
     /// other.
     /// </summary>
-    public const uint SchemaVersion = 13;
+    public const uint SchemaVersion = 14;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -108,6 +111,10 @@ public static class Snapshot
     /// <summary>Schema that introduced the per-body collision filter (v13).
     /// Bodies without one keep the default layer and mask.</summary>
     public const uint CollisionFiltersSchemaVersion = 13;
+
+    /// <summary>Schema that introduced the per-body sensor flag (v14).
+    /// Bodies without one stay ordinary bodies.</summary>
+    public const uint SensorsSchemaVersion = 14;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -514,6 +521,11 @@ public static class Snapshot
         /// <summary>Collision layers the body accepts (schema v13).</summary>
         [JsonPropertyName("collision_mask")]
         public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
+        /// <summary>
+        /// Is a sensor (schema v14). Defaults to false, so a file that
+        /// predates the flag keeps every body ordinary.
+        /// </summary>
+        [JsonPropertyName("is_sensor")] public bool IsSensor { get; set; }
     }
 
     private sealed class Body3Dto
@@ -545,6 +557,8 @@ public static class Snapshot
         /// <summary>Collision layers the body accepts (schema v13).</summary>
         [JsonPropertyName("collision_mask")]
         public uint CollisionMask { get; set; } = CollisionFilter.DefaultMask;
+        /// <summary>Is a sensor (schema v14). See <c>Body2Dto.IsSensor</c>.</summary>
+        [JsonPropertyName("is_sensor")] public bool IsSensor { get; set; }
     }
 
     private sealed class Joint2Dto
@@ -947,7 +961,11 @@ public static class Snapshot
             bool hasCollisionFilters = w.Bodies.Any(b =>
                 b.CollisionGroup != CollisionFilter.DefaultGroup
                 || b.CollisionMask != CollisionFilter.DefaultMask);
+            // Schema v14: a body that is a sensor needs the v14 record,
+            // or the flag would be silently dropped on save.
+            bool hasSensors = w.Bodies.Any(b => b.IsSensor);
             uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
+                || hasSensors
                 ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
@@ -1144,6 +1162,7 @@ public static class Snapshot
         },
         CollisionGroup = b.CollisionGroup,
         CollisionMask = b.CollisionMask,
+        IsSensor = b.IsSensor,
                 });
             }
             bool fresh = mode == SnapshotLoadMode.Fresh;
@@ -1353,7 +1372,11 @@ public static class Snapshot
             bool hasCollisionFilters = w.Bodies.Any(b =>
                 b.CollisionGroup != CollisionFilter.DefaultGroup
                 || b.CollisionMask != CollisionFilter.DefaultMask);
+            // Schema v14: a body that is a sensor needs the v14 record,
+            // or the flag would be silently dropped on save.
+            bool hasSensors = w.Bodies.Any(b => b.IsSensor);
             uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
+                || hasSensors
                 ? SchemaVersion
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
@@ -1645,6 +1668,7 @@ public static class Snapshot
         },
         CollisionGroup = b.CollisionGroup,
         CollisionMask = b.CollisionMask,
+        IsSensor = b.IsSensor,
                 });
             }
             if (mode == SnapshotLoadMode.Exact)
@@ -2061,6 +2085,9 @@ public static class Snapshot
             // the default layer and mask, which accept every pair.
             body.CollisionGroup = b.CollisionGroup;
             body.CollisionMask = b.CollisionMask;
+            // The sensor flag (schema v14). A file without one keeps the
+            // body an ordinary body.
+            body.IsSensor = b.IsSensor;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2273,6 +2300,9 @@ public static class Snapshot
             // the default layer and mask, which accept every pair.
             body.CollisionGroup = b.CollisionGroup;
             body.CollisionMask = b.CollisionMask;
+            // The sensor flag (schema v14). A file without one keeps the
+            // body an ordinary body.
+            body.IsSensor = b.IsSensor;
             body.IsSleeping = b.IsSleeping;
             w.AddBody(body);
         }
@@ -2922,6 +2952,11 @@ public static class Snapshot
                 w.Write(b.CollisionGroup);
                 w.Write(b.CollisionMask);
             }
+            // Schema v14: the per-body sensor flag.
+            if (dto.Schema >= SensorsSchemaVersion)
+            {
+                w.Write(b.IsSensor ? (byte)1 : (byte)0);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j);
@@ -3224,6 +3259,7 @@ public static class Snapshot
                 CollisionMask = version >= CollisionFiltersSchemaVersion
                     ? r.ReadUInt32()
                     : CollisionFilter.DefaultMask,
+                IsSensor = version >= SensorsSchemaVersion ? r.ReadByte() != 0 : false,
             };
             dto.Bodies.Add(b);
         }
@@ -3586,6 +3622,11 @@ public static class Snapshot
                 w.Write(b.CollisionGroup);
                 w.Write(b.CollisionMask);
             }
+            // Schema v14: the per-body sensor flag.
+            if (dto.Schema >= SensorsSchemaVersion)
+            {
+                w.Write(b.IsSensor ? (byte)1 : (byte)0);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j);
@@ -3695,6 +3736,7 @@ public static class Snapshot
                 CollisionMask = version >= CollisionFiltersSchemaVersion
                     ? r.ReadUInt32()
                     : CollisionFilter.DefaultMask,
+                IsSensor = version >= SensorsSchemaVersion ? r.ReadByte() != 0 : false,
             });
         }
         int nj = r.ReadInt32();
