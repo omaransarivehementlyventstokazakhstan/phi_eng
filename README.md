@@ -419,6 +419,14 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **The gates and circuits (both languages):** the single-qubit
+  gates (H, X, Y, Z, S, T, RX, RY, RZ, U3), the entangling gates (CNOT,
+  CZ, SWAP, Toffoli, Fredkin), the Bloch sphere, the measurement rule
+  and a circuit with a seeded measurement stream -- plus Deutsch-Jozsa,
+  Bernstein-Vazirani, Grover, the quantum Fourier transform,
+  teleportation and superdense coding. Qubit 0 is the least significant
+  bit of the basis index, and a gate is never embedded in the full
+  matrix. Pinned by M39-M48 (Rust<->C# parity).
 - **The time evolution of a wavefunction (both languages):** the
   Crank-Nicolson method (one complex tridiagonal solve per step --
   second order, unconditionally stable, norm-conserving to the rounding)

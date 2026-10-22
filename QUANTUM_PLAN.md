@@ -164,7 +164,11 @@ parity checker's ID list, and the native DLL restaged.
       with the managed `PhiNativeWorld(3)` wrappers, and schema v15.
       Pinned by M27-M38. The split operator's kinetic sine comes from
       the deterministic trigonometry, never the platform libm.
-- [ ] **Stage E** — the gates and circuits.
+- [x] **Stage E** — the gates and circuits.
+      `crates/quantum/src/{gates,circuit}.rs`, mirrored by
+      `src/PhiEng.Quantum/{Gates,Circuit}.cs`. Pinned by M39-M48. A gate
+      is never embedded in the full matrix; the inverse Fourier
+      transform does its swaps first, because F = S U means F' = U' S.
 - [ ] **Stage F** — the game-facing layer.
 - [ ] **Stage G** — spin and particles.
 - [ ] **Stage H** — entanglement and information.

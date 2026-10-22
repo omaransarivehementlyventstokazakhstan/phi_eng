@@ -103,6 +103,13 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               sampling follows the Born rule, the field is inert until
               switched on, and the FFI round-trips the configuration and
               the amplitudes)
+    M39-M48  the gates and circuits (mirrored both languages: the
+              single-qubit gate identities, the entangling gates' truth
+              tables, the Bloch sphere, the measurement rule, the
+              Deutsch-Jozsa and Bernstein-Vazirani oracles in one query,
+              the Grover search, the Fourier transform round trip, the
+              teleportation fidelity and the superdense coding round
+              trip)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

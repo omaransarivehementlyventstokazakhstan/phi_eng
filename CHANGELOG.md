@@ -8,6 +8,23 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The gates and circuits.** The engine can now do quantum
+  computation: the single-qubit gates (H, X, Y, Z, S, T, RX, RY, RZ,
+  U3), the entangling gates (CNOT, CZ, SWAP, Toffoli, Fredkin), the
+  Bloch sphere, the measurement rule and a circuit with a seeded
+  measurement stream -- plus the textbook algorithms: Deutsch-Jozsa,
+  Bernstein-Vazirani, Grover, the quantum Fourier transform,
+  teleportation and superdense coding.
+
+  Qubit 0 is the least significant bit of the basis index
+  (little-endian), and a gate is never embedded in the full matrix: the
+  amplitudes that differ only in the gate's qubits are visited in
+  ascending order, in place. The managed mirror (`PhiEng.Quantum`)
+  performs the same operations in the same order, so the two engines
+  agree to the last bit.
+
+  Mirrored Rust<->C# tests: **M39-M48** (`crates/engine/tests/quantum_gates.rs`,
+  `tests/PhiEng.Tests/QuantumGatesTests.cs`).
 - **The time evolution of a wavefunction.** The engine can now
   advance a wavefunction in time: the Crank-Nicolson method (one
   complex tridiagonal solve per step -- second order, unconditionally
