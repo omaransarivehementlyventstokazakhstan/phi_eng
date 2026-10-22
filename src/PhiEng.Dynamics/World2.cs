@@ -377,6 +377,63 @@ public class World2
     /// </summary>
     public bool CollectContactEvents { get; set; }
 
+    /// <summary>
+    /// Cast a ray into the world and return the first thing it hits.
+    /// </summary>
+    /// <remarks>
+    /// The ray is tested against every body's current shape; the body
+    /// that is hit first wins. A body the filter does not accept is not
+    /// considered. A ray that starts inside a shape does not hit it.
+    /// </remarks>
+    public (uint Body, float T, Vector2 Point, Vector2 Normal)? Raycast(
+        Vector2 origin, Vector2 direction, float maxT, QueryFilter filter)
+    {
+        (uint Body, float T, Vector2 Point, Vector2 Normal)? best = null;
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            Vector2 point;
+            Vector2 normal;
+            float t;
+            bool hit;
+            switch (body.Shape)
+            {
+                case CircleShape circle:
+                    hit = Collision.Query.RayCircle(
+                        origin, direction, body.Transform.Position, circle.Radius,
+                        out t, out point, out normal);
+                    break;
+                case BoxShape2 box:
+                    hit = Collision.Query.RayObb(
+                        origin, direction, body.Transform.Position, body.Transform.Rotation,
+                        box.HalfExtents, out t, out point, out normal);
+                    break;
+                case PolygonShape polygon:
+                    var world = new Vector2[polygon.Vertices.Count];
+                    for (int i = 0; i < polygon.Vertices.Count; i++)
+                    {
+                        world[i] = body.Transform.TransformPoint(polygon.Vertices[i]);
+                    }
+                    hit = Collision.Query.RayPolygon(
+                        origin, direction, world, out t, out point, out normal);
+                    break;
+                default:
+                    hit = false;
+                    t = 0.0f;
+                    point = Vector2.Zero;
+                    normal = Vector2.Zero;
+                    break;
+            }
+            if (!hit || t > maxT) continue;
+            if (best == null || t < best.Value.T)
+            {
+                best = ((uint)body.Id, t, point, normal);
+            }
+        }
+        return best;
+    }
+
     /// <summary>The contact events of the last step.</summary>
     /// <remarks>
     /// One event per pair that began or stopped touching. The events

@@ -185,9 +185,12 @@ K31–K44 (3D) parity tests, plus the generic
 `phieng_world_add_joint` / `phieng_world3_add_joint` FFI bridges and
 their managed mirrors). Not yet built: non-zero compliance (springs —
 rejected with `JointError::UnsupportedCompliance` rather than faked),
-motors, and breakable limits. Ray/shape queries beyond the AABB overlap
-are not built yet (no ray cast, shape overlap, point test or closest
-point).
+motors, and breakable limits. The ray cast covers the analytic shapes
+(a circle, an oriented box and a convex polygon in 2D; a sphere, an
+oriented box and a capsule in 3D) but not the convex ones: a ray that
+would hit a convex hull or a convex mesh is reported as a miss. The
+other shape queries (shape overlap, point test, closest point) are not
+built yet.
 Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;

@@ -2026,6 +2026,122 @@ pub unsafe extern "C" fn phieng_world3_get_contact_event(
     1
 }
 
+/// Cast a ray into the world and return the first thing it hits (2D).
+///
+/// The hit is written to `out` as body id, distance, contact point
+/// (x, y) and contact normal (x, y). Returns 1 on a hit, 0 on a miss
+/// and -1 on invalid input.
+///
+/// `group` and `mask` are the query's collision filter: a body is only
+/// considered when it accepts the query's group and the query's mask
+/// accepts the body's group.
+///
+/// # Safety
+/// See [`phieng_world_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_raycast(
+    world: *const World2,
+    origin_x: f32,
+    origin_y: f32,
+    direction_x: f32,
+    direction_y: f32,
+    max_t: f32,
+    group: u32,
+    mask: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return -1;
+    }
+    if !valid(origin_x)
+        || !valid(origin_y)
+        || !valid(direction_x)
+        || !valid(direction_y)
+        || !valid(max_t)
+    {
+        return -1;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let ray = phieng_collision::Ray2::new(
+        glam::Vec2::new(origin_x, origin_y),
+        glam::Vec2::new(direction_x, direction_y),
+    );
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let Some(hit) = world_ref.raycast(&ray, &filter) else {
+        return 0;
+    };
+    if hit.t > max_t {
+        return 0;
+    }
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+    out[0] = hit.body as f32;
+    out[1] = hit.t;
+    out[2] = hit.point.x;
+    out[3] = hit.point.y;
+    out[4] = hit.normal.x;
+    out[5] = hit.normal.y;
+    1
+}
+
+/// Cast a ray into the world and return the first thing it hits (3D).
+///
+/// The hit is written to `out` as body id, distance, contact point
+/// (x, y, z) and contact normal (x, y, z). Returns 1 on a hit, 0 on a
+/// miss and -1 on invalid input.
+///
+/// # Safety
+/// See [`phieng_world3_set_body_transform`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_raycast(
+    world: *const phieng_dynamics::World3,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+    max_t: f32,
+    group: u32,
+    mask: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return -1;
+    }
+    if !valid(origin_x)
+        || !valid(origin_y)
+        || !valid(origin_z)
+        || !valid(direction_x)
+        || !valid(direction_y)
+        || !valid(direction_z)
+        || !valid(max_t)
+    {
+        return -1;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let ray = phieng_collision::Ray3::new(
+        glam::Vec3::new(origin_x, origin_y, origin_z),
+        glam::Vec3::new(direction_x, direction_y, direction_z),
+    );
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let Some(hit) = world_ref.raycast(&ray, &filter) else {
+        return 0;
+    };
+    if hit.t > max_t {
+        return 0;
+    }
+    let out = unsafe { std::slice::from_raw_parts_mut(out, 9) };
+    out[0] = hit.body as f32;
+    out[1] = hit.t;
+    out[2] = hit.point.x;
+    out[3] = hit.point.y;
+    out[4] = hit.point.z;
+    out[5] = hit.normal.x;
+    out[6] = hit.normal.y;
+    out[7] = hit.normal.z;
+    1
+}
+
 /// Set a body's collision filter (2D).
 ///
 /// `group` is the layer the body belongs to; `mask` is the set of

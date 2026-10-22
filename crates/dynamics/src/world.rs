@@ -14,6 +14,10 @@ use super::validation::{
 };
 use glam::{Vec2, Vec3};
 use phieng_broadphase::{Broadphase2, Broadphase3, BroadphaseMode};
+use phieng_collision::query::{
+    ray_capsule3, ray_circle2, ray_obb2, ray_obb3, ray_polygon2, ray_sphere3,
+};
+use phieng_collision::{Ray2, Ray3};
 use phieng_math::fxhash::FxHashMap;
 use phieng_math::{AABB2, AABB3};
 use phieng_math::{ANGULAR_SLEEP_THRESHOLD, CONTACT_MATCH_DIST_SQ, EPS, LINEAR_SLEEP_THRESHOLD};
@@ -269,6 +273,32 @@ fn sensor_contact_2d(contacts: &[ContactConstraint], key: (usize, usize)) -> (Ve
         .find(|c| (c.body_a, c.body_b) == key)
         .map(|c| (c.point, c.normal))
         .unwrap_or((Vec2::ZERO, Vec2::ZERO))
+}
+
+/// What a world ray cast hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldRayHit2 {
+    /// The body that was hit.
+    pub body: u32,
+    /// The distance along the ray.
+    pub t: f32,
+    /// The hit point, in world space.
+    pub point: Vec2,
+    /// The surface normal at the hit, in world space, facing the ray.
+    pub normal: Vec2,
+}
+
+/// What a world ray cast hit in 3D. See [`WorldRayHit2`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldRayHit3 {
+    /// The body that was hit.
+    pub body: u32,
+    /// The distance along the ray.
+    pub t: f32,
+    /// The hit point, in world space.
+    pub point: Vec3,
+    /// The surface normal at the hit, in world space, facing the ray.
+    pub normal: Vec3,
 }
 
 impl World2 {
@@ -1228,6 +1258,62 @@ impl World2 {
     #[cfg(feature = "phase-timing")]
     pub fn set_broadphase_skip_static_cells(&mut self, skip: bool) {
         self.broadphase.set_skip_static_cells(skip);
+    }
+
+    /// Cast a ray into the world and return the first thing it hits.
+    ///
+    /// The ray is tested against every body's current shape; the body
+    /// that is hit first (the smallest `t`) wins. A body the filter does
+    /// not accept is not considered. A ray that starts inside a shape
+    /// does not hit it.
+    ///
+    /// The scan is over the *current* body positions, not the broad
+    /// phase's grid, which holds the positions from before the last
+    /// solve.
+    pub fn raycast(&self, ray: &Ray2, filter: &QueryFilter) -> Option<WorldRayHit2> {
+        let mut best: Option<WorldRayHit2> = None;
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            let hit = match shape {
+                Shape2::Circle { radius } => {
+                    ray_circle2(ray.origin, ray.direction, body.transform.position, *radius)
+                }
+                Shape2::Box { half_extents } => ray_obb2(
+                    ray.origin,
+                    ray.direction,
+                    body.transform.position,
+                    body.transform.rotation,
+                    *half_extents,
+                ),
+                Shape2::Polygon { vertices } => {
+                    // The polygon in world space.
+                    let world: Vec<Vec2> = vertices
+                        .iter()
+                        .map(|v| body.transform.transform_point(*v))
+                        .collect();
+                    ray_polygon2(ray.origin, ray.direction, &world)
+                }
+            };
+            let Some(hit) = hit else { continue };
+            let nearer = match best {
+                Some(current) => hit.t < current.t,
+                None => true,
+            };
+            if nearer {
+                best = Some(WorldRayHit2 {
+                    body: body.id as u32,
+                    t: hit.t,
+                    point: hit.point,
+                    normal: hit.normal,
+                });
+            }
+        }
+        best
     }
 
     /// The contact events of the last step.
@@ -3170,6 +3256,64 @@ impl World3 {
             }
             None => Box::new(move |_dir: Vec3| fallback_pos),
         }
+    }
+
+    /// Cast a ray into the world and return the first thing it hits.
+    ///
+    /// See [`World2::raycast`]. The convex shapes (a convex hull and a
+    /// convex mesh) are not tested yet: a ray that would hit one is
+    /// reported as a miss.
+    pub fn raycast(&self, ray: &Ray3, filter: &QueryFilter) -> Option<WorldRayHit3> {
+        let mut best: Option<WorldRayHit3> = None;
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            let hit = match shape {
+                Shape3::Sphere { radius } => {
+                    ray_sphere3(ray.origin, ray.direction, body.transform.position, *radius)
+                }
+                Shape3::Box { half_extents } => ray_obb3(
+                    ray.origin,
+                    ray.direction,
+                    body.transform.position,
+                    body.transform.rotation,
+                    *half_extents,
+                ),
+                Shape3::Capsule {
+                    radius,
+                    half_length,
+                } => {
+                    // The capsule axis is the body's local Y.
+                    let axis = body.transform.rotation * Vec3::Y * *half_length;
+                    ray_capsule3(
+                        ray.origin,
+                        ray.direction,
+                        body.transform.position + axis,
+                        body.transform.position - axis,
+                        *radius,
+                    )
+                }
+                Shape3::ConvexHull { .. } | Shape3::ConvexMesh { .. } => None,
+            };
+            let Some(hit) = hit else { continue };
+            let nearer = match best {
+                Some(current) => hit.t < current.t,
+                None => true,
+            };
+            if nearer {
+                best = Some(WorldRayHit3 {
+                    body: body.id as u32,
+                    t: hit.t,
+                    point: hit.point,
+                    normal: hit.normal,
+                });
+            }
+        }
+        best
     }
 
     /// The contact events of the last step.

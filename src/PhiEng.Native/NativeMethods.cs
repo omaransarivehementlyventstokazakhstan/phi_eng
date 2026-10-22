@@ -244,6 +244,36 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     internal static partial int phieng_world3_get_body_id_at(IntPtr world, uint index);
 
+    /// <summary>Casts a ray into the world and returns the first hit (2D).</summary>
+    /// <returns>1 on a hit, 0 on a miss, -1 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_raycast(
+        IntPtr world,
+        float originX,
+        float originY,
+        float directionX,
+        float directionY,
+        float maxT,
+        uint group,
+        uint mask,
+        float* outHit);
+
+    /// <summary>Casts a ray into the world and returns the first hit (3D).</summary>
+    /// <returns>1 on a hit, 0 on a miss, -1 on invalid input.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_raycast(
+        IntPtr world,
+        float originX,
+        float originY,
+        float originZ,
+        float directionX,
+        float directionY,
+        float directionZ,
+        float maxT,
+        uint group,
+        uint mask,
+        float* outHit);
+
     /// <summary>Makes a body a sensor (2D) or an ordinary body again.</summary>
     /// <returns>1 on success, 0 for a null world or an unknown body.</returns>
     [LibraryImport(LibraryName)]

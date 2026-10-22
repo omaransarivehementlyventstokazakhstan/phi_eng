@@ -138,8 +138,10 @@ fn l02_a_layer_that_does_not_accept_rejects_the_pair() {
 fn l03_one_sided_veto_stops_the_pair() {
     let (mut w, ball, _) = drop_2d();
     // The floor still accepts everything; the ball accepts only itself.
+    // A group is one bit, so the ball's group is the flag 0x2 and a mask
+    // that accepts it holds that same bit.
     w.bodies[ball].collision_group = 2;
-    w.bodies[ball].collision_mask = 1 << 2;
+    w.bodies[ball].collision_mask = 2;
 
     for _ in 0..240 {
         w.step(DT);

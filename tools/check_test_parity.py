@@ -53,6 +53,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              returns the bodies in the box in id order, the collision
              filter applies to queries, the query sees the current
              positions, 3D mirror, FFI round-trip)
+    X07-X12  the ray cast (mirrored both languages: the ray finds the
+             body in front of it, a ray that misses hits nothing, the
+             collision filter applies, the nearest body wins, 3D mirror,
+             FFI round-trip)
     Q01-Q05  solver quality tiers (mirrored both languages: iteration
              budgets, friction/restitution switches, snapshot round-trip)
     C01-C04  CCD tiers (mirrored both languages: thin-wall capture 2D/3D,

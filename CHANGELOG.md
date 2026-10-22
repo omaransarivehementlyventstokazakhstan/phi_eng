@@ -8,6 +8,29 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Ray casts.** The world can now be asked what a ray hits first: the
+  query a game needs to pick a body under the mouse, to fire a hitscan
+  or to sweep a character controller. `World2/3::raycast` tests the ray
+  against every body's current shape and returns the nearest hit, with
+  the contact point and the surface normal; the collision filter
+  applies, so a query can ignore the layers it does not care about.
+
+  The shape math is analytic and exact -- a circle, an oriented box and
+  a convex polygon in 2D, a sphere, an oriented box and a capsule in 3D
+  -- and lives in `phieng_collision::query`, mirrored by
+  `PhiEng.Collision.Query` so the two agree bit for bit. The convex
+  shapes (a convex hull and a convex mesh) are **not** ray-cast yet: a
+  ray that would hit one is reported as a miss.
+
+  The query runs against the *current* body positions, not the broad
+  phase's grid, which holds the positions from before the last solve.
+
+  FFI `phieng_world[_3]_raycast` (a null output array asks for the
+  count alone) plus the managed `World2/3.Raycast` and
+  `PhiNativeWorld(3).Raycast`.
+
+  Mirrored Rust↔C# tests: **X07–X12** (`crates/engine/tests/raycast.rs`,
+  `tests/PhiEng.Tests/RaycastTests.cs`).
 - **Contact events and trigger sensors.** A body can now be made a
   *sensor*: it reports its contacts as events and never pushes, so it
   falls through whatever it touches — that is what a trigger volume is.

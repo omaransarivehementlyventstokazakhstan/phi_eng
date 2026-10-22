@@ -419,6 +419,16 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z08 (Rust↔C# parity).
+- **Ray casts (2D and 3D, both languages):** `World2/3::raycast` returns
+  the first thing a ray hits, with the contact point and the surface
+  normal; the collision filter applies, so a query can ignore the
+  layers it does not care about. The shape math is analytic and exact
+  (a circle, an oriented box and a convex polygon in 2D; a sphere, an
+  oriented box and a capsule in 3D) and lives in
+  `phieng_collision::query`, mirrored by `PhiEng.Collision.Query` so the
+  two agree bit for bit. The convex shapes are not ray-cast yet. FFI
+  `phieng_world[_3]_raycast` plus the managed `World2/3.Raycast` and
+  `PhiNativeWorld(3).Raycast`. Pinned by X07–X12 (Rust↔C# parity).
 - **Scene queries (2D and 3D, both languages):** `World2/3::overlap_aabb`
   returns the bodies whose AABB overlaps a query box, in ascending id
   order, honouring the collision filter. The query runs against the

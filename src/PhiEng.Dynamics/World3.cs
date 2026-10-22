@@ -300,6 +300,63 @@ public class World3
     /// </summary>
     public bool CollectContactEvents { get; set; }
 
+    /// <summary>
+    /// Cast a ray into the world and return the first thing it hits.
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="World2.Raycast"/>. The convex shapes (a convex
+    /// hull and a convex mesh) are not tested yet: a ray that would hit
+    /// one is reported as a miss.
+    /// </remarks>
+    public (uint Body, float T, Vector3 Point, Vector3 Normal)? Raycast(
+        Vector3 origin, Vector3 direction, float maxT, QueryFilter filter)
+    {
+        (uint Body, float T, Vector3 Point, Vector3 Normal)? best = null;
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            Vector3 point;
+            Vector3 normal;
+            float t;
+            bool hit;
+            switch (body.Shape)
+            {
+                case SphereShape3 sphere:
+                    hit = Collision.Query.RaySphere(
+                        origin, direction, body.Transform.Position, sphere.Radius,
+                        out t, out point, out normal);
+                    break;
+                case BoxShape3 box:
+                    hit = Collision.Query.RayObb(
+                        origin, direction, body.Transform.Position, body.Transform.Rotation,
+                        box.HalfExtents, out t, out point, out normal);
+                    break;
+                case CapsuleShape3 capsule:
+                    // The capsule axis is the body's local Y.
+                    var axis = Vector3.Transform(Vector3.UnitY, body.Transform.Rotation)
+                        * capsule.HalfLength;
+                    hit = Collision.Query.RayCapsule(
+                        origin, direction,
+                        body.Transform.Position + axis, body.Transform.Position - axis,
+                        capsule.Radius, out t, out point, out normal);
+                    break;
+                default:
+                    hit = false;
+                    t = 0.0f;
+                    point = Vector3.Zero;
+                    normal = Vector3.Zero;
+                    break;
+            }
+            if (!hit || t > maxT) continue;
+            if (best == null || t < best.Value.T)
+            {
+                best = ((uint)body.Id, t, point, normal);
+            }
+        }
+        return best;
+    }
+
     /// <summary>The contact events of the last step.</summary>
     /// <remarks>
     /// One event per pair that began or stopped touching. The events

@@ -984,6 +984,40 @@ public sealed class PhiNativeWorld3 : IDisposable
     }
 
     /// <summary>
+    /// Cast a ray into the world and return the first thing it hits.
+    /// </summary>
+    /// <returns>
+    /// The body, the distance along the ray, the contact point and the
+    /// contact normal; null when the ray hits nothing.
+    /// </returns>
+    public unsafe (uint Body, float T, Vector3 Point, Vector3 Normal)? Raycast(
+        Vector3 origin, Vector3 direction, float maxT, uint group, uint mask)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var buffer = new float[9];
+            int ok;
+            fixed (float* p = buffer)
+            {
+                ok = NativeMethods.phieng_world3_raycast(_handle, origin.X, origin.Y, origin.Z,
+                    direction.X, direction.Y, direction.Z, maxT, group, mask, p);
+            }
+            if (ok < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(origin), "Invalid ray.");
+            }
+            if (ok == 0)
+            {
+                return null;
+            }
+            return ((uint)buffer[0], buffer[1],
+                new Vector3(buffer[2], buffer[3], buffer[4]),
+                new Vector3(buffer[5], buffer[6], buffer[7]));
+        }
+    }
+
+    /// <summary>
     /// Makes a body a sensor: it reports its contacts as contact
     /// events and never pushes, so it falls through whatever it
     /// touches. That is what a trigger volume is.
