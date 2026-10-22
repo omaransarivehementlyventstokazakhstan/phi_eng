@@ -151,7 +151,13 @@ parity checker's ID list, and the native DLL restaged.
       `src/PhiEng.Quantum/`. Pinned by M09-M16. The Jacobi rotation's
       sign convention is derived in the code, because getting it wrong
       silently breaks the trace.
-- [ ] **Stage C** — the stationary 1D Schrödinger equation.
+- [x] **Stage C** — the stationary 1D Schrödinger equation.
+      `crates/quantum/src/{grid,potential,hamiltonian}.rs` plus the
+      tridiagonal solvers in `linalg.rs`, mirrored by
+      `src/PhiEng.Quantum/`. Pinned by M17-M26. The ground state comes
+      from the inverse iteration, not the relaxation: the relaxation
+      converges at a rate set by the ratio of the spectral width to the
+      gap, and the width of a discretised Hamiltonian is enormous.
 - [ ] **Stage D** — the time evolution, the FFI, snapshot v15.
 - [ ] **Stage E** — the gates and circuits.
 - [ ] **Stage F** — the game-facing layer.

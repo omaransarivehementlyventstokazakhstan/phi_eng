@@ -419,6 +419,15 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **The stationary Schrodinger equation (both languages):** a
+  `Hamiltonian1D` (the three-point kinetic stencil plus a potential),
+  the potentials (a harmonic trap, a square well, a step, a double well,
+  a soft Coulomb and a custom one), the Dirichlet and periodic boundary
+  conditions, and the solvers -- the Sturm bisection for the spectrum
+  and the inverse iteration for the ground state. The Hamiltonian is
+  *matrix-free*: it is applied as a stencil, so a thousand-point
+  Hamiltonian costs three operations per point and never materialises a
+  matrix. Pinned by M17-M26 (Rust<->C# parity).
 - **The quantum vocabulary (both languages):** a new `phieng-quantum`
   crate gives the engine the nouns quantum mechanics is written in: a
   `QuantumState` (a vector of complex amplitudes, with the Born

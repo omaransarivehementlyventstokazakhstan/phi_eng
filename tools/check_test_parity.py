@@ -81,6 +81,13 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               generator's pinned stream, reproducible seeding, the
               float mapping, the normal deviate, and a stream that
               resumes exactly from a saved state)
+    M17-M26  the stationary Schrodinger equation (mirrored both
+              languages: the infinite well's spectrum, the harmonic
+              oscillator's spectrum, a ground state that is normalised
+              and symmetric, the harmonic ground state's peak, the
+              Sturm count, the tridiagonal solve, the lowest
+              eigenvector, the double well, the soft Coulomb ground
+              state, and the grid)
     M09-M16  the quantum vocabulary (mirrored both languages: a state
               normalises and its Born probabilities follow, a Hermitian
               expectation is real, the Born probability is a projector

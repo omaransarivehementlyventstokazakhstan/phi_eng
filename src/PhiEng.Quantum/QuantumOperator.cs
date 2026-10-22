@@ -19,8 +19,18 @@ public interface IQuantumOperator
     /// <summary>The dimension of the space this operator acts on.</summary>
     int Dim { get; }
 
-    /// <summary>Apply the operator to a state, in place.</summary>
-    void Apply(Complex32[] psi);
+    /// <summary>
+    /// Apply the operator to a state, into a separate buffer.
+    /// </summary>
+    /// <remarks>
+    /// The application writes into a separate buffer rather than in
+    /// place. A stencil operator reads its neighbours while it writes,
+    /// so it cannot work in place without a copy - and a copy that
+    /// allocates on every call is a per-frame allocation, which this
+    /// engine does not have. The two-buffer form lets the caller own
+    /// the scratch.
+    /// </remarks>
+    void ApplyTo(Complex32[] psi, Complex32[] outState);
 }
 
 /// <summary>
@@ -29,14 +39,6 @@ public interface IQuantumOperator
 /// </summary>
 public static class QuantumOperators
 {
-    /// <summary>Apply an operator to a state, into a separate buffer.</summary>
-    public static void ApplyTo(IQuantumOperator op, Complex32[] psi, Complex32[] outState)
-    {
-        int n = System.Math.Min(op.Dim, System.Math.Min(psi.Length, outState.Length));
-        Array.Copy(psi, outState, n);
-        op.Apply(outState);
-    }
-
     /// <summary>A dense operator: a matrix, applied as a matrix.</summary>
     public static IQuantumOperator Dense(ComplexMatrix matrix) => new DenseOperator(matrix);
 
@@ -65,16 +67,14 @@ public sealed class DenseOperator : IQuantumOperator
     public int Dim => _matrix.Rows;
 
     /// <inheritdoc/>
-    public void Apply(Complex32[] psi)
+    public void ApplyTo(Complex32[] psi, Complex32[] outState)
     {
-        int n = System.Math.Min(_matrix.Rows, psi.Length);
+        int n = System.Math.Min(_matrix.Rows, System.Math.Min(psi.Length, outState.Length));
         if (n == 0)
         {
             return;
         }
-        var buffer = new Complex32[n];
-        _matrix.MatVec(psi, buffer);
-        Array.Copy(buffer, psi, n);
+        _matrix.MatVec(psi, outState);
     }
 }
 
@@ -96,12 +96,12 @@ public sealed class DiagonalOperator : IQuantumOperator
     public int Dim => _values.Length;
 
     /// <inheritdoc/>
-    public void Apply(Complex32[] psi)
+    public void ApplyTo(Complex32[] psi, Complex32[] outState)
     {
-        int n = System.Math.Min(_values.Length, psi.Length);
+        int n = System.Math.Min(_values.Length, System.Math.Min(psi.Length, outState.Length));
         for (int i = 0; i < n; i++)
         {
-            psi[i] = _values[i] * psi[i];
+            outState[i] = _values[i] * psi[i];
         }
     }
 }
@@ -119,8 +119,9 @@ public sealed class IdentityOperator : IQuantumOperator
     public int Dim { get; }
 
     /// <inheritdoc/>
-    public void Apply(Complex32[] psi)
+    public void ApplyTo(Complex32[] psi, Complex32[] outState)
     {
-        // The identity changes nothing.
+        int n = System.Math.Min(Dim, System.Math.Min(psi.Length, outState.Length));
+        Array.Copy(psi, outState, n);
     }
 }

@@ -8,6 +8,30 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The stationary Schrodinger equation.** The engine can now solve
+  the one-dimensional time-independent Schrodinger equation on a grid:
+  a `Hamiltonian1D` (the three-point kinetic stencil plus a potential),
+  the potentials (a harmonic trap, a square well, a step, a double well,
+  a soft Coulomb and a custom one), the Dirichlet and periodic boundary
+  conditions, and the solvers -- the Sturm bisection for the spectrum
+  and the inverse iteration for the ground state.
+
+  The Hamiltonian is *matrix-free*: it is applied as a stencil, so a
+  thousand-point Hamiltonian costs three operations per point and never
+  materialises a matrix. The spectrum comes from a bisection on the
+  Sturm count, and the ground state from the inverse iteration, which
+  converges quadratically -- the relaxation and the power iteration
+  converge at a rate set by the ratio of the spectral width to the gap,
+  and the width of a discretised Hamiltonian is enormous.
+
+  The physics is checked against the textbook: the infinite well's
+  `E_n = n^2 pi^2 / 2`, the harmonic oscillator's `E_n = (n + 1/2) hbar
+  omega`, a ground state that is normalised and symmetric, a double
+  well whose ground state sits below the barrier, and the soft Coulomb
+  potential's hydrogenic ground state.
+
+  Mirrored Rust<->C# tests: **M17-M26** (`crates/engine/tests/quantum_schrodinger.rs`,
+  `tests/PhiEng.Tests/QuantumSchrodingerTests.cs`).
 - **The quantum vocabulary.** A new `phieng-quantum` crate gives the
   engine the nouns quantum mechanics is written in: a `QuantumState` (a
   vector of complex amplitudes, with the Born probabilities, the

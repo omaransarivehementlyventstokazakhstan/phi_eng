@@ -43,7 +43,7 @@ public sealed class HermitianEigen
 /// for operation, so the two engines agree bit-for-bit.
 /// </para>
 /// </remarks>
-public static class QuantumLinalg
+public static partial class QuantumLinalg
 {
     /// <summary>
     /// The Hermitian eigendecomposition of a matrix, by the cyclic Jacobi
@@ -193,9 +193,11 @@ public static class QuantumLinalg
         state.Normalize();
 
         float last = 0.0f;
+        var applied = new Complex32[dim];
         for (int i = 0; i < iterations; i++)
         {
-            op.Apply(state.Amplitudes);
+            op.ApplyTo(state.Amplitudes, applied);
+            Array.Copy(applied, state.Amplitudes, dim);
             state.Normalize();
             // The Rayleigh quotient: the expectation of the operator in
             // the current state.

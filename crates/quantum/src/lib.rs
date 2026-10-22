@@ -30,12 +30,18 @@
 //! The plan for the whole ladder is in `QUANTUM_PLAN.md` at the
 //! repository root.
 
+pub mod grid;
+pub mod hamiltonian;
 pub mod linalg;
 pub mod matrix;
 pub mod operator;
+pub mod potential;
 pub mod state;
 
+pub use grid::*;
+pub use hamiltonian::*;
 pub use linalg::*;
 pub use matrix::*;
 pub use operator::*;
+pub use potential::*;
 pub use state::*;

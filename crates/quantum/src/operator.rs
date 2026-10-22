@@ -12,24 +12,20 @@ use crate::matrix::ComplexMatrix;
 /// three-point stencil computes in three operations. So the trait asks
 /// for one thing: apply me to a vector.
 ///
-/// The dense matrix implements it, and so does the diagonal operator and
-/// the identity — but the Schrödinger Hamiltonian does not have to.
+/// The application writes into a separate buffer rather than in place.
+/// A stencil operator reads its neighbours while it writes, so it
+/// cannot work in place without a copy — and a copy that allocates on
+/// every call is a per-frame allocation, which this engine does not
+/// have. The two-buffer form lets the caller own the scratch.
 pub trait QuantumOperator {
     /// The dimension of the space this operator acts on.
     fn dim(&self) -> usize;
 
-    /// Apply the operator to a state, in place.
-    fn apply(&self, psi: &mut [Complex32]);
-
     /// Apply the operator to a state, into a separate buffer.
     ///
-    /// The default reads the state into a scratch buffer and applies in
-    /// place; an operator that can do better overrides it.
-    fn apply_to(&self, psi: &[Complex32], out: &mut [Complex32]) {
-        let n = self.dim().min(psi.len()).min(out.len());
-        out[..n].copy_from_slice(&psi[..n]);
-        self.apply(&mut out[..n]);
-    }
+    /// `out` must be at least [`QuantumOperator::dim`] long; a shorter
+    /// buffer is left alone.
+    fn apply_to(&self, psi: &[Complex32], out: &mut [Complex32]);
 }
 
 /// A dense operator: a matrix, applied as a matrix.
@@ -55,14 +51,12 @@ impl QuantumOperator for DenseOperator {
         self.matrix.rows()
     }
 
-    fn apply(&self, psi: &mut [Complex32]) {
-        let n = self.matrix.rows().min(psi.len());
+    fn apply_to(&self, psi: &[Complex32], out: &mut [Complex32]) {
+        let n = self.matrix.rows().min(psi.len()).min(out.len());
         if n == 0 {
             return;
         }
-        let mut out = vec![Complex32::zero(); n];
-        self.matrix.mat_vec(&psi[..n], &mut out);
-        psi[..n].copy_from_slice(&out);
+        self.matrix.mat_vec(&psi[..n], &mut out[..n]);
     }
 }
 
@@ -89,10 +83,15 @@ impl QuantumOperator for DiagonalOperator {
         self.values.len()
     }
 
-    fn apply(&self, psi: &mut [Complex32]) {
-        let n = self.values.len().min(psi.len());
-        for (value, amp) in self.values[..n].iter().zip(psi[..n].iter_mut()) {
-            *amp = *value * *amp;
+    fn apply_to(&self, psi: &[Complex32], out: &mut [Complex32]) {
+        let n = self.values.len().min(psi.len()).min(out.len());
+        for (value, (src, dst)) in self
+            .values
+            .iter()
+            .zip(psi.iter().zip(out.iter_mut()))
+            .take(n)
+        {
+            *dst = *value * *src;
         }
     }
 }
@@ -115,7 +114,8 @@ impl QuantumOperator for IdentityOperator {
         self.dim
     }
 
-    fn apply(&self, _psi: &mut [Complex32]) {
-        // The identity changes nothing.
+    fn apply_to(&self, psi: &[Complex32], out: &mut [Complex32]) {
+        let n = self.dim.min(psi.len()).min(out.len());
+        out[..n].copy_from_slice(&psi[..n]);
     }
 }

@@ -103,7 +103,7 @@ public sealed class QuantumState
     {
         int n = System.Math.Min(op.Dim, Dim);
         var applied = new Complex32[n];
-        QuantumOperators.ApplyTo(op, _amps, applied);
+        op.ApplyTo(_amps, applied);
         var sum = Complex32.Zero;
         for (int i = 0; i < n; i++)
         {
