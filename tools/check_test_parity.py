@@ -81,6 +81,13 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               generator's pinned stream, reproducible seeding, the
               float mapping, the normal deviate, and a stream that
               resumes exactly from a saved state)
+    M09-M16  the quantum vocabulary (mirrored both languages: a state
+              normalises and its Born probabilities follow, a Hermitian
+              expectation is real, the Born probability is a projector
+              expectation, the overlap and the fidelity, the dense
+              matrix operations, the eigensolver's spectrum, the
+              eigenvectors that rebuild the matrix, and the power
+              iteration's dominant eigenvalue)
     U01-U12  radiation model expansion (mirrored both languages: the
               legacy view-factor model is the default and matches the
               historical formula, the symmetric model matches it for

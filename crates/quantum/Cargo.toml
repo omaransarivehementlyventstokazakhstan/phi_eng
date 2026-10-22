@@ -1,0 +1,16 @@
+[package]
+name = "phieng-quantum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Quantum mechanics for physics engine"
+documentation = "https://docs.rs/phieng-quantum"
+homepage = "https://github.com/omaransarivehementlyventstokakhstan/phi_eng"
+keywords = ["physics", "quantum", "game-development"]
+categories = ["physics", "game-development"]
+
+[dependencies]
+phieng-math = { path = "../math", version = "0.4.0" }
+glam = { workspace = true }

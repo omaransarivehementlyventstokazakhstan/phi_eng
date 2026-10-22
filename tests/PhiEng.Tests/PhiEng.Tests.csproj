@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\PhiEng.Broadphase\PhiEng.Broadphase.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Dynamics\PhiEng.Dynamics.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Native\PhiEng.Native.csproj" />
+    <ProjectReference Include="..\..\src\PhiEng.Quantum\PhiEng.Quantum.csproj" />
   </ItemGroup>
 
   <!-- Native libraries reach the test output via the PhiEng.Native

@@ -15,6 +15,7 @@ categories = ["physics", "game-development"]
 phieng-math = { path = "../math", version = "0.4.0" }
 phieng-collision = { path = "../collision", version = "0.4.0" }
 phieng-broadphase = { path = "../broadphase", version = "0.4.0" }
+phieng-quantum = { path = "../quantum", version = "0.4.0" }
 phieng-dynamics = { path = "../dynamics", version = "0.4.0" }
 glam = { workspace = true }
 serde_json = "1.0"

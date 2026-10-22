@@ -419,6 +419,17 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **The quantum vocabulary (both languages):** a new `phieng-quantum`
+  crate gives the engine the nouns quantum mechanics is written in: a
+  `QuantumState` (a vector of complex amplitudes, with the Born
+  probabilities, the expectation values, the overlap and the fidelity), a
+  `ComplexMatrix`, a matrix-free `QuantumOperator` trait, and a Hermitian
+  eigensolver (the cyclic Jacobi method: unconditionally stable and
+  exactly reproducible). The managed mirror (`PhiEng.Quantum`) performs
+  the same operations in the same order, so the two engines return the
+  same eigenvalues to the last bit. Pinned by M09-M16 (Rust<->C#
+  parity). The plan for the rest of the quantum stack is in
+  `QUANTUM_PLAN.md`.
 - **Complex arithmetic and a seeded RNG (both languages):** the
   foundation the quantum stack stands on. `phieng-math` gains
   `Complex32` (an `f32` real and imaginary part) and `DeterministicRng`

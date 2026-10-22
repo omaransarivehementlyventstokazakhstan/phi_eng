@@ -146,7 +146,11 @@ parity checker's ID list, and the native DLL restaged.
       `crates/math/src/complex.rs`, `crates/math/src/rng.rs`, mirrored by
       `src/PhiEng.Math/Complex32.cs` and `src/PhiEng.Math/DeterministicRng.cs`.
       Pinned by M01–M08.
-- [ ] **Stage B** — states, operators, matrices, the Hermitian solver.
+- [x] **Stage B** — states, operators, matrices, the Hermitian solver.
+      `crates/quantum/src/{state,operator,matrix,linalg}.rs`, mirrored by
+      `src/PhiEng.Quantum/`. Pinned by M09-M16. The Jacobi rotation's
+      sign convention is derived in the code, because getting it wrong
+      silently breaks the trace.
 - [ ] **Stage C** — the stationary 1D Schrödinger equation.
 - [ ] **Stage D** — the time evolution, the FFI, snapshot v15.
 - [ ] **Stage E** — the gates and circuits.

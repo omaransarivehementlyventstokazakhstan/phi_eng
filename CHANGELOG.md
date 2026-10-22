@@ -8,6 +8,27 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The quantum vocabulary.** A new `phieng-quantum` crate gives the
+  engine the nouns quantum mechanics is written in: a `QuantumState` (a
+  vector of complex amplitudes, with the Born probabilities, the
+  expectation values, the overlap and the fidelity), a `ComplexMatrix`
+  (the dense operators), a `QuantumOperator` trait, and a Hermitian
+  eigensolver.
+
+  The operator trait is *matrix-free* on purpose: the Hamiltonian of a
+  wavefunction on a grid is a banded operator, and materialising it as
+  a dense matrix would cost a million entries to compute what a
+  three-point stencil computes in three operations.
+
+  The eigensolver is the cyclic Jacobi method, chosen because it is
+  unconditionally stable and exactly reproducible: a fixed sweep order,
+  a fixed pivot rule, no randomness and no data-dependent iteration
+  count. The managed mirror (`PhiEng.Quantum`) performs the same
+  operations in the same order, so the two engines return the same
+  eigenvalues to the last bit.
+
+  Mirrored Rust<->C# tests: **M09-M16** (`crates/engine/tests/quantum_state.rs`,
+  `tests/PhiEng.Tests/QuantumStateTests.cs`).
 - **The quantum math layer.** The engine can now do arithmetic over
   the complex numbers, which is what quantum mechanics *is*: a state is
   a vector of complex amplitudes, an observable is a complex matrix, and

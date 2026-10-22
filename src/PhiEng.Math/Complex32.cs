@@ -96,6 +96,12 @@ public struct Complex32 : IEquatable<Complex32>
     /// <summary>The conjugate.</summary>
     public static Complex32 Conjugate(Complex32 a) => new(a.Re, -a.Im);
 
+    /// <summary>The conjugate.</summary>
+    public Complex32 Conjugate() => new(Re, -Im);
+
+    /// <summary>The product with a real number.</summary>
+    public Complex32 Scale(float s) => new(Re * s, Im * s);
+
     /// <summary>The reciprocal.</summary>
     public static Complex32 Inverse(Complex32 a) => Divide(One, a);
 

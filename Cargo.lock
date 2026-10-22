@@ -227,6 +227,7 @@ dependencies = [
  "phieng-collision",
  "phieng-dynamics",
  "phieng-math",
+ "phieng-quantum",
  "proptest",
  "serde_json",
 ]
@@ -266,6 +267,14 @@ name = "phieng-math"
 version = "0.4.0"
 dependencies = [
  "glam",
+]
+
+[[package]]
+name = "phieng-quantum"
+version = "0.4.0"
+dependencies = [
+ "glam",
+ "phieng-math",
 ]
 
 [[package]]

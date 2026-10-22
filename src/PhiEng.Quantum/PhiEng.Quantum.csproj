@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Quantum</PackageId>
+    <Title>PhiEng.Quantum</Title>
+    <Description>Quantum mechanics for PhiEng: states, operators, matrices and solvers.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+  </ItemGroup>
+
+</Project>

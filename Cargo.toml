@@ -4,6 +4,7 @@ members = [
     "crates/math",
     "crates/collision",
     "crates/broadphase",
+    "crates/quantum",
     "crates/dynamics",
     "crates/engine",
 ]

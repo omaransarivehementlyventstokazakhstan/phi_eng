@@ -6,6 +6,7 @@
     <Project Path="src/PhiEng.Math/PhiEng.Math.csproj" />
     <Project Path="src/PhiEng/PhiEng.csproj" />
     <Project Path="src/PhiEng.Native/PhiEng.Native.csproj" />
+    <Project Path="src/PhiEng.Quantum/PhiEng.Quantum.csproj" />
     <Project Path="src/PhiEng.Bench/PhiEng.Bench.csproj" />
   </Folder>
   <Folder Name="/tests/">
