@@ -117,6 +117,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               deterministically, the Madelung dispersion, the classical
               limit, the visualisation feed, and the native bridge round
               trip)
+    M57-M64  spin and particles (mirrored both languages: the Pauli
+              algebra, the Stern-Gerlach measurement, the Rabi flop, the
+              Zeeman splitting and Larmor precession, the bosonic ladder,
+              the fermionic anticommutation that is the Pauli principle,
+              the Fermi gas, and the spin rotations)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

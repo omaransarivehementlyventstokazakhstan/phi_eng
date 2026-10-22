@@ -8,6 +8,22 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Spin and particles.** The spin-1/2 degree of freedom gets its
+  own home: the Pauli matrices as observables, the Stern-Gerlach
+  measurement of `S_z`, the Zeeman Hamiltonian of a uniform field, the
+  Rabi flop it drives and the Larmor precession it causes. Second
+  quantization brings the Fock space: bosonic and fermionic ladder
+  operators, the number operator, the (anti)commutators — including the
+  fermionic one that *is* the Pauli exclusion principle — and the Fermi
+  gas filling its levels at zero temperature.
+
+  A spinor is a single-qubit state, so everything in the gate layer
+  applies; the spin module reuses it rather than duplicating it. The
+  spatial half of the Pauli equation rides with the fields in a later
+  stage — what is here is the spin degree of freedom alone.
+
+  Mirrored Rust<->C# tests: **M57-M64** (`crates/engine/tests/quantum_spin.rs`,
+  `tests/PhiEng.Tests/QuantumSpinTests.cs`).
 - **The game-facing quantum layer.** A wavefunction a game can
   touch: Born-rule sampling that follows the probability distribution
   (the same seed gives the same shots on every platform and in both

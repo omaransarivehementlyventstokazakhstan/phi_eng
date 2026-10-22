@@ -175,7 +175,12 @@ parity checker's ID list, and the native DLL restaged.
       through the native bridge. Pinned by M49-M56. The full
       SPH-particle coupling of the quantum pressure is follow-up work:
       it needs its own stability study.
-- [ ] **Stage G** — spin and particles.
+- [x] **Stage G** — spin and particles.
+      `crates/quantum/src/{spin,fock}.rs`, mirrored by
+      `src/PhiEng.Quantum/{Spin,Fock}.cs`. Pinned by M57-M64. A spinor
+      is a single-qubit state, so the gate layer is reused; the
+      Stern-Gerlach reports true for up because the register reports
+      true for |1>.
 - [ ] **Stage H** — entanglement and information.
 - [ ] **Stage I** — the 3D grid and the fields.
 - [ ] **Stage J** — the advanced.

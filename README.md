@@ -419,6 +419,12 @@ contact for that frame rather than a guessed depth.
   phieng_world[_3]_set_collect_contact_events and
   phieng_world[_3]_contact_event_count/get_contact_event; the sensor
   flag persists in schema v14. Pinned by Z01–Z12 (Rust↔C# parity).
+- **Spin and particles (both languages):** the Pauli matrices as
+  observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
+  the Rabi flop and Larmor precession, plus second quantization: the
+  bosonic and fermionic ladder operators, the number operator, and the
+  Fermi gas. A spinor is a single-qubit state, so the gate layer is
+  reused, not duplicated. Pinned by M57-M64 (Rust<->C# parity).
 - **The game-facing quantum layer (both languages):** Born-rule
   sampling that follows the wavefunction (the same seed gives the same
   shots everywhere), the Bohmian velocity a driven body surfs, and a
