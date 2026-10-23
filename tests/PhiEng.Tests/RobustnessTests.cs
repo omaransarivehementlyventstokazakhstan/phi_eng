@@ -633,21 +633,24 @@ public class RobustnessTests
     }
 
     [Fact]
-    public void D27_HullMassStubPinned()
+    public void D27_DynamicHullIsRejected()
     {
-        // KNOWN GAP: see LIMITATIONS.md — hull mass is a stub.
+        // A dynamic hull has no exact mass (vertices only): refused.
+        // A static hull needs no mass: accepted. A dynamic mesh is the
+        // supported dynamic form.
         var verts = new List<Vector3> { new(0, 0, 0), new(1, 0, 0), new(0, 1, 0), new(0, 0, 1) };
         var world = new World3();
         Assert.Throws<ArgumentException>(() => world.AddDynamicBody(
             Vector3.Zero,
             new ConvexHullShape3(new List<Vector3> { new(0, 0, 0), new(1, 0, 0), new(0, 1, 0) }),
             1.0f));
-        int a = world.AddDynamicBody(Vector3.Zero, new ConvexHullShape3(verts), 1.0f);
-        int b = world.AddDynamicBody(new Vector3(5, 0, 0), new ConvexHullShape3(verts), 7.0f);
-        Assert.Equal(world.Bodies[a].Mass, world.Bodies[b].Mass);
-        Assert.Equal(world.Bodies[a].Inertia.M11, world.Bodies[b].Inertia.M11);
-        Assert.Equal(world.Bodies[a].Inertia.M22, world.Bodies[b].Inertia.M22);
-        Assert.Equal(world.Bodies[a].Inertia.M33, world.Bodies[b].Inertia.M33);
+        Assert.Throws<ArgumentException>(() =>
+            world.AddDynamicBody(Vector3.Zero, new ConvexHullShape3(verts.ToList()), 1.0f));
+        int wall = world.AddStaticBody(Vector3.Zero, new ConvexHullShape3(verts.ToList()));
+        Assert.True(world.Bodies[wall].IsStatic);
+        // The managed shape set has no convex mesh (the Rust core does),
+        // so a C# dynamic convex body uses a box/sphere/capsule; a
+        // dynamic hull is an error rather than a stub-mass body.
         for (int i = 0; i < 60; i++) world.Step(Dt);
     }
 

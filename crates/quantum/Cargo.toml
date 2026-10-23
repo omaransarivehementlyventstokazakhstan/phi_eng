@@ -7,10 +7,11 @@ authors.workspace = true
 repository.workspace = true
 description = "Quantum mechanics for physics engine"
 documentation = "https://docs.rs/phieng-quantum"
-homepage = "https://github.com/omaransarivehementlyventstokakhstan/phi_eng"
+homepage = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
 keywords = ["physics", "quantum", "game-development"]
 categories = ["physics", "game-development"]
 
 [dependencies]
-phieng-math = { path = "../math", version = "0.4.0" }
-glam = { workspace = true }
+phieng-math = { path = "../math", version = "0.5.0-dev" }
+# glam was removed: the quantum crate never used it (all geometry is
+# scalar or already lives in phieng-math).

@@ -1311,6 +1311,7 @@ mod tests {
         // Convex mesh: the vertices must scale, and the recentering in
         // `set_shape` must not drift the mesh away from the body origin.
         let mut mesh = crate::body::RigidBody3::new(0);
+        mesh.is_static = true;
         mesh.set_shape(
             crate::body::Shape3::ConvexHull {
                 vertices: vec![

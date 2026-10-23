@@ -235,3 +235,30 @@ fn h05_tier_config_is_deterministic() {
     assert_eq!(hash2(&a), hash2(&b), "tier-capped runs stay deterministic");
     assert!(hash2(&a) != 0);
 }
+
+/// The tier gate ignores shapeless bodies instead of panicking.
+///
+/// `add_body` accepts a body with no shape (a marker, a sensor host, a
+/// joint anchor). The broad phase pairs two such bodies at the same
+/// position; with the tier ceiling enabled the 2D gate used to unwrap
+/// the missing shape and abort the process.
+#[test]
+fn the_tier_gate_ignores_shapeless_bodies() {
+    use phieng_dynamics::body::RigidBody2;
+    let mut w = World2::new();
+    w.gravity = glam::Vec2::ZERO;
+    w.collision_tier = CollisionTierConfig {
+        enabled: true,
+        max_tier: CollisionTier::Tier5_GJK_EPA,
+    };
+    // Two bodies with no shape, deliberately overlapping.
+    w.add_body(RigidBody2::new(0)).expect("shapeless body");
+    w.add_body(RigidBody2::new(1)).expect("shapeless body");
+    for _ in 0..10 {
+        w.step(DT);
+    }
+    for body in &w.bodies {
+        assert!(body.transform.position.x.is_finite());
+        assert!(body.velocity.x.is_finite());
+    }
+}

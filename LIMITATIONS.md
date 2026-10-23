@@ -108,13 +108,14 @@ Two consequences to know:
   sleeper wakes the moment its partner moves); fully frozen joints
   are skipped.
 
-## Convex-hull mass properties are a stub (D27)
+## Convex hulls are static-only (D27)
 
-`ConvexHull` bodies use `mass = 1, I = diag(1,1,1)` regardless of density
-or vertex layout. Two identical hulls with different densities behave
-identically. Prefer capsules/boxes — or the new `ConvexMesh` shape, which
-carries exact closed-mesh mass properties (Mirtich-style) — for dynamic
-bodies whose inertia matters.
+A `ConvexHull` stores vertices but no faces, so its volume and inertia
+cannot be computed exactly. A **dynamic** hull is now rejected
+(`ShapeError::DynamicConvexHull` / `ArgumentException` in C#) instead of
+being simulated with a 1 kg stub; use `ConvexMesh` (closed triangles,
+exact Mirtich mass properties) for a dynamic convex body, or make the
+hull static. A static hull still needs no mass.
 
 ## CCD via adaptive substepping (C01–C04)
 
@@ -296,8 +297,6 @@ The C ABI (and therefore `PhiNativeWorld(3)`) exposes Circle/Box
 (2D) and Sphere/Box/Capsule (3D) only. Polygon, ConvexHull, and ConvexMesh
 bodies exist in the native engines but cannot be created through the
 bridge; unknown shape tags are rejected cleanly (`-1` / `0`, no UB).
-ConvexMesh snapshot DTOs are new in schema v2; managed mesh support is
-still pending, so mesh snapshots round-trip in Rust only for now.
 
 ## Sliver-skip policy (N11–N15)
 

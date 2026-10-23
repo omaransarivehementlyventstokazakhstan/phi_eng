@@ -185,6 +185,14 @@ public class RigidBody3
     {
         ShapeValidation.ValidateShape3(shape);
         density = ShapeValidation.ValidateDensity(IsStatic, density);
+        // A hull stores vertices but no faces, so its volume and inertia
+        // cannot be computed exactly. A dynamic body must not run on a
+        // stub (the Rust core rejects the same case).
+        if (!IsStatic && shape is ConvexHullShape3)
+        {
+            throw new ArgumentException(
+                "dynamic body cannot use ConvexHull: use ConvexMesh (exact mass/inertia) or make it static");
+        }
         var current = Material ?? PhysicsMaterial.Default;
         // Only the density changes; the thermal properties (specific heat,
         // conductivity, emissivity) are carried over, matching the Rust

@@ -216,26 +216,32 @@ impl Complex32 {
 
     /// The complex sine.
     ///
-    /// `sin z = (e^(iz) - e^(-iz)) / (2i)`, with `e^(-iz)` the
-    /// conjugate of `e^(iz)`. The imaginary part is written as a
+    /// `sin z = (e^(iz) - e^(-iz)) / (2i)`. Note `e^(-iz)` is *not*
+    /// the conjugate of `e^(iz)` for a complex `z`: it is
+    /// `e^(-iz) = e^(+im) (cos(re) - i sin(re))`, while the conjugate
+    /// is `e^(-im) (cos(re) - i sin(re))`. Using the conjugate collapses
+    /// the result to a real number for any non-real argument (the bug
+    /// this function used to have). The imaginary part is written as a
     /// subtraction from zero rather than a negation, so a real argument
-    /// gives `+0.0` there and not `-0.0` — the two compare equal but
-    /// have different bit patterns, and a bit pattern is what the
-    /// pinned hashes see.
+    /// gives `+0.0` there and not `-0.0` — a bit pattern the pinned
+    /// hashes see.
     #[inline]
     pub fn sin(self) -> Self {
         let e = Self::new(-self.im, self.re).exp();
-        let d = e - e.conj();
+        let m = Self::new(self.im, -self.re).exp();
+        let d = e - m;
         Self::new(d.im * 0.5, 0.0 - d.re * 0.5)
     }
 
     /// The complex cosine.
     ///
-    /// `cos z = (e^(iz) + e^(-iz)) / 2`.
+    /// `cos z = (e^(iz) + e^(-iz)) / 2`; see [`Complex32::sin`] for why
+    /// `e^(-iz)` is not the conjugate of `e^(iz)`.
     #[inline]
     pub fn cos(self) -> Self {
         let e = Self::new(-self.im, self.re).exp();
-        let s = e + e.conj();
+        let m = Self::new(self.im, -self.re).exp();
+        let s = e + m;
         Self::new(s.re * 0.5, s.im * 0.5)
     }
 }
@@ -424,5 +430,36 @@ mod tests {
             (0x3f0a5140, 0x3f576aa4),
             "exp_i(1.0) is not portable"
         );
+    }
+
+    /// The elementary identities that pin the *meaning* of sine and
+    /// cosine, not just their bits. A conjugate swapped for `e^{-iz}`
+    /// passes a "matches the pin" test but fails these.
+    #[test]
+    fn sin_and_cos_obey_the_complex_identities() {
+        // Purely imaginary arguments: sin(iy) = i sinh(y),
+        // cos(iy) = cosh(y).
+        let i = Complex32::new(0.0, 1.0);
+        let s = i.sin();
+        assert!(s.re.abs() < 1e-7, "sin(i) must be imaginary, got {s:?}");
+        assert!((s.im - 1.175_201_2).abs() < 1e-6, "sin(i) = {s:?}");
+        let c = i.cos();
+        assert!((c.re - 1.543_080_6).abs() < 1e-6, "cos(i) = {c:?}");
+        assert!(c.im.abs() < 1e-7, "cos(i) must be real, got {c:?}");
+
+        // sin^2 + cos^2 = 1 for a spread of complex arguments.
+        for z in [
+            Complex32::new(0.3, 0.0),
+            Complex32::new(0.5, 0.25),
+            Complex32::new(-1.25, 2.0),
+            Complex32::new(2.0, -3.5),
+            Complex32::new(0.0, 4.0),
+        ] {
+            let total = z.sin() * z.sin() + z.cos() * z.cos();
+            assert!(
+                (total.re - 1.0).abs() < 1e-4 && total.im.abs() < 1e-4,
+                "sin^2 + cos^2 must be one for {z:?}, got {total:?}"
+            );
+        }
     }
 }

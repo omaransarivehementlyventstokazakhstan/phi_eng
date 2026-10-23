@@ -962,11 +962,12 @@ fn d26_zero_length_capsule_is_sphere() {
     );
 }
 
-/// D27 pin: hull mass is a stub (`mass = 1, I = diag(1)`), independent
-/// of density. Pins current behavior so the gap stays visible.
-/// KNOWN GAP: see LIMITATIONS.md §hull stub.
+/// D27: a dynamic hull is rejected (its mass properties cannot be
+/// computed from vertices alone), while a static hull is accepted — a
+/// static body needs no mass. The old stub (1 kg, identity inertia) is
+/// gone: an unsupported dynamic shape is an error, not a silent ghost.
 #[test]
-fn d27_hull_mass_stub_pinned() {
+fn d27_dynamic_hull_is_rejected() {
     use phieng_dynamics::body::Shape3;
     use phieng_dynamics::World3;
     let verts = vec![
@@ -976,6 +977,7 @@ fn d27_hull_mass_stub_pinned() {
         glam::Vec3::new(0.0, 0.0, 1.0),
     ];
     let mut world = World3::new();
+    // Too few vertices is still the more specific error.
     assert_eq!(
         world.add_dynamic_body(
             glam::Vec3::ZERO,
@@ -990,33 +992,36 @@ fn d27_hull_mass_stub_pinned() {
         ),
         Err(ShapeError::TooFewHullVertices)
     );
-    let a = world
-        .add_dynamic_body(
+    // A valid hull is refused for a dynamic body...
+    assert_eq!(
+        world.add_dynamic_body(
             glam::Vec3::ZERO,
             Shape3::ConvexHull {
                 vertices: verts.clone(),
             },
             1.0,
-        )
-        .expect("valid shape");
-    let b = world
-        .add_dynamic_body(
-            glam::Vec3::new(5.0, 0.0, 0.0),
-            Shape3::ConvexHull { vertices: verts },
-            7.0,
-        )
-        .expect("valid shape");
-    assert_eq!(
-        world.bodies[a].mass, world.bodies[b].mass,
-        "d27: stub mass must be density-independent (KNOWN GAP)"
+        ),
+        Err(ShapeError::DynamicConvexHull)
     );
-    assert_eq!(
-        world.bodies[a].inertia, world.bodies[b].inertia,
-        "d27: stub inertia must be density-independent (KNOWN GAP)"
-    );
-    for _ in 0..60 {
-        world.step(DT);
-    }
+    // ...and accepted for a static one.
+    let wall = world
+        .add_static_body(
+            glam::Vec3::ZERO,
+            Shape3::ConvexHull {
+                vertices: verts.clone(),
+            },
+        )
+        .expect("a static hull needs no mass");
+    assert!(world.bodies[wall].is_static);
+    // A dynamic mesh is the supported form.
+    let mesh = Shape3::ConvexMesh {
+        vertices: verts.clone(),
+        indices: vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3],
+    };
+    let id = world
+        .add_dynamic_body(glam::Vec3::new(5.0, 0.0, 0.0), mesh, 1.0)
+        .expect("a closed mesh has exact mass");
+    assert!(world.bodies[id].mass > 0.0);
 }
 
 /// S01: a sleeping body auto-wakes when a moving body makes NEW contact

@@ -50,7 +50,7 @@ fn m01_complex_arithmetic_is_portable() {
 /// M02: the complex transcendentals' pinned bit patterns.
 #[test]
 fn m02_complex_transcendentals_are_portable() {
-    // (z, exp, ln, sqrt, sin, cos) as (re, im) bit pairs.
+    // (z, exp, ln, sqrt, sin) as (re, im) bit pairs.
     let cases: [(Complex32, [(u32, u32); 4]); 8] = [
         (
             Complex32::new(0.0, 0.0),
@@ -76,7 +76,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0x3f0a_5140, 0x3f57_6aa4),
                 (0x0000_0000, 0x3fc9_0fdb),
                 (0x3f35_04f3, 0x3f35_04f3),
-                (0x0000_0000, 0x0000_0000),
+                (0x0000_0000, 0x3f96_6cfe),
             ],
         ),
         (
@@ -85,7 +85,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0x3fcc_79c8, 0x3ed0_d84a),
                 (0xbf14_e220, 0x3eed_6338),
                 (0x3f3a_48cd, 0x3e2f_e733),
-                (0x3ebf_2b45, 0x0000_0000),
+                (0x3efd_2d3e, 0x3e63_023a),
             ],
         ),
         (
@@ -94,7 +94,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0xbdf4_2dd9, 0x3e85_62a0),
                 (0x3f5b_a773, 0x4008_4805),
                 (0x3f3e_961e, 0x3fab_eeba),
-                (0xbe03_8371, 0x0000_0000),
+                (0xc064_7f3d, 0x3f92_6279),
             ],
         ),
         (
@@ -103,7 +103,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0xc0dd_6ccc, 0x4025_e2a0),
                 (0x3fb2_701d, 0xbf86_9c79),
                 (0x3fde_46e1, 0xbf80_fe06),
-                (0x41f0_e4f4, 0x0000_0000),
+                (0x4171_1d30, 0x40dc_4b0e),
             ],
         ),
         (
@@ -112,7 +112,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0x3eef_f6f4, 0xbd71_38eb),
                 (0xbe8c_4774, 0xc03e_7e0f),
                 (0x3d93_4b6b, 0xbf5e_7739),
-                (0xbf45_bbdf, 0x0000_0000),
+                (0xbf2f_dd55, 0xbdbb_ccec),
             ],
         ),
         (
@@ -121,7 +121,7 @@ fn m02_complex_transcendentals_are_portable() {
                 (0x4163_3dee, 0x4163_3dee),
                 (0x3f90_dd76, 0x3e83_1959),
                 (0x3fdf_9009, 0x3e66_3c13),
-                (0x3d83_c5bc, 0x0000_0000),
+                (0x3e3f_6a46, 0xbf5c_277f),
             ],
         ),
     ];

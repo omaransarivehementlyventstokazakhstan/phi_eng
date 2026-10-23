@@ -188,23 +188,27 @@ public struct Complex32 : IEquatable<Complex32>
 
     /// <summary>The complex sine.</summary>
     /// <remarks>
-    /// The imaginary part is written as a subtraction from zero rather
-    /// than a negation, so a real argument gives <c>+0.0</c> there and
-    /// not <c>-0.0</c> — the two compare equal but have different bit
-    /// patterns, and a bit pattern is what the pinned hashes see.
+    /// <c>sin z = (e^(iz) - e^(-iz)) / (2i)</c>. Note <c>e^(-iz)</c> is
+    /// *not* the conjugate of <c>e^(iz)</c> for a complex <c>z</c>; using
+    /// the conjugate collapses the result to a real number (the bug this
+    /// used to have). The imaginary part is written as a subtraction from
+    /// zero rather than a negation, so a real argument gives <c>+0.0</c>
+    /// there and not <c>-0.0</c>.
     /// </remarks>
     public static Complex32 Sin(Complex32 a)
     {
         var e = Exp(new Complex32(-a.Im, a.Re));
-        var d = Subtract(e, Conjugate(e));
+        var m = Exp(new Complex32(a.Im, -a.Re));
+        var d = Subtract(e, m);
         return new Complex32(d.Im * 0.5f, 0.0f - d.Re * 0.5f);
     }
 
-    /// <summary>The complex cosine.</summary>
+    /// <summary>The complex cosine. See <see cref="Sin"/>.</summary>
     public static Complex32 Cos(Complex32 a)
     {
         var e = Exp(new Complex32(-a.Im, a.Re));
-        var s = Add(e, Conjugate(e));
+        var m = Exp(new Complex32(a.Im, -a.Re));
+        var s = Add(e, m);
         return new Complex32(s.Re * 0.5f, s.Im * 0.5f);
     }
 

@@ -1931,11 +1931,16 @@ impl World2 {
 
         // Tier gate: if the required tier for this shape pair exceeds the
         // configured ceiling, skip the pair (treated as non-colliding).
+        // A body without a shape cannot collide, so it is skipped rather
+        // than unwrapped (the 3D path already does this).
         if tier_enabled {
-            let required = super::collision_tier::required_tier_2d(
-                body_a.shape.as_ref().unwrap(),
-                body_b.shape.as_ref().unwrap(),
-            );
+            let Some(shape_a) = body_a.shape.as_ref() else {
+                return;
+            };
+            let Some(shape_b) = body_b.shape.as_ref() else {
+                return;
+            };
+            let required = super::collision_tier::required_tier_2d(shape_a, shape_b);
             if required > max_tier {
                 return;
             }

@@ -11,8 +11,9 @@ members = [
 exclude = ["target"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0-dev"
 edition = "2021"
+rust-version = "1.78"
 license = "Unlicense"
 authors = ["Omar"]
 repository = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"

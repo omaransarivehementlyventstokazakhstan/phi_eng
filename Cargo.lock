@@ -219,7 +219,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "phieng"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
  "crc32fast",
  "glam",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "phieng-broadphase"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
  "glam",
  "phieng-math",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "phieng-collision"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
  "glam",
  "phieng-math",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "phieng-dynamics"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
  "crc32fast",
  "glam",
@@ -265,16 +265,15 @@ dependencies = [
 
 [[package]]
 name = "phieng-math"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
  "glam",
 ]
 
 [[package]]
 name = "phieng-quantum"
-version = "0.4.0"
+version = "0.5.0-dev"
 dependencies = [
- "glam",
  "phieng-math",
 ]
 

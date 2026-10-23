@@ -12,11 +12,11 @@ keywords = ["physics", "engine", "game-development"]
 categories = ["physics", "game-development"]
 
 [dependencies]
-phieng-math = { path = "../math", version = "0.4.0" }
-phieng-collision = { path = "../collision", version = "0.4.0" }
-phieng-broadphase = { path = "../broadphase", version = "0.4.0" }
-phieng-quantum = { path = "../quantum", version = "0.4.0" }
-phieng-dynamics = { path = "../dynamics", version = "0.4.0" }
+phieng-math = { path = "../math", version = "0.5.0-dev" }
+phieng-collision = { path = "../collision", version = "0.5.0-dev" }
+phieng-broadphase = { path = "../broadphase", version = "0.5.0-dev" }
+phieng-quantum = { path = "../quantum", version = "0.5.0-dev" }
+phieng-dynamics = { path = "../dynamics", version = "0.5.0-dev" }
 glam = { workspace = true }
 serde_json = "1.0"
 

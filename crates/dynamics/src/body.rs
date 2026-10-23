@@ -341,6 +341,12 @@ pub enum ShapeError {
     /// Non-static body with non-finite or non-positive density. (Static
     /// bodies ignore mass, so any finite density is accepted for them.)
     ZeroDensity,
+    /// A dynamic body was given a `ConvexHull`. A hull carries vertices
+    /// only, so its volume and inertia cannot be computed exactly
+    /// without rebuilding the faces; a dynamic body needs those numbers
+    /// to respond to torque. Use `ConvexMesh` (closed triangles) for a
+    /// dynamic body, or make the hull static.
+    DynamicConvexHull,
 }
 
 impl std::fmt::Display for ShapeError {
@@ -369,6 +375,10 @@ impl std::fmt::Display for ShapeError {
                 write!(f, "convex mesh has a vertex outside a face plane")
             }
             ShapeError::ZeroDensity => write!(f, "dynamic body needs finite positive density"),
+            ShapeError::DynamicConvexHull => write!(
+                f,
+                "dynamic body cannot use ConvexHull: use ConvexMesh (exact mass/inertia) or make it static"
+            ),
         }
     }
 }
@@ -1245,6 +1255,12 @@ impl RigidBody3 {
     /// (see [`ShapeError`]) instead of silently substituting defaults.
     pub fn set_shape(&mut self, mut shape: Shape3, density: f32) -> Result<(), ShapeError> {
         validate_shape3(&shape)?;
+        // A hull stores vertices but no faces, so its volume and inertia
+        // cannot be computed exactly; a dynamic body would run on a stub.
+        // Reject it rather than simulate a 1 kg ghost (see ShapeError).
+        if !self.is_static && matches!(shape, Shape3::ConvexHull { .. }) {
+            return Err(ShapeError::DynamicConvexHull);
+        }
         // Recenter convex meshes so the body-frame origin coincides with
         // the center of mass (required for correct rotational dynamics).
         // Topology checks above are translation-invariant, so this is a
