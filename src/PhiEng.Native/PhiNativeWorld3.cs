@@ -1812,6 +1812,57 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>Every body whose shape contains the point, in ascending id order.</summary>
+    /// <remarks>See <see cref="PhiNativeWorld.PointTest"/> for the sensor and layer rules.</remarks>
+    public unsafe int[] PointTest(
+        float x, float y, float z, uint group = 1u, uint mask = uint.MaxValue)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world3_point_test(_handle, x, y, z, group, mask, null, 0);
+            if (count == 0) return Array.Empty<int>();
+            var ids = new uint[count];
+            fixed (uint* p = ids)
+            {
+                uint written = NativeMethods.phieng_world3_point_test(
+                    _handle, x, y, z, group, mask, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native 3D point test failed.");
+                }
+            }
+            var result = new int[count];
+            for (int i = 0; i < count; i++) result[i] = (int)ids[i];
+            return result;
+        }
+    }
+
+    /// <summary>The nearest body surface to the point, within the range, or null.</summary>
+    public unsafe Dynamics.WorldClosestHit3? ClosestPoint(
+        float x, float y, float z, float maxDistance,
+        uint group = 1u, uint mask = uint.MaxValue)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.ClosestHit3Ffi hit;
+            if (NativeMethods.phieng_world3_closest_point(
+                    _handle, x, y, z, group, mask, maxDistance, &hit) == 0)
+            {
+                return null;
+            }
+            return new Dynamics.WorldClosestHit3
+            {
+                Body = (int)hit.Body,
+                Inside = hit.Inside != 0,
+                Distance = hit.Distance,
+                Point = new Vector3(hit.PointX, hit.PointY, hit.PointZ),
+                Normal = new Vector3(hit.NormalX, hit.NormalY, hit.NormalZ),
+            };
+        }
+    }
+
     /// <summary>Run one suspension-vehicle step on a native chassis. Returns the wheels processed.</summary>
     public unsafe int StepVehicle3(
         int chassis, Dynamics.VehicleConfig3 config, Dynamics.VehicleInput3 input,

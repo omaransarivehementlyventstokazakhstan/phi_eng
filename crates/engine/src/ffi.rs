@@ -7913,6 +7913,50 @@ pub unsafe extern "C" fn phieng_world3_quantum_phase(
 }
 
 // ---------------------------------------------------------------------------
+// Scene queries: point tests and closest-point queries.
+// ---------------------------------------------------------------------------
+
+/// The nearest surface point a closest-point query found, as it crosses
+/// the C ABI: 28 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ClosestHit2Ffi {
+    /// The body that owns the surface.
+    pub body: u32,
+    /// 1 when the query point is inside the body.
+    pub inside: u8,
+    pub _pad: [u8; 3],
+    /// The distance to the surface (zero when inside).
+    pub distance: f32,
+    /// The surface point, in world space.
+    pub point_x: f32,
+    pub point_y: f32,
+    /// The outward escape normal there.
+    pub normal_x: f32,
+    pub normal_y: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<ClosestHit2Ffi>() == 28);
+
+/// The 3D closest-point result: 36 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ClosestHit3Ffi {
+    pub body: u32,
+    pub inside: u8,
+    pub _pad: [u8; 3],
+    pub distance: f32,
+    pub point_x: f32,
+    pub point_y: f32,
+    pub point_z: f32,
+    pub normal_x: f32,
+    pub normal_y: f32,
+    pub normal_z: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<ClosestHit3Ffi>() == 36);
+
+// ---------------------------------------------------------------------------
 // Vehicles: the stateless suspension (3D) and arcade (2D) drivers.
 // ---------------------------------------------------------------------------
 
@@ -8260,4 +8304,158 @@ pub unsafe extern "C" fn phieng_world_vehicle_step(
         slot.spin = t.spin;
     }
     n as u32
+}
+
+/// Every body whose shape contains `(x, y)` in a 2D world.
+///
+/// Writes ids in ascending order and returns the count written; a null
+/// `out` asks for the count alone. Sensors are included (a point test is
+/// a pick/trigger query). Returns 0 for a null world or a non-finite
+/// coordinate.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for `cap` u32s.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_point_test(
+    world: *const World2,
+    x: f32,
+    y: f32,
+    group: u32,
+    mask: u32,
+    out: *mut u32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() || !valid(x) || !valid(y) {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let hits = world_ref.point_test(Vec2::new(x, y), &filter);
+    if out.is_null() {
+        return hits.len() as u32;
+    }
+    let n = hits.len().min(cap as usize);
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    slice.copy_from_slice(&hits[..n]);
+    n as u32
+}
+
+/// Every body whose shape contains `(x, y, z)` in a 3D world.
+///
+/// See [`phieng_world_point_test`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for `cap` u32s.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_point_test(
+    world: *const phieng_dynamics::World3,
+    x: f32,
+    y: f32,
+    z: f32,
+    group: u32,
+    mask: u32,
+    out: *mut u32,
+    cap: u32,
+) -> u32 {
+    if world.is_null() || !valid(x) || !valid(y) || !valid(z) {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let hits = world_ref.point_test(Vec3::new(x, y, z), &filter);
+    if out.is_null() {
+        return hits.len() as u32;
+    }
+    let n = hits.len().min(cap as usize);
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    slice.copy_from_slice(&hits[..n]);
+    n as u32
+}
+
+/// The nearest body surface to `(x, y)` in a 2D world.
+///
+/// Returns 1 and fills `out` on a hit, 0 otherwise (including a null
+/// world, a non-finite coordinate, or a null `out`). A point inside a
+/// body wins over any outside surface; ties keep the lower body id.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `out` must be null or valid for one [`ClosestHit2Ffi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_closest_point(
+    world: *const World2,
+    x: f32,
+    y: f32,
+    group: u32,
+    mask: u32,
+    max_distance: f32,
+    out: *mut ClosestHit2Ffi,
+) -> i32 {
+    if world.is_null() || out.is_null() || !valid(x) || !valid(y) || !valid(max_distance) {
+        return 0;
+    }
+    let world_ref: &World2 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let Some(hit) = world_ref.closest_point(Vec2::new(x, y), &filter, max_distance) else {
+        return 0;
+    };
+    let slot = unsafe { &mut *out };
+    slot.body = hit.body;
+    slot.inside = u8::from(hit.inside);
+    slot._pad = [0; 3];
+    slot.distance = hit.distance;
+    slot.point_x = hit.point.x;
+    slot.point_y = hit.point.y;
+    slot.normal_x = hit.normal.x;
+    slot.normal_y = hit.normal.y;
+    1
+}
+
+/// The nearest body surface to `(x, y, z)` in a 3D world.
+///
+/// See [`phieng_world_closest_point`]. The convex hull and mesh report
+/// no hit, matching the 3D ray cast.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `out` must be null or valid for one [`ClosestHit3Ffi`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_closest_point(
+    world: *const phieng_dynamics::World3,
+    x: f32,
+    y: f32,
+    z: f32,
+    group: u32,
+    mask: u32,
+    max_distance: f32,
+    out: *mut ClosestHit3Ffi,
+) -> i32 {
+    if world.is_null()
+        || out.is_null()
+        || !valid(x)
+        || !valid(y)
+        || !valid(z)
+        || !valid(max_distance)
+    {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let Some(hit) = world_ref.closest_point(Vec3::new(x, y, z), &filter, max_distance) else {
+        return 0;
+    };
+    let slot = unsafe { &mut *out };
+    slot.body = hit.body;
+    slot.inside = u8::from(hit.inside);
+    slot._pad = [0; 3];
+    slot.distance = hit.distance;
+    slot.point_x = hit.point.x;
+    slot.point_y = hit.point.y;
+    slot.point_z = hit.point.z;
+    slot.normal_x = hit.normal.x;
+    slot.normal_y = hit.normal.y;
+    slot.normal_z = hit.normal.z;
+    1
 }

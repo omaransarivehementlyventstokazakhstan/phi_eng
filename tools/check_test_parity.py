@@ -34,6 +34,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               winding-independent polygons, exact surface points and
               escape normals, the convex miss, world ordering/filters/
               sensors, and the nearest-hit/range rules)
+    F47-F50  the native query surface (mirrored both languages: the 2D
+              and 3D point tests with their count-only and truncating
+              forms plus filters, and the closest-point queries with
+              their inside convention, range limit and bad-input
+              rejection)
     O07-O12  the 3D kinematic character controller (mirrored both
               languages: exact free moves, wall stops without
               tunnelling, sliding that preserves the free axes, the

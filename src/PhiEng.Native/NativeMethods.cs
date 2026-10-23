@@ -1643,6 +1643,82 @@ public float OccluderTransmittance;
         VehicleWheelFfi* @out,
         uint cap);
 
+    /// <summary>A closest-point result. Mirrors Rust <c>ClosestHit2Ffi</c> - never reorder (28 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct ClosestHit2Ffi
+    {
+        public uint Body;
+        public byte Inside;
+        public fixed byte Pad[3];
+        public float Distance;
+        public float PointX;
+        public float PointY;
+        public float NormalX;
+        public float NormalY;
+    }
+
+    /// <summary>A 3D closest-point result. Mirrors Rust <c>ClosestHit3Ffi</c> - never reorder (36 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct ClosestHit3Ffi
+    {
+        public uint Body;
+        public byte Inside;
+        public fixed byte Pad[3];
+        public float Distance;
+        public float PointX;
+        public float PointY;
+        public float PointZ;
+        public float NormalX;
+        public float NormalY;
+        public float NormalZ;
+    }
+
+    /// <returns>Ids written; with a null array, the count alone. 0 for a bad world/point.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_point_test(
+        IntPtr world,
+        float x,
+        float y,
+        uint group,
+        uint mask,
+        uint* @out,
+        uint cap);
+
+    /// <returns>Ids written; with a null array, the count alone. 0 for a bad world/point.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_point_test(
+        IntPtr world,
+        float x,
+        float y,
+        float z,
+        uint group,
+        uint mask,
+        uint* @out,
+        uint cap);
+
+    /// <returns>1 on a hit, 0 otherwise.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_closest_point(
+        IntPtr world,
+        float x,
+        float y,
+        uint group,
+        uint mask,
+        float maxDistance,
+        ClosestHit2Ffi* @out);
+
+    /// <returns>1 on a hit, 0 otherwise.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_closest_point(
+        IntPtr world,
+        float x,
+        float y,
+        float z,
+        uint group,
+        uint mask,
+        float maxDistance,
+        ClosestHit3Ffi* @out);
+
     /// <returns>Wheels written; with a null array, the wheel count alone. 0 for a bad world/config/input/chassis.</returns>
     [LibraryImport(LibraryName)]
     internal static unsafe partial uint phieng_world_vehicle_step(

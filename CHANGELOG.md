@@ -8,6 +8,20 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The query surface over the C ABI.** `phieng_world[_3]_point_test`
+  and `phieng_world[_3]_closest_point` put the scene queries in front of
+  native hosts, with the house conventions: out-pointer plus capacity
+  (null asks for the count), ids ascending, sensors included, the
+  group/mask layer rule, and clean zeros for null worlds and non-finite
+  coordinates. Two `#[repr(C)]` structs carry the closest-point result
+  (28 and 36 bytes) with compile-time size asserts, and the managed
+  `PhiNativeWorld(3)` wrappers decode them into the same
+  `WorldClosestHit2/3` the managed world returns. The shape-overlap
+  query is not on the ABI yet: it needs a shape serialisation, which is
+  follow-up work.
+
+  Mirrored Rust<->C# tests: **F47-F50** (`crates/engine/tests/ffi_queries.rs`,
+  `tests/PhiEng.Tests/NativeQueryTests.cs`).
 - **A 3D kinematic character controller.** `Character3.Move` /
   `move_character3` bring move-and-slide to 3D: a placed sphere
   advances, stops at the first surface, and slides the remainder. The

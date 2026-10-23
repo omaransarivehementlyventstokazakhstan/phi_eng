@@ -1885,6 +1885,58 @@ public sealed class PhiNativeWorld : IDisposable
         }
     }
 
+    /// <summary>Every body whose shape contains the point, in ascending id order.</summary>
+    /// <remarks>
+    /// Sensors are included (a point test is a pick/trigger query). The
+    /// group/mask pair is the query's layer rule, the same one the
+    /// managed world uses.
+    /// </remarks>
+    public unsafe int[] PointTest(float x, float y, uint group = 1u, uint mask = uint.MaxValue)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            uint count = NativeMethods.phieng_world_point_test(_handle, x, y, group, mask, null, 0);
+            if (count == 0) return Array.Empty<int>();
+            var ids = new uint[count];
+            fixed (uint* p = ids)
+            {
+                uint written = NativeMethods.phieng_world_point_test(_handle, x, y, group, mask, p, count);
+                if (written != count)
+                {
+                    throw new InvalidOperationException("Native point test failed.");
+                }
+            }
+            var result = new int[count];
+            for (int i = 0; i < count; i++) result[i] = (int)ids[i];
+            return result;
+        }
+    }
+
+    /// <summary>The nearest body surface to the point, within the range, or null.</summary>
+    public unsafe Dynamics.WorldClosestHit2? ClosestPoint(
+        float x, float y, float maxDistance,
+        uint group = 1u, uint mask = uint.MaxValue)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            NativeMethods.ClosestHit2Ffi hit;
+            if (NativeMethods.phieng_world_closest_point(_handle, x, y, group, mask, maxDistance, &hit) == 0)
+            {
+                return null;
+            }
+            return new Dynamics.WorldClosestHit2
+            {
+                Body = (int)hit.Body,
+                Inside = hit.Inside != 0,
+                Distance = hit.Distance,
+                Point = new Vector2(hit.PointX, hit.PointY),
+                Normal = new Vector2(hit.NormalX, hit.NormalY),
+            };
+        }
+    }
+
     /// <summary>Run one arcade-vehicle step on a native chassis. Returns the wheels processed.</summary>
     public unsafe int StepVehicle2(
         int chassis, Dynamics.VehicleConfig2 config, Dynamics.VehicleInput2 input,
