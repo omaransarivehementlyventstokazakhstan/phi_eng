@@ -440,6 +440,11 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **A 3D kinematic character controller (both languages):**
+  move-and-slide for a placed sphere: substepped against tunnelling,
+  contacts that only block motion into them, a ground probe with a
+  walkable-slope limit, filter-aware solidity, and capsule walls that
+  stop it at the shaft radius. Pinned by O07-O12 (Rust<->C# parity).
 - **A 2D kinematic character controller (both languages):**
   move-and-slide for a placed circle, with substeps that cannot tunnel,
   contacts that only block motion into them, a ground probe with a

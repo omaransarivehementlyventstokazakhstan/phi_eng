@@ -34,6 +34,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               winding-independent polygons, exact surface points and
               escape normals, the convex miss, world ordering/filters/
               sensors, and the nearest-hit/range rules)
+    O07-O12  the 3D kinematic character controller (mirrored both
+              languages: exact free moves, wall stops without
+              tunnelling, sliding that preserves the free axes, the
+              ground probe and slope rule, filter-selected solidity, a
+              solid capsule body, a climbable ramp, and the documented
+              non-solid convex hull)
     O01-O06  the 2D kinematic character controller (mirrored both
               languages; O is the only free letter, chosen for the
               operator/character block: free moves, wall stops without

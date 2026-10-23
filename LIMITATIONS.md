@@ -199,10 +199,13 @@ with a containment fallback, so deep containment is never reported as
 separation; the convex hull participates there. Both query families are
 O(body count) — there is no broad-phase prefilter yet — and neither has
 a C ABI export, so native hosts go through the managed API.
-The character controller is 2D only for now (`Character2::move`): a
-kinematic circle with move-and-slide, gravity left to the caller. There
-is no 3D controller yet, and no step-up over low ledges (a step must be
-walked around or jumped); both are follow-up work. The ray cast's distance is the parameter along the direction
+The character controller exists in both dimensions (`Character2::move`,
+`Character3::move`): a placed circle/sphere with move-and-slide, gravity
+left to the caller. Two honest edges: there is no step-up over low
+ledges (walk around or jump), and the 3D body is a sphere rather than a
+capsule — a capsule needs a capsule-versus-shape distance query, which
+does not exist yet. Convex hulls and meshes are not solid for the 3D
+controller, because the closest-point query does not cover them. The ray cast's distance is the parameter along the direction
 as it was given: a direction that is not a unit vector scales the
 range, and so does `max_t`. A caller that wants a distance in world
 units should normalize the direction first.

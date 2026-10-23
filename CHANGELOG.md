@@ -8,6 +8,23 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **A 3D kinematic character controller.** `Character3.Move` /
+  `move_character3` bring move-and-slide to 3D: a placed sphere
+  advances, stops at the first surface, and slides the remainder. The
+  same three mechanics as the 2D controller: half-radius substeps (no
+  tunnelling), contacts that block only motion into them (a resting
+  character stays free), and normals from the closest-point query's
+  outward direction. Solid bodies are the analytically queried ones —
+  sphere, box and capsule — with the soft-touch bonus that a capsule
+  wall stops the character at its shaft radius. Convex hulls and meshes
+  report no closest point, so they are walked through: the same
+  documented gap as the ray cast, and the reason a level's collision
+  geometry should use primitive shapes here.
+
+  Mirrored Rust<->C# tests: **O07-O12** (`crates/engine/tests/character_3d.rs`,
+  `tests/PhiEng.Tests/Character3DTests.cs`). The sphere body is a scope
+  decision, not an oversight: a capsule body needs a
+  capsule-versus-shape distance query, which is follow-up work.
 - **A 2D kinematic character controller.** `Character2.Move` /
   `move_character2` advance a kinematic circle by a desired
   translation, stop at the first surface, and slide the remainder
