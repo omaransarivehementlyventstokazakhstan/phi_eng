@@ -8,6 +8,20 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Many-body and variational quantum methods.** The ladder closes:
+  tight-binding chains with their cosine band, the SSH chain with its
+  topological edge modes (and their absence in the trivial phase),
+  barrier tunnelling by the transfer matrix (free flight, the analytic
+  tunnelling probability, unit resonant transmission), the Hubbard
+  dimer solved exactly and by self-consistent Hartree-Fock (which
+  stays variational, missing only the correlation energy), the
+  entanglement spectrum that truncates four Schmidt states to two
+  (the DMRG step), the exact parameter-shift gradient, the VQE loop
+  that descends to the ground energy, and the Berry phase of a qubit
+  looped around a cone: minus half the solid angle.
+
+  Mirrored Rust<->C# tests: **M81-M88** (`crates/engine/tests/quantum_advanced.rs`,
+  `tests/PhiEng.Tests/QuantumAdvancedTests.cs`).
 - **Three-dimensional quantum mechanics and the Aharonov-Bohm ring.**
   The one-dimensional machinery lifts onto 3D grids: the x-fastest
   grid with its Dirichlet unknown map, the separable Hamiltonian that

@@ -79,4 +79,38 @@ public sealed class RingHamiltonian
 
     /// <summary>The spectrum, in ascending order.</summary>
     public float[] Eigenvalues() => QuantumLinalg.EigenHermitian(Matrix(), 64, 1e-8f).Eigenvalues;
+
+    /// <summary>The Berry phase of a qubit carried around a cone of polar angle <paramref name="polar"/>: minus half the subtended solid angle.</summary>
+    /// <remarks>
+    /// The state at azimuth <c>phi</c> is <c>RZ(phi) RY(polar) |0></c>,
+    /// sampled at <paramref name="steps"/> evenly spaced azimuths; the
+    /// phase is minus the argument of the loop product of overlaps,
+    /// wrapped to (-pi, pi]. The loop never closes in Hilbert space
+    /// (<c>RZ(2 pi) = -I</c>) but the overlaps do not care: each one is
+    /// gauge-invariant, and so is their product.
+    /// </remarks>
+    public static float BerryPhase(float polar, int steps)
+    {
+        steps = System.Math.Max(steps, 3);
+        var start = QuantumState.Basis(2, 0);
+        QuantumGates.ApplySingle(start, QuantumGates.Ry(polar), 0);
+        float total = 0.0f;
+        var prev = new QuantumState(start.Amplitudes);
+        for (int k = 1; k < steps; k++)
+        {
+            float phi = 2.0f * MathF.PI * k / steps;
+            var psi = new QuantumState(start.Amplitudes);
+            QuantumGates.ApplySingle(psi, QuantumGates.Rz(phi), 0);
+            var o = prev.Overlap(psi);
+            total += DeterministicTrig.Atan2(o.Im, o.Re);
+            prev = psi;
+        }
+        // Closing the loop back onto the start state (not onto RZ(2 pi),
+        // which carries the extra minus sign).
+        var closing = prev.Overlap(start);
+        total += DeterministicTrig.Atan2(closing.Im, closing.Re);
+        // Wrap to (-pi, pi]: round half away from zero, like the core.
+        float turns = MathF.Round(total / (2.0f * MathF.PI), System.MidpointRounding.AwayFromZero);
+        return -total + turns * 2.0f * MathF.PI;
+    }
 }

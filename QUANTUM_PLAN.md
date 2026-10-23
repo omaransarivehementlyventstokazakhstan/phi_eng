@@ -199,7 +199,20 @@ parity checker's ID list, and the native DLL restaged.
       subnormal off-diagonal overflowed 1/r to infinity (NaNs past
       sweep 9 on 64x64). Both are fixed in the Rust core and the C#
       mirror, and M14 now pins the correctly rounded +-sqrt(2).
-- [ ] **Stage J** — the advanced.
+- [x] **Stage J** — the advanced: lattices, scattering, mean-field,
+      and variational loops.
+      `crates/quantum/src/{lattice,scattering,manybody,variational}.rs`
+      plus the Berry phase in `gauge.rs`, mirrored by
+      `src/PhiEng.Quantum/{Lattice,Scattering,ManyBody,Variational}.cs`
+      and `Gauge.cs`. Pinned by M81-M88. The SSH chain shelters its
+      edge modes, the transfer matrix tunnels with the analytic
+      probability, Hartree-Fock stays variational above the exact
+      dimer, the entanglement spectrum truncates to two states, the
+      parameter shift differentiates exactly, the VQE loop lands on the
+      ground energy, and the qubit loop picks up minus half the solid
+      angle. Writing the propagator caught a real bug early: the
+      exponent is `i k L`, not `k L` — free space transmitted 4843
+      before the `i`.
 
 ## The crate layout
 

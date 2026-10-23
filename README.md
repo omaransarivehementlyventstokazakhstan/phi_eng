@@ -430,6 +430,11 @@ contact for that frame rather than a guessed depth.
   tensor-product ground state, and the Aharonov-Bohm ring whose
   spectrum slides with the flux and returns every quantum. Pinned by
   M73-M80 (Rust<->C# parity).
+- **Many-body and variational methods (both languages):**
+  tight-binding bands, SSH edge modes, transfer-matrix tunnelling,
+  the variational Hubbard dimer, the truncatable entanglement
+  spectrum, parameter-shift gradients with the VQE loop, and the Berry
+  phase. Pinned by M81-M88 (Rust<->C# parity).
 - **Spin and particles (both languages):** the Pauli matrices as
   observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
   the Rabi flop and Larmor precession, plus second quantization: the

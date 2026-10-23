@@ -13,9 +13,12 @@
 //! The managed mirror builds the same matrix entry for entry.
 
 use phieng_math::complex::Complex32;
+use phieng_math::trig::atan2;
 
+use crate::gates::{apply_single, ry_gate, rz_gate};
 use crate::linalg::eigen_hermitian;
 use crate::matrix::ComplexMatrix;
+use crate::state::QuantumState;
 
 /// A particle on a ring of `n` points threaded by magnetic flux.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,4 +83,35 @@ impl RingHamiltonian {
     pub fn eigenvalues(&self) -> Vec<f32> {
         eigen_hermitian(&self.matrix(), 64, 1e-8).eigenvalues
     }
+}
+
+/// The Berry phase of a qubit carried around a cone of polar angle
+/// `polar`: minus half the subtended solid angle.
+///
+/// The state at azimuth `phi` is `RZ(phi) RY(polar) |0>`, sampled at
+/// `steps` evenly spaced azimuths; the phase is minus the argument of
+/// the loop product of overlaps, wrapped to (-pi, pi]. The loop never
+/// closes in Hilbert space (`RZ(2 pi) = -I`) but the overlaps do not
+/// care: each one is gauge-invariant, and so is their product. The
+/// managed mirror walks the same loop.
+pub fn berry_phase(polar: f32, steps: usize) -> f32 {
+    let steps = steps.max(3);
+    let mut base = QuantumState::basis(2, 0);
+    apply_single(&mut base, &ry_gate(polar), 0);
+    let mut total = 0.0f32;
+    let mut prev = base.clone();
+    for k in 1..steps {
+        let phi = 2.0 * std::f32::consts::PI * k as f32 / steps as f32;
+        let mut psi = base.clone();
+        apply_single(&mut psi, &rz_gate(phi), 0);
+        let o = prev.overlap(&psi);
+        total += atan2(o.im, o.re);
+        prev = psi;
+    }
+    // Closing the loop back onto the start state (not onto RZ(2 pi),
+    // which carries the extra minus sign).
+    let o = prev.overlap(&base);
+    total += atan2(o.im, o.re);
+    let turns = (total / (2.0 * std::f32::consts::PI)).round();
+    -total + turns * 2.0 * std::f32::consts::PI
 }

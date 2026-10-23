@@ -134,6 +134,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               normalised tensor-product ground state, the matrix-free
               versus dense cross-check, the zero-flux ring, the
               quarter-flux lift, and the flux periodicity)
+    M81-M88  many-body and variational methods (mirrored both languages:
+              the tight-binding band, the SSH edge modes present and
+              absent, the transfer-matrix tunnelling, resonance and
+              free flight, the variational Hubbard dimer, the
+              truncatable entanglement spectrum, the exact parameter
+              shift, the converged VQE loop, and the Berry phase)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes
