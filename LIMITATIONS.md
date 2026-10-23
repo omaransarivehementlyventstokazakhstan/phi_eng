@@ -183,9 +183,11 @@ prismatic with travel limits, fixed weld — rigid only, see
 `crates/dynamics/src/joint.rs` / `joint3.rs`, the J31–J44 (2D) and
 K31–K44 (3D) parity tests, plus the generic
 `phieng_world_add_joint` / `phieng_world3_add_joint` FFI bridges and
-their managed mirrors). Not yet built: non-zero compliance (springs —
+their managed mirrors). Hinge/twist and prismatic joints carry
+velocity motors with torque/force budgets (zero budget disables);
+not yet built: non-zero compliance (springs —
 rejected with `JointError::UnsupportedCompliance` rather than faked),
-motors, and breakable limits. The ray cast covers the analytic shapes
+and breakable limits. The ray cast covers the analytic shapes
 (a circle, an oriented box and a convex polygon in 2D; a sphere, an
 oriented box and a capsule in 3D) but not the convex ones: a ray that
 would hit a convex hull or a convex mesh is reported as a miss. The

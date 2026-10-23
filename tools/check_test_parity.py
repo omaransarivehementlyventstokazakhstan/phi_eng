@@ -29,6 +29,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              step's only, and removing a body ends its contacts)
     V01-V11  runtime validation layer (mirrored both languages)
     J31-J44  joint constraints (mirrored both languages)
+    J45-J48  joint motors (mirrored both languages: hinge target
+             speed, torque-starved slip with saturated impulse, bad
+             tuning rejected, prismatic target speed, and v16
+             save/load round-trip with motors off on old schemas)
     E01-E07  snapshots save/load (mirrored both languages)
     G01-G10  gravitational physics (mirrored both languages: G01-G07
              2D contract — orbit, determinism, Verlet energy order,
@@ -66,6 +70,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              default-off bit-identical, snapshot round-trip)
     K31-K44  3D joint constraints (mirrored both languages: distance,
               hinge, prismatic, fixed)
+    K45-K48  3D joint motors (mirrored both languages: twist target
+              rate, starved lift sinking with saturated impulse, bad
+              tuning rejected, prismatic target speed, and v16
+              save/load round-trip with motors off on old schemas)
     R01-R07  deterministic scalar functions (mirrored both languages:
               pinned cos/sin bit patterns, pinned atan2 bit patterns,
               the engine's own 2D rotation integration pinned to exact

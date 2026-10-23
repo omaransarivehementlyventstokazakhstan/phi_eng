@@ -440,6 +440,10 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **Joint motors (both languages):** velocity motors with
+  torque/force budgets on hinge/twist and prismatic joints, warm
+  started and budget-clamped, persisting through schema-v16
+  save/load. Pinned by J45-J48, K45-K48 (Rust<->C# parity).
 - **Spin and particles (both languages):** the Pauli matrices as
   observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
   the Rabi flop and Larmor precession, plus second quantization: the

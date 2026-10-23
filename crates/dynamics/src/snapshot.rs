@@ -59,7 +59,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 15;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 16;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -93,6 +93,10 @@ const SNAPSHOT_SCHEMA_SENSORS: u32 = 14;
 /// configuration and its wavefunction. Its own block, appended at the
 /// end of the payload, so every earlier payload still decodes.
 const SNAPSHOT_SCHEMA_QUANTUM: u32 = 15;
+/// Schema that introduced joint motor records (v16): the speed, budget
+/// and accumulated impulse ride inside the hinge/prismatic joint
+/// records (2D and 3D), so older payloads decode with motors off.
+const SNAPSHOT_SCHEMA_MOTORS: u32 = 16;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -382,6 +386,15 @@ enum Joint2Dto {
         limit_max: f32,
         impulse: Vec2Dto,
         angular_impulse: f32,
+        /// Motor target speed (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_speed: f32,
+        /// Motor budget (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_max_torque: f32,
+        /// Accumulated motor impulse (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_impulse: f32,
     },
     Prismatic {
         id: u32,
@@ -396,6 +409,15 @@ enum Joint2Dto {
         perp_impulse: f32,
         angular_impulse: f32,
         limit_impulse: f32,
+        /// Motor target speed (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_speed: f32,
+        /// Motor budget (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_max_force: f32,
+        /// Accumulated motor impulse (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_impulse: f32,
     },
     Fixed {
         id: u32,
@@ -2458,6 +2480,15 @@ enum Joint3Dto {
         align_u1: f32,
         align_u2: f32,
         twist_impulse: f32,
+        /// Motor target speed (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_speed: f32,
+        /// Motor budget (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_max_torque: f32,
+        /// Accumulated motor impulse (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_impulse: f32,
     },
     Prismatic3 {
         id: u32,
@@ -2473,6 +2504,15 @@ enum Joint3Dto {
         perp_u2: f32,
         angular_impulse: Vec3Dto,
         limit_impulse: f32,
+        /// Motor target speed (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_speed: f32,
+        /// Motor budget (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_max_force: f32,
+        /// Accumulated motor impulse (schema v16).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        motor_impulse: f32,
     },
     Fixed3 {
         id: u32,
@@ -3109,6 +3149,9 @@ fn joint_dto(j: &Joint2) -> Joint2Dto {
             limit_max: h.limit_max,
             impulse: v2(h.impulse),
             angular_impulse: h.angular_impulse,
+            motor_speed: h.motor_speed,
+            motor_max_torque: h.motor_max_torque,
+            motor_impulse: h.motor_impulse,
         },
         Joint2::Prismatic(p) => Joint2Dto::Prismatic {
             id: p.id as u32,
@@ -3123,6 +3166,9 @@ fn joint_dto(j: &Joint2) -> Joint2Dto {
             perp_impulse: p.perp_impulse,
             angular_impulse: p.angular_impulse,
             limit_impulse: p.limit_impulse,
+            motor_speed: p.motor_speed,
+            motor_max_force: p.motor_max_force,
+            motor_impulse: p.motor_impulse,
         },
         Joint2::Fixed(f) => Joint2Dto::Fixed {
             id: f.id as u32,
@@ -3185,6 +3231,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
                         limit_max: h.limit_max,
                         impulse: v2(Vec2::ZERO),
                         angular_impulse: 0.0,
+                        motor_speed: h.motor_speed,
+                        motor_max_torque: h.motor_max_torque,
+                        motor_impulse: 0.0,
                     },
                     Joint2::Prismatic(p) => Joint2Dto::Prismatic {
                         id: p.id as u32,
@@ -3199,6 +3248,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
                         perp_impulse: 0.0,
                         angular_impulse: 0.0,
                         limit_impulse: 0.0,
+                        motor_speed: p.motor_speed,
+                        motor_max_force: p.motor_max_force,
+                        motor_impulse: 0.0,
                     },
                     Joint2::Fixed(f) => Joint2Dto::Fixed {
                         id: f.id as u32,
@@ -3216,11 +3268,17 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         }
     };
 
-    // Conditional schema: default worlds stay v3 (byte-identical to
-    // pre-gravity files); gravity-feature worlds use v4; anything using
-    // ambient features (or a non-unit ambient scale) uses v5; anything
-    // with a non-default CCD config uses v6; anything with non-default
-    // solver flags uses v7; anything with thermal active uses v8.
+    // Conditional schema, minimality rule: the label is the newest
+    // feature the world actually uses. Default worlds stay v3
+    // (byte-identical to pre-gravity files); gravity-feature worlds use
+    // v4; ambient features (or a non-unit ambient scale) use v5; a
+    // non-default CCD config uses v6; non-default solver flags use v7;
+    // an active thermal config uses v8; a non-default collision-tier
+    // ceiling v9; a thermal sub-feature v10; a radiation option v11; a
+    // nuclear state v12; a collision filter v13; a sensor v14; a
+    // quantum field v15; a joint motor v16. The label never rises past
+    // the newest feature in use, so an old reader keeps reading new
+    // files until they use new features (see the per-version gates).
     let has_ambient = w.ambient.is_active()
         || w.bodies.iter().any(|b| b.ambient_scale != 1.0)
         || w.fluid.config.gamma != 1.0
@@ -3276,17 +3334,30 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
-    let schema = if has_thermal
-        || has_broadphase_mode
-        || has_collision_tier
-        || has_thermal_extras
-        || has_radiation_extras
-        || has_nuclear
-        || has_collision_filters
-        || has_sensors
-        || has_quantum
-    {
-        SNAPSHOT_SCHEMA_VERSION
+    // Schema v16: the label is the newest feature in use (minimality:
+    // a motorless quantum world still writes v15, not v16). Each high
+    // feature maps to the version that introduced it; the low ladder
+    // below keeps its priority order, which coincides with max.
+    let high = [
+        (has_thermal, SNAPSHOT_SCHEMA_THERMAL),
+        (has_broadphase_mode, SNAPSHOT_SCHEMA_THERMAL),
+        (has_collision_tier, SNAPSHOT_SCHEMA_COLLISION_TIER),
+        (has_thermal_extras, SNAPSHOT_SCHEMA_THERMAL_EXTRAS),
+        (has_radiation_extras, SNAPSHOT_SCHEMA_RADIATION_EXTRAS),
+        (has_nuclear, SNAPSHOT_SCHEMA_NUCLEAR),
+        (has_collision_filters, SNAPSHOT_SCHEMA_COLLISION_FILTERS),
+        (has_sensors, SNAPSHOT_SCHEMA_SENSORS),
+        (has_quantum, SNAPSHOT_SCHEMA_QUANTUM),
+        (
+            w.joints.iter().any(|j| j.has_motor()),
+            SNAPSHOT_SCHEMA_MOTORS,
+        ),
+    ]
+    .iter()
+    .filter_map(|(on, v)| on.then_some(*v))
+    .max();
+    let schema = if let Some(v) = high {
+        v
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
     } else if has_ccd {
@@ -3357,6 +3428,9 @@ fn joint3_dto(j: &Joint3) -> Joint3Dto {
             align_u1: h.align_impulse.x,
             align_u2: h.align_impulse.y,
             twist_impulse: h.twist_impulse,
+            motor_speed: h.motor_speed,
+            motor_max_torque: h.motor_max_torque,
+            motor_impulse: h.motor_impulse,
         },
         Joint3::Prismatic(p) => Joint3Dto::Prismatic3 {
             id: p.id as u32,
@@ -3372,6 +3446,9 @@ fn joint3_dto(j: &Joint3) -> Joint3Dto {
             perp_u2: p.perp_impulse.y,
             angular_impulse: v3(p.angular_impulse),
             limit_impulse: p.limit_impulse,
+            motor_speed: p.motor_speed,
+            motor_max_force: p.motor_max_force,
+            motor_impulse: p.motor_impulse,
         },
         Joint3::Fixed(f) => Joint3Dto::Fixed3 {
             id: f.id as u32,
@@ -3437,6 +3514,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
                         align_u1: 0.0,
                         align_u2: 0.0,
                         twist_impulse: 0.0,
+                        motor_speed: h.motor_speed,
+                        motor_max_torque: h.motor_max_torque,
+                        motor_impulse: 0.0,
                     },
                     Joint3::Prismatic(p) => Joint3Dto::Prismatic3 {
                         id: p.id as u32,
@@ -3452,6 +3532,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
                         perp_u2: 0.0,
                         angular_impulse: v3(Vec3::ZERO),
                         limit_impulse: 0.0,
+                        motor_speed: p.motor_speed,
+                        motor_max_force: p.motor_max_force,
+                        motor_impulse: 0.0,
                     },
                     Joint3::Fixed(f) => Joint3Dto::Fixed3 {
                         id: f.id as u32,
@@ -3525,17 +3608,30 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
-    let schema = if has_thermal
-        || has_broadphase_mode
-        || has_collision_tier
-        || has_thermal_extras
-        || has_radiation_extras
-        || has_nuclear
-        || has_collision_filters
-        || has_sensors
-        || has_quantum
-    {
-        SNAPSHOT_SCHEMA_VERSION
+    // Schema v16: the label is the newest feature in use (minimality:
+    // a motorless quantum world still writes v15, not v16). Each high
+    // feature maps to the version that introduced it; the low ladder
+    // below keeps its priority order, which coincides with max.
+    let high = [
+        (has_thermal, SNAPSHOT_SCHEMA_THERMAL),
+        (has_broadphase_mode, SNAPSHOT_SCHEMA_THERMAL),
+        (has_collision_tier, SNAPSHOT_SCHEMA_COLLISION_TIER),
+        (has_thermal_extras, SNAPSHOT_SCHEMA_THERMAL_EXTRAS),
+        (has_radiation_extras, SNAPSHOT_SCHEMA_RADIATION_EXTRAS),
+        (has_nuclear, SNAPSHOT_SCHEMA_NUCLEAR),
+        (has_collision_filters, SNAPSHOT_SCHEMA_COLLISION_FILTERS),
+        (has_sensors, SNAPSHOT_SCHEMA_SENSORS),
+        (has_quantum, SNAPSHOT_SCHEMA_QUANTUM),
+        (
+            w.joints.iter().any(|j| j.has_motor()),
+            SNAPSHOT_SCHEMA_MOTORS,
+        ),
+    ]
+    .iter()
+    .filter_map(|(on, v)| on.then_some(*v))
+    .max();
+    let schema = if let Some(v) = high {
+        v
     } else if has_solver_flags {
         SNAPSHOT_SCHEMA_SOLVER_FLAGS
     } else if has_ccd {
@@ -4094,6 +4190,9 @@ fn load_joint2(w: &mut World2, j: &Joint2Dto, mode: LoadMode) -> Result<(), Snap
             limit_max,
             impulse,
             angular_impulse,
+            motor_speed,
+            motor_max_torque,
+            motor_impulse,
         } => {
             let mut j = make_hinge_joint(
                 *id as usize,
@@ -4121,6 +4220,15 @@ fn load_joint2(w: &mut World2, j: &Joint2Dto, mode: LoadMode) -> Result<(), Snap
                     h.angular_impulse = finite(*angular_impulse, "joint.angular_impulse")?;
                 }
             }
+            if let J::Hinge(h) = &mut j {
+                // Motor configuration restores in every mode: it is
+                // tuning, not warm state. Only the impulse is fresh-gated.
+                h.motor_speed = finite(*motor_speed, "joint.motor_speed")?;
+                h.motor_max_torque = finite(*motor_max_torque, "joint.motor_max_torque")?;
+                if !fresh {
+                    h.motor_impulse = finite(*motor_impulse, "joint.motor_impulse")?;
+                }
+            }
             j
         }
         Joint2Dto::Prismatic {
@@ -4136,6 +4244,9 @@ fn load_joint2(w: &mut World2, j: &Joint2Dto, mode: LoadMode) -> Result<(), Snap
             perp_impulse,
             angular_impulse,
             limit_impulse,
+            motor_speed,
+            motor_max_force,
+            motor_impulse,
         } => {
             let mut j = make_prismatic_joint(
                 *id as usize,
@@ -4167,6 +4278,14 @@ fn load_joint2(w: &mut World2, j: &Joint2Dto, mode: LoadMode) -> Result<(), Snap
                     p.perp_impulse = finite(*perp_impulse, "joint.perp_impulse")?;
                     p.angular_impulse = finite(*angular_impulse, "joint.angular_impulse")?;
                     p.limit_impulse = finite(*limit_impulse, "joint.limit_impulse")?;
+                }
+            }
+            if let J::Prismatic(p) = &mut j {
+                // Motor configuration restores in every mode.
+                p.motor_speed = finite(*motor_speed, "joint.motor_speed")?;
+                p.motor_max_force = finite(*motor_max_force, "joint.motor_max_force")?;
+                if !fresh {
+                    p.motor_impulse = finite(*motor_impulse, "joint.motor_impulse")?;
                 }
             }
             j
@@ -4290,6 +4409,9 @@ fn load_joint3(w: &mut World3, j: &Joint3Dto, mode: LoadMode) -> Result<(), Snap
             align_u1,
             align_u2,
             twist_impulse,
+            motor_speed,
+            motor_max_torque,
+            motor_impulse,
         } => {
             let mut j = make_hinge_joint_3(
                 *id as usize,
@@ -4314,6 +4436,14 @@ fn load_joint3(w: &mut World3, j: &Joint3Dto, mode: LoadMode) -> Result<(), Snap
                     h.twist_impulse = finite(*twist_impulse, "joint.twist_impulse")?;
                 }
             }
+            if let J::Hinge(h) = &mut j {
+                // Motor configuration restores in every mode.
+                h.motor_speed = finite(*motor_speed, "joint.motor_speed")?;
+                h.motor_max_torque = finite(*motor_max_torque, "joint.motor_max_torque")?;
+                if !fresh {
+                    h.motor_impulse = finite(*motor_impulse, "joint.motor_impulse")?;
+                }
+            }
             j
         }
         Joint3Dto::Prismatic3 {
@@ -4330,6 +4460,9 @@ fn load_joint3(w: &mut World3, j: &Joint3Dto, mode: LoadMode) -> Result<(), Snap
             perp_u2,
             angular_impulse,
             limit_impulse,
+            motor_speed,
+            motor_max_force,
+            motor_impulse,
         } => {
             let mut j = make_prismatic_joint_3(
                 *id as usize,
@@ -4355,6 +4488,14 @@ fn load_joint3(w: &mut World3, j: &Joint3Dto, mode: LoadMode) -> Result<(), Snap
                     };
                     p.angular_impulse = v3_from(angular_impulse, "joint.angular_impulse")?;
                     p.limit_impulse = finite(*limit_impulse, "joint.limit_impulse")?;
+                }
+            }
+            if let J::Prismatic(p) = &mut j {
+                // Motor configuration restores in every mode.
+                p.motor_speed = finite(*motor_speed, "joint.motor_speed")?;
+                p.motor_max_force = finite(*motor_max_force, "joint.motor_max_force")?;
+                if !fresh {
+                    p.motor_impulse = finite(*motor_impulse, "joint.motor_impulse")?;
                 }
             }
             j
@@ -5344,7 +5485,7 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
-        encode_joint2(&mut p, j);
+        encode_joint2(&mut p, j, dto.schema);
     }
     write_u32(&mut p, dto.contacts.len() as u32);
     for c in &dto.contacts {
@@ -5929,7 +6070,7 @@ fn decode_quantum(r: &mut Reader, version: u32) -> Result<QuantumDto, SnapshotEr
     })
 }
 
-fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
+fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto, version: u32) {
     match j {
         Joint2Dto::Distance {
             id,
@@ -5961,6 +6102,9 @@ fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
             limit_max,
             impulse,
             angular_impulse,
+            motor_speed,
+            motor_max_torque,
+            motor_impulse,
         } => {
             write_u8(out, 1);
             write_u32(out, *id);
@@ -5975,6 +6119,12 @@ fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
             write_f32(out, impulse.x);
             write_f32(out, impulse.y);
             write_f32(out, *angular_impulse);
+            // Schema v16: the motor records.
+            if version >= SNAPSHOT_SCHEMA_MOTORS {
+                write_f32(out, *motor_speed);
+                write_f32(out, *motor_max_torque);
+                write_f32(out, *motor_impulse);
+            }
         }
         Joint2Dto::Prismatic {
             id,
@@ -5989,6 +6139,9 @@ fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
             perp_impulse,
             angular_impulse,
             limit_impulse,
+            motor_speed,
+            motor_max_force,
+            motor_impulse,
         } => {
             write_u8(out, 2);
             write_u32(out, *id);
@@ -6012,6 +6165,12 @@ fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
             write_f32(out, *perp_impulse);
             write_f32(out, *angular_impulse);
             write_f32(out, *limit_impulse);
+            // Schema v16: the motor records.
+            if version >= SNAPSHOT_SCHEMA_MOTORS {
+                write_f32(out, *motor_speed);
+                write_f32(out, *motor_max_force);
+                write_f32(out, *motor_impulse);
+            }
         }
         Joint2Dto::Fixed {
             id,
@@ -6045,7 +6204,7 @@ fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto) {
     }
 }
 
-fn decode_joint2(r: &mut Reader) -> Result<Joint2Dto, SnapshotError> {
+fn decode_joint2(r: &mut Reader, version: u32) -> Result<Joint2Dto, SnapshotError> {
     let tag = r.read_u8()?;
     let id = r.read_u32()?;
     let body_a = r.read_u32()?;
@@ -6068,20 +6227,37 @@ fn decode_joint2(r: &mut Reader) -> Result<Joint2Dto, SnapshotError> {
             rest_length: r.read_f32()?,
             impulse: r.read_f32()?,
         }),
-        1 => Ok(Joint2Dto::Hinge {
-            id,
-            body_a,
-            body_b,
-            anchor_a,
-            anchor_b,
-            limit_min: r.read_f32()?,
-            limit_max: r.read_f32()?,
-            impulse: Vec2Dto {
+        1 => {
+            let limit_min = r.read_f32()?;
+            let limit_max = r.read_f32()?;
+            let impulse = Vec2Dto {
                 x: r.read_f32()?,
                 y: r.read_f32()?,
-            },
-            angular_impulse: r.read_f32()?,
-        }),
+            };
+            let angular_impulse = r.read_f32()?;
+            // Schema v16: older payloads carry no motor records, so
+            // their motors stay off.
+            let (motor_speed, motor_max_torque, motor_impulse) =
+                if version >= SNAPSHOT_SCHEMA_MOTORS {
+                    (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+            Ok(Joint2Dto::Hinge {
+                id,
+                body_a,
+                body_b,
+                anchor_a,
+                anchor_b,
+                limit_min,
+                limit_max,
+                impulse,
+                angular_impulse,
+                motor_speed,
+                motor_max_torque,
+                motor_impulse,
+            })
+        }
         2 => {
             let axis_a = Vec2Dto {
                 x: r.read_f32()?,
@@ -6094,6 +6270,17 @@ fn decode_joint2(r: &mut Reader) -> Result<Joint2Dto, SnapshotError> {
                 1 => Some(r.read_f32()?),
                 _ => return Err(SnapshotError::Parse("bad ref_angle flag".into())),
             };
+            let perp_impulse = r.read_f32()?;
+            let angular_impulse = r.read_f32()?;
+            let limit_impulse = r.read_f32()?;
+            // Schema v16: older payloads carry no motor records, so
+            // their motors stay off.
+            let (motor_speed, motor_max_force, motor_impulse) = if version >= SNAPSHOT_SCHEMA_MOTORS
+            {
+                (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
             Ok(Joint2Dto::Prismatic {
                 id,
                 body_a,
@@ -6104,9 +6291,12 @@ fn decode_joint2(r: &mut Reader) -> Result<Joint2Dto, SnapshotError> {
                 limit_min,
                 limit_max,
                 ref_angle,
-                perp_impulse: r.read_f32()?,
-                angular_impulse: r.read_f32()?,
-                limit_impulse: r.read_f32()?,
+                perp_impulse,
+                angular_impulse,
+                limit_impulse,
+                motor_speed,
+                motor_max_force,
+                motor_impulse,
             })
         }
         3 => {
@@ -6133,7 +6323,7 @@ fn decode_joint2(r: &mut Reader) -> Result<Joint2Dto, SnapshotError> {
     }
 }
 
-fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
+fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto, version: u32) {
     match j {
         Joint3Dto::Distance3 {
             id,
@@ -6171,6 +6361,9 @@ fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
             align_u1,
             align_u2,
             twist_impulse,
+            motor_speed,
+            motor_max_torque,
+            motor_impulse,
         } => {
             write_u8(out, 1);
             write_u32(out, *id);
@@ -6196,6 +6389,12 @@ fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
             write_f32(out, *align_u1);
             write_f32(out, *align_u2);
             write_f32(out, *twist_impulse);
+            // Schema v16: the motor records.
+            if version >= SNAPSHOT_SCHEMA_MOTORS {
+                write_f32(out, *motor_speed);
+                write_f32(out, *motor_max_torque);
+                write_f32(out, *motor_impulse);
+            }
         }
         Joint3Dto::Prismatic3 {
             id,
@@ -6211,6 +6410,9 @@ fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
             perp_u2,
             angular_impulse,
             limit_impulse,
+            motor_speed,
+            motor_max_force,
+            motor_impulse,
         } => {
             write_u8(out, 2);
             write_u32(out, *id);
@@ -6243,6 +6445,12 @@ fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
             write_f32(out, angular_impulse.y);
             write_f32(out, angular_impulse.z);
             write_f32(out, *limit_impulse);
+            // Schema v16: the motor records.
+            if version >= SNAPSHOT_SCHEMA_MOTORS {
+                write_f32(out, *motor_speed);
+                write_f32(out, *motor_max_force);
+                write_f32(out, *motor_impulse);
+            }
         }
         Joint3Dto::Fixed3 {
             id,
@@ -6284,7 +6492,7 @@ fn encode_joint3(out: &mut Vec<u8>, j: &Joint3Dto) {
     }
 }
 
-fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
+fn decode_joint3(r: &mut Reader, version: u32) -> Result<Joint3Dto, SnapshotError> {
     let tag = r.read_u8()?;
     let id = r.read_u32()?;
     let body_a = r.read_u32()?;
@@ -6322,6 +6530,22 @@ fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
             };
             let limit_min = r.read_f32()?;
             let limit_max = r.read_f32()?;
+            let impulse = Vec3Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+                z: r.read_f32()?,
+            };
+            let align_u1 = r.read_f32()?;
+            let align_u2 = r.read_f32()?;
+            let twist_impulse = r.read_f32()?;
+            // Schema v16: older payloads carry no motor records, so
+            // their motors stay off.
+            let (motor_speed, motor_max_torque, motor_impulse) =
+                if version >= SNAPSHOT_SCHEMA_MOTORS {
+                    (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
             Ok(Joint3Dto::Hinge3 {
                 id,
                 body_a,
@@ -6332,14 +6556,13 @@ fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
                 axis_b,
                 limit_min,
                 limit_max,
-                impulse: Vec3Dto {
-                    x: r.read_f32()?,
-                    y: r.read_f32()?,
-                    z: r.read_f32()?,
-                },
-                align_u1: r.read_f32()?,
-                align_u2: r.read_f32()?,
-                twist_impulse: r.read_f32()?,
+                impulse,
+                align_u1,
+                align_u2,
+                twist_impulse,
+                motor_speed,
+                motor_max_torque,
+                motor_impulse,
             })
         }
         2 => {
@@ -6355,6 +6578,22 @@ fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
                 1 => Some([r.read_f32()?, r.read_f32()?, r.read_f32()?, r.read_f32()?]),
                 _ => return Err(SnapshotError::Parse("bad ref_orientation flag".into())),
             };
+            let perp_u1 = r.read_f32()?;
+            let perp_u2 = r.read_f32()?;
+            let angular_impulse = Vec3Dto {
+                x: r.read_f32()?,
+                y: r.read_f32()?,
+                z: r.read_f32()?,
+            };
+            let limit_impulse = r.read_f32()?;
+            // Schema v16: older payloads carry no motor records, so
+            // their motors stay off.
+            let (motor_speed, motor_max_force, motor_impulse) = if version >= SNAPSHOT_SCHEMA_MOTORS
+            {
+                (r.read_f32()?, r.read_f32()?, r.read_f32()?)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
             Ok(Joint3Dto::Prismatic3 {
                 id,
                 body_a,
@@ -6365,14 +6604,13 @@ fn decode_joint3(r: &mut Reader) -> Result<Joint3Dto, SnapshotError> {
                 limit_min,
                 limit_max,
                 ref_orientation,
-                perp_u1: r.read_f32()?,
-                perp_u2: r.read_f32()?,
-                angular_impulse: Vec3Dto {
-                    x: r.read_f32()?,
-                    y: r.read_f32()?,
-                    z: r.read_f32()?,
-                },
-                limit_impulse: r.read_f32()?,
+                perp_u1,
+                perp_u2,
+                angular_impulse,
+                limit_impulse,
+                motor_speed,
+                motor_max_force,
+                motor_impulse,
             })
         }
         3 => {
@@ -6647,7 +6885,7 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
             }
             let mut v = Vec::with_capacity(n.min(256));
             for _ in 0..n {
-                v.push(decode_joint2(&mut r)?);
+                v.push(decode_joint2(&mut r, version)?);
             }
             v
         },
@@ -6885,7 +7123,7 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
-        encode_joint3(&mut p, j);
+        encode_joint3(&mut p, j, dto.schema);
     }
     write_u32(&mut p, dto.contacts.len() as u32);
     for c in &dto.contacts {
@@ -7159,7 +7397,7 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
             }
             let mut v = Vec::with_capacity(n.min(256));
             for _ in 0..n {
-                v.push(decode_joint3(&mut r)?);
+                v.push(decode_joint3(&mut r, version)?);
             }
             v
         },
@@ -7963,8 +8201,8 @@ mod tests {
         w.broadphase_mode = phieng_broadphase::BroadphaseMode::BruteForce;
         let text = world2_to_json(&w, LoadMode::Exact).expect("serializes");
         assert!(
-            text.contains(&format!("\"schema\": {SNAPSHOT_SCHEMA_VERSION}")),
-            "non-default world writes the current schema"
+            text.contains(&format!("\"schema\": {SNAPSHOT_SCHEMA_THERMAL}")),
+            "the label is the newest feature in use: broadphase/thermal write v8"
         );
 
         // A v8-shaped document (tier key absent) must load as full

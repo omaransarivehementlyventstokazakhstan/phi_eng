@@ -61,6 +61,12 @@ public struct HingeJoint3
     public float AlignU2;
     /// <summary>Accumulated twist-limit impulse (warm start).</summary>
     public float TwistImpulse;
+    /// <summary>Motor target twist rate (rad/s, B minus A). Acts only when <see cref="MotorMaxTorque"/> is positive.</summary>
+    public float MotorSpeed;
+    /// <summary>Motor torque budget (N·m). Zero disables the motor.</summary>
+    public float MotorMaxTorque;
+    /// <summary>Accumulated motor impulse (warm start, clamped to the budget).</summary>
+    public float MotorImpulse;
 }
 
 /// <summary>
@@ -98,6 +104,12 @@ public struct PrismaticJoint3
     public Vector3 AngularImpulse;
     /// <summary>Accumulated travel-limit impulse (warm start).</summary>
     public float LimitImpulse;
+    /// <summary>Motor target slide speed along the axis. Acts only when <see cref="MotorMaxForce"/> is positive.</summary>
+    public float MotorSpeed;
+    /// <summary>Motor force budget (N). Zero disables the motor.</summary>
+    public float MotorMaxForce;
+    /// <summary>Accumulated motor impulse (warm start, clamped to the budget).</summary>
+    public float MotorImpulse;
 }
 
 /// <summary>
@@ -227,6 +239,42 @@ public sealed class Joint3
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Set the hinge twist motor: target twist rate plus torque budget.
+    /// A zero budget disables the motor.
+    /// </summary>
+    public void SetHingeMotor(float speed, float maxTorque)
+    {
+        if (Type != Joint3Type.Hinge3)
+            throw new InvalidOperationException("Not a hinge joint.");
+        if (!float.IsFinite(speed) || !float.IsFinite(maxTorque))
+            throw new ArgumentException("Non-finite motor speed or budget.");
+        if (maxTorque < 0.0f)
+            throw new ArgumentException("Negative motor budget.");
+        var h = Hinge!.Value;
+        h.MotorSpeed = speed;
+        h.MotorMaxTorque = maxTorque;
+        Hinge = h;
+    }
+
+    /// <summary>
+    /// Set the prismatic motor: target slide speed plus force budget.
+    /// A zero budget disables the motor.
+    /// </summary>
+    public void SetPrismaticMotor(float speed, float maxForce)
+    {
+        if (Type != Joint3Type.Prismatic3)
+            throw new InvalidOperationException("Not a prismatic joint.");
+        if (!float.IsFinite(speed) || !float.IsFinite(maxForce))
+            throw new ArgumentException("Non-finite motor speed or budget.");
+        if (maxForce < 0.0f)
+            throw new ArgumentException("Negative motor budget.");
+        var p = Prismatic!.Value;
+        p.MotorSpeed = speed;
+        p.MotorMaxForce = maxForce;
+        Prismatic = p;
     }
 
     /// <summary>Body ids touched by this joint.</summary>
@@ -470,6 +518,7 @@ public static class Joint3Math
             Impulse = Vector3.Zero,
             AlignU1 = 0, AlignU2 = 0,
             TwistImpulse = 0,
+            MotorSpeed = 0, MotorMaxTorque = 0, MotorImpulse = 0,
         });
     }
 
@@ -496,6 +545,7 @@ public static class Joint3Math
             PerpU1 = 0, PerpU2 = 0,
             AngularImpulse = Vector3.Zero,
             LimitImpulse = 0,
+            MotorSpeed = 0, MotorMaxForce = 0, MotorImpulse = 0,
         });
     }
 
@@ -749,6 +799,8 @@ public static class Joint3Math
         }
         if (h.TwistImpulse != 0.0f)
             ApplyAngular3(bodies, h.BodyA, h.BodyB, HingeAxisAWorld(h, bodies), h.TwistImpulse);
+        if (h.MotorImpulse != 0.0f)
+            ApplyAngular3(bodies, h.BodyA, h.BodyB, HingeAxisAWorld(h, bodies), h.MotorImpulse);
     }
 
     /// <summary>Runs one sequential-impulse solve step for a hinge joint.</summary>
@@ -756,6 +808,7 @@ public static class Joint3Math
     {
         HingeSolvePoint(ref h, bodies, dt);
         HingeSolveAlign(ref h, bodies, dt);
+        HingeSolveMotor(ref h, bodies, dt);
         HingeSolveTwist(ref h, bodies, dt);
     }
 
@@ -832,6 +885,23 @@ public static class Joint3Math
         ApplyAngular3(bodies, h.BodyA, h.BodyB, u, lambda);
     }
 
+    static void HingeSolveMotor(ref HingeJoint3 h, List<RigidBody3> bodies, float dt)
+    {
+        if (h.MotorMaxTorque <= 0.0f) return;
+        Vector3 u = HingeAxisAWorld(h, bodies);
+        var ia = bodies[h.BodyA].WorldInvInertia();
+        var ib = bodies[h.BodyB].WorldInvInertia();
+        Vector3 wRel = bodies[h.BodyB].AngularVelocity - bodies[h.BodyA].AngularVelocity;
+        float m = AngularMass3(ia, ib, u);
+        if (m == 0.0f) return;
+        float lambda = -m * (Vector3.Dot(wRel, u) - h.MotorSpeed);
+        float maxImpulse = h.MotorMaxTorque * MathF.Max(dt, 0.0f);
+        float old = h.MotorImpulse;
+        h.MotorImpulse = MathF.Max(-maxImpulse, MathF.Min(maxImpulse, old + lambda));
+        float applied = h.MotorImpulse - old;
+        ApplyAngular3(bodies, h.BodyA, h.BodyB, u, applied);
+    }
+
     /// <summary>World-space prismatic slide axis.</summary>
     public static Vector3 PrismaticAxisWorld(PrismaticJoint3 p, List<RigidBody3> bodies) =>
         bodies[p.BodyA].Transform.RotateVector(p.AxisA);
@@ -852,6 +922,9 @@ public static class Joint3Math
         if (p.LimitImpulse != 0.0f)
             ApplyPairImpulse3(bodies, p.BodyA, p.BodyB,
                 PrismaticAxisWorld(p, bodies) * p.LimitImpulse, pa, pb);
+        if (p.MotorImpulse != 0.0f)
+            ApplyPairImpulse3(bodies, p.BodyA, p.BodyB,
+                PrismaticAxisWorld(p, bodies) * p.MotorImpulse, pa, pb);
         if (p.AngularImpulse != Vector3.Zero)
             ApplyAngularVec3(bodies, p.BodyA, p.BodyB, p.AngularImpulse);
     }
@@ -865,6 +938,7 @@ public static class Joint3Math
                 bodies[p.BodyB].Transform.Rotation);
         PrismaticSolvePerp(ref p, bodies, dt);
         PrismaticSolveAngular(ref p, bodies, dt);
+        PrismaticSolveMotor(ref p, bodies, dt);
         PrismaticSolveTravel(ref p, bodies, dt);
     }
 
@@ -921,6 +995,30 @@ public static class Joint3Math
             else p.AngularImpulse.Z += lambda;
             ApplyAngular3(bodies, p.BodyA, p.BodyB, axis, lambda);
         }
+    }
+
+    static void PrismaticSolveMotor(ref PrismaticJoint3 p, List<RigidBody3> bodies, float dt)
+    {
+        if (p.MotorMaxForce <= 0.0f) return;
+        Vector3 pa = PrismaticWorldA(p, bodies);
+        Vector3 pb = PrismaticWorldB(p, bodies);
+        Vector3 ax = PrismaticAxisWorld(p, bodies);
+        Vector3 ra = pa - bodies[p.BodyA].Transform.Position;
+        Vector3 rb = pb - bodies[p.BodyB].Transform.Position;
+        Vector3 va = bodies[p.BodyA].Velocity + Vector3.Cross(bodies[p.BodyA].AngularVelocity, ra);
+        Vector3 vb = bodies[p.BodyB].Velocity + Vector3.Cross(bodies[p.BodyB].AngularVelocity, rb);
+        float vn = Vector3.Dot(vb - va, ax);
+        float m = EffectiveMass3(
+            bodies[p.BodyA].InvMass, bodies[p.BodyB].InvMass,
+            bodies[p.BodyA].WorldInvInertia(), bodies[p.BodyB].WorldInvInertia(),
+            ra, rb, ax);
+        if (m == 0.0f) return;
+        float lambda = -m * (vn - p.MotorSpeed);
+        float maxImpulse = p.MotorMaxForce * MathF.Max(dt, 0.0f);
+        float old = p.MotorImpulse;
+        p.MotorImpulse = MathF.Max(-maxImpulse, MathF.Min(maxImpulse, old + lambda));
+        float applied = p.MotorImpulse - old;
+        ApplyPairImpulse3(bodies, p.BodyA, p.BodyB, ax * applied, pa, pb);
     }
 
     static void PrismaticSolveTravel(ref PrismaticJoint3 p, List<RigidBody3> bodies, float dt)

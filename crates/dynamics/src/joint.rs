@@ -126,6 +126,16 @@ impl Joint2 {
         }
     }
 
+    /// Whether this joint carries motor configuration (a set speed or
+    /// budget, even on a disabled motor): the snapshot schema gate.
+    pub fn has_motor(&self) -> bool {
+        match self {
+            Joint2::Hinge(h) => h.motor_speed != 0.0 || h.motor_max_torque != 0.0,
+            Joint2::Prismatic(p) => p.motor_speed != 0.0 || p.motor_max_force != 0.0,
+            Joint2::Distance(_) | Joint2::Fixed(_) => false,
+        }
+    }
+
     /// Assign the joint id (used by `World2` to preserve id == index).
     pub fn set_id(&mut self, id: usize) {
         match self {
@@ -417,6 +427,13 @@ pub struct HingeJoint {
     pub impulse: Vec2,
     /// Accumulated limit impulse (warm start).
     pub angular_impulse: f32,
+    /// Motor target relative angular velocity (rad/s, B minus A).
+    /// Only acts when `motor_max_torque > 0`.
+    pub motor_speed: f32,
+    /// Motor torque budget (N·m). Zero disables the motor.
+    pub motor_max_torque: f32,
+    /// Accumulated motor impulse (warm start, clamped to the budget).
+    pub motor_impulse: f32,
 }
 
 impl HingeJoint {
@@ -459,11 +476,28 @@ impl HingeJoint {
             a.angular_velocity -= lam * a.inv_inertia;
             b.angular_velocity += lam * b.inv_inertia;
         }
+        if self.motor_impulse != 0.0 {
+            let lam = self.motor_impulse;
+            let (a, b) = if self.body_a < self.body_b {
+                let (head, tail) = bodies.split_at_mut(self.body_b);
+                (&mut head[self.body_a], &mut tail[0])
+            } else {
+                let (head, tail) = bodies.split_at_mut(self.body_a);
+                (&mut tail[0], &mut head[self.body_b])
+            };
+            a.angular_velocity -= lam * a.inv_inertia;
+            b.angular_velocity += lam * b.inv_inertia;
+        }
     }
 
-    /// One iteration: point coincidence (2 axes) + angle limits if set.
+    /// One iteration: point coincidence (2 axes) + motor if budgeted
+    /// + angle limits if set.
+    ///
+    /// The motor runs before the limits so a stalled motor leans on
+    /// the stops instead of through them.
     fn solve(&mut self, bodies: &mut [RigidBody2], dt: f32) {
         self.solve_point(bodies, dt);
+        self.solve_motor(bodies, dt);
         self.solve_limits(bodies, dt);
     }
 
@@ -510,6 +544,37 @@ impl HingeJoint {
         }
     }
 
+    /// Velocity motor on the hinge axis. C = w_rel - motor_speed;
+    /// λ = -m * C, with the ACCUMULATED impulse clamped to the torque
+    /// budget (max_torque * dt). Hits the target speed exactly when the
+    /// budget covers it, slips below it when stalled. Off when the
+    /// budget is zero.
+    fn solve_motor(&mut self, bodies: &mut [RigidBody2], dt: f32) {
+        if self.motor_max_torque <= 0.0 {
+            return;
+        }
+        let w_rel = bodies[self.body_b].angular_velocity - bodies[self.body_a].angular_velocity;
+        let k = bodies[self.body_a].inv_inertia + bodies[self.body_b].inv_inertia;
+        if k <= 0.0 {
+            return;
+        }
+        let m_ang = 1.0 / k;
+        let lambda = -m_ang * (w_rel - self.motor_speed);
+        let max_impulse = self.motor_max_torque * dt.max(0.0);
+        let old = self.motor_impulse;
+        self.motor_impulse = (old + lambda).clamp(-max_impulse, max_impulse);
+        let applied = self.motor_impulse - old;
+        let (a, b) = if self.body_a < self.body_b {
+            let (head, tail) = bodies.split_at_mut(self.body_b);
+            (&mut head[self.body_a], &mut tail[0])
+        } else {
+            let (head, tail) = bodies.split_at_mut(self.body_a);
+            (&mut tail[0], &mut head[self.body_b])
+        };
+        a.angular_velocity -= applied * a.inv_inertia;
+        b.angular_velocity += applied * b.inv_inertia;
+    }
+
     /// Angle limits. C = θ - clamp(θ) (0 inside range).
     /// λ = -m_ang * (w_rel + β * C / dt), bilateral within the active
     /// side. Skipped entirely for free hinges (min > max).
@@ -550,6 +615,24 @@ impl HingeJoint {
     }
 }
 
+impl HingeJoint {
+    /// Set the velocity motor: target relative angular velocity plus
+    /// torque budget. A zero budget disables the motor. The
+    /// accumulated impulse survives retuning (the per-step clamp pulls
+    /// it inside a shrunk budget on its own).
+    pub fn set_motor(&mut self, speed: f32, max_torque: f32) -> Result<(), JointError> {
+        if !speed.is_finite() || !max_torque.is_finite() {
+            return Err(JointError::NonFiniteInput);
+        }
+        if max_torque < 0.0 {
+            return Err(JointError::InvalidParams);
+        }
+        self.motor_speed = speed;
+        self.motor_max_torque = max_torque;
+        Ok(())
+    }
+}
+
 /// A prismatic (slider) joint: translation is free along `axis_a`
 /// (A's local frame), locked perpendicular to it, and relative rotation
 /// is locked to the pose at first solve (latched `ref_angle`).
@@ -584,6 +667,32 @@ pub struct PrismaticJoint {
     pub angular_impulse: f32,
     /// Accumulated limit impulse (warm start, scalar along CURRENT axis).
     pub limit_impulse: f32,
+    /// Motor target slide speed along the axis (world units/s).
+    /// Only acts when `motor_max_force > 0`.
+    pub motor_speed: f32,
+    /// Motor force budget (N). Zero disables the motor.
+    pub motor_max_force: f32,
+    /// Accumulated motor impulse (warm start, clamped to the budget,
+    /// scalar along the CURRENT axis).
+    pub motor_impulse: f32,
+}
+
+impl PrismaticJoint {
+    /// Set the velocity motor: target slide speed plus force budget.
+    /// A zero budget disables the motor. The accumulated impulse
+    /// survives retuning (the per-step clamp pulls it inside a shrunk
+    /// budget on its own).
+    pub fn set_motor(&mut self, speed: f32, max_force: f32) -> Result<(), JointError> {
+        if !speed.is_finite() || !max_force.is_finite() {
+            return Err(JointError::NonFiniteInput);
+        }
+        if max_force < 0.0 {
+            return Err(JointError::InvalidParams);
+        }
+        self.motor_speed = speed;
+        self.motor_max_force = max_force;
+        Ok(())
+    }
 }
 
 /// A weld (fixed) joint: the two anchors must coincide AND the relative
@@ -649,6 +758,17 @@ impl PrismaticJoint {
                 pb,
             );
         }
+        if self.motor_impulse != 0.0 {
+            let ax = self.axis_world(bodies);
+            apply_pair_impulse(
+                bodies,
+                self.body_a,
+                self.body_b,
+                ax * self.motor_impulse,
+                pa,
+                pb,
+            );
+        }
         if self.angular_impulse != 0.0 {
             let lam = self.angular_impulse;
             let (a, b) = if self.body_a < self.body_b {
@@ -674,6 +794,7 @@ impl PrismaticJoint {
         }
         self.solve_perp(bodies, dt);
         self.solve_angular(bodies, dt);
+        self.solve_motor(bodies, dt);
         self.solve_limits(bodies, dt);
     }
 
@@ -746,6 +867,42 @@ impl PrismaticJoint {
         };
         a.angular_velocity -= lambda * a.inv_inertia;
         b.angular_velocity += lambda * b.inv_inertia;
+    }
+
+    /// Velocity motor along the slide axis. C = v_rel - motor_speed;
+    /// λ = -m * C, with the ACCUMULATED impulse clamped to the force
+    /// budget (max_force * dt). Hits the target slide speed exactly
+    /// when the budget covers it. Off when the budget is zero.
+    fn solve_motor(&mut self, bodies: &mut [RigidBody2], dt: f32) {
+        if self.motor_max_force <= 0.0 {
+            return;
+        }
+        let pa = self.world_a(bodies);
+        let pb = self.world_b(bodies);
+        let ax = self.axis_world(bodies);
+        let ra = pa - bodies[self.body_a].transform.position;
+        let rb = pb - bodies[self.body_b].transform.position;
+        let va = bodies[self.body_a].velocity + perp(ra) * bodies[self.body_a].angular_velocity;
+        let vb = bodies[self.body_b].velocity + perp(rb) * bodies[self.body_b].angular_velocity;
+        let vn = (vb - va).dot(ax);
+        let m = effective_mass(
+            bodies[self.body_a].inv_mass,
+            bodies[self.body_b].inv_mass,
+            bodies[self.body_a].inv_inertia,
+            bodies[self.body_b].inv_inertia,
+            ra,
+            rb,
+            ax,
+        );
+        if m == 0.0 {
+            return;
+        }
+        let lambda = -m * (vn - self.motor_speed);
+        let max_impulse = self.motor_max_force * dt.max(0.0);
+        let old = self.motor_impulse;
+        self.motor_impulse = (old + lambda).clamp(-max_impulse, max_impulse);
+        let applied = self.motor_impulse - old;
+        apply_pair_impulse(bodies, self.body_a, self.body_b, ax * applied, pa, pb);
     }
 
     /// Travel limits along the axis. s = (pb - pa) · axis;
@@ -1043,6 +1200,9 @@ pub fn make_hinge_joint(
         limit_max,
         impulse: Vec2::ZERO,
         angular_impulse: 0.0,
+        motor_speed: 0.0,
+        motor_max_torque: 0.0,
+        motor_impulse: 0.0,
     }))
 }
 
@@ -1106,6 +1266,9 @@ pub fn make_prismatic_joint(
         perp_impulse: 0.0,
         angular_impulse: 0.0,
         limit_impulse: 0.0,
+        motor_speed: 0.0,
+        motor_max_force: 0.0,
+        motor_impulse: 0.0,
     }))
 }
 
@@ -1839,6 +2002,236 @@ mod tests {
         for body in &world.bodies {
             assert!(body.transform.position.x.is_finite());
             assert!(body.angular_velocity.is_finite());
+        }
+    }
+
+    fn bits(v: f32) -> u32 {
+        v.to_bits()
+    }
+
+    /// A free hinge pendulum (pivot at the origin, arm below), motorized.
+    fn motor_pendulum(speed: f32, torque: f32, gravity_y: f32) -> (crate::World2, usize) {
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::new(0.0, gravity_y);
+        world.linear_sleep_threshold = 0.0;
+        world.angular_sleep_threshold = 0.0;
+        let pivot = world
+            .add_static_body(Vec2::ZERO, Shape2::Circle { radius: 0.2 })
+            .expect("valid shape");
+        let arm = world
+            .add_dynamic_body(
+                Vec2::new(0.0, -1.0),
+                Shape2::Box {
+                    half_extents: Vec2::new(0.1, 1.0),
+                },
+                1.0,
+            )
+            .expect("valid shape");
+        let mut joint = make_hinge_joint(
+            0,
+            pivot,
+            arm,
+            Vec2::ZERO,
+            Vec2::new(0.0, 1.0),
+            1.0,
+            -1.0,
+            0.0,
+            2,
+        )
+        .expect("valid joint");
+        if let Joint2::Hinge(h) = &mut joint {
+            h.set_motor(speed, torque).expect("valid motor");
+        }
+        world.add_joint(joint).expect("valid joint");
+        (world, arm)
+    }
+
+    /// J45: a budgeted hinge motor spins its arm up to the target speed.
+    #[test]
+    fn j45_hinge_motor_reaches_target_speed() {
+        let (mut world, arm) = motor_pendulum(3.0, 1000.0, 0.0);
+        let dt = 1.0 / 60.0;
+        for _ in 0..300 {
+            world.step(dt);
+        }
+        let w = world.bodies[arm].angular_velocity;
+        assert_eq!(bits(w), 0x403f_f7cf);
+        assert!((w - 3.0).abs() < 1e-2, "motor must reach 3 rad/s, got {w}");
+    }
+
+    /// J46: a starved motor slips below target with its impulse
+    /// saturated at the budget, and bad tuning is rejected.
+    #[test]
+    fn j46_weak_motor_slips_with_saturated_impulse() {
+        let (mut world, arm) = motor_pendulum(3.0, 0.5, -9.81);
+        // Bad tuning is rejected, not clamped into silence.
+        if let Joint2::Hinge(h) = &mut world.joints[0] {
+            assert_eq!(h.set_motor(f32::NAN, 1.0), Err(JointError::NonFiniteInput));
+            assert_eq!(h.set_motor(1.0, -1.0), Err(JointError::InvalidParams));
+        } else {
+            panic!("expected a hinge");
+        }
+        let dt = 1.0 / 60.0;
+        for _ in 0..600 {
+            world.step(dt);
+        }
+        let w = world.bodies[arm].angular_velocity;
+        let imp = match &world.joints[0] {
+            Joint2::Hinge(h) => h.motor_impulse,
+            _ => panic!("expected a hinge"),
+        };
+        assert_eq!(bits(imp), 0x3c08_8889);
+        // No bit pin on w: the stalled arm is a decaying oscillation,
+        // and pinning an oscillator's phase would pin solver jitter,
+        // not motor physics. The slip is the bound below; the saturated
+        // impulse above is the bit-exact proof the budget binds.
+        assert!(
+            w.abs() < 0.5,
+            "starved motor must slip far below 3 rad/s, got {w}"
+        );
+        assert!(w > 0.0 && w < 3.0, "starved motor must slip, got {w}");
+        assert!(
+            (imp.abs() - 0.5 * dt).abs() < 1e-9,
+            "impulse must sit on the budget {imp}"
+        );
+    }
+
+    /// J47: a prismatic motor extends its slider at the target speed.
+    #[test]
+    fn j47_prismatic_motor_extends_at_target_speed() {
+        let mut world = crate::World2::new();
+        world.gravity = Vec2::ZERO;
+        world.linear_sleep_threshold = 0.0;
+        world.angular_sleep_threshold = 0.0;
+        let rail = world
+            .add_static_body(
+                Vec2::ZERO,
+                Shape2::Box {
+                    half_extents: Vec2::new(5.0, 0.2),
+                },
+            )
+            .expect("valid shape");
+        // A sensor rail: joints ignore solidity, so the slide measures
+        // the motor alone instead of wrestling contact.
+        world.bodies[rail].is_sensor = true;
+        let slider = world
+            .add_dynamic_body(
+                Vec2::ZERO,
+                Shape2::Box {
+                    half_extents: Vec2::new(0.3, 0.3),
+                },
+                1.0,
+            )
+            .expect("valid shape");
+        let mut joint = make_prismatic_joint(
+            0,
+            rail,
+            slider,
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::X,
+            -10.0,
+            10.0,
+            0.0,
+            2,
+        )
+        .expect("valid joint");
+        if let Joint2::Prismatic(p) = &mut joint {
+            p.set_motor(2.0, 10000.0).expect("valid motor");
+        }
+        world.add_joint(joint).expect("valid joint");
+        let dt = 1.0 / 60.0;
+        for _ in 0..120 {
+            world.step(dt);
+        }
+        let p = world.bodies[slider].transform.position;
+        assert_eq!(bits(p.x), 0x407f_f522);
+        assert!(
+            (p.x - 4.0).abs() < 0.05,
+            "slider must extend at 2 m/s, got {p}"
+        );
+        assert!(p.y.abs() < 0.05, "slider must stay on the rail, got {p}");
+    }
+
+    /// J48: motors round-trip through save/load (schema v16), and an
+    /// unmotorized world stays on its old schema with motors off.
+    #[test]
+    fn j48_motors_persist_through_save_load() {
+        use crate::snapshot::{
+            world2_from_binary, world2_to_binary, LoadMode, SNAPSHOT_SCHEMA_VERSION,
+        };
+        fn json_schema(text: &str) -> u32 {
+            let marker = "\"schema\": ";
+            let at = text.find(marker).expect("the JSON carries a schema");
+            let rest = &text[at + marker.len()..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            rest[..end].parse().expect("the schema is a number")
+        }
+        // Motorized: schema v16, config and impulse survive Exact.
+        let (mut world, arm) = motor_pendulum(3.0, 1000.0, 0.0);
+        let dt = 1.0 / 60.0;
+        for _ in 0..60 {
+            world.step(dt);
+        }
+        let text = crate::snapshot::world2_to_json(&world, LoadMode::Exact).expect("serializes");
+        assert_eq!(
+            json_schema(&text),
+            SNAPSHOT_SCHEMA_VERSION,
+            "a motorized world writes v16"
+        );
+        assert!(text.contains("motor_speed"), "motors must serialize");
+        let bytes = world2_to_binary(&world, LoadMode::Exact).expect("serializes");
+        let mut back = world2_from_binary(&bytes, LoadMode::Exact).expect("deserializes");
+        match &back.joints[0] {
+            Joint2::Hinge(h) => {
+                assert_eq!(bits(h.motor_speed), bits(3.0));
+                assert_eq!(bits(h.motor_max_torque), bits(1000.0));
+            }
+            _ => panic!("expected a hinge"),
+        }
+        for _ in 0..60 {
+            world.step(dt);
+            back.step(dt);
+        }
+        let (a, b) = (&world.bodies[arm], &back.bodies[arm]);
+        assert_eq!(
+            (
+                bits(a.velocity.x),
+                bits(a.velocity.y),
+                bits(a.angular_velocity)
+            ),
+            (
+                bits(b.velocity.x),
+                bits(b.velocity.y),
+                bits(b.angular_velocity)
+            ),
+            "restored motors must continue bit-identically"
+        );
+        // Unmotorized: old schema, motors off on load.
+        let (mut plain, _) = motor_pendulum(0.0, 0.0, 0.0);
+        for _ in 0..60 {
+            plain.step(dt);
+        }
+        let text = crate::snapshot::world2_to_json(&plain, LoadMode::Exact).expect("serializes");
+        assert!(
+            json_schema(&text) < SNAPSHOT_SCHEMA_VERSION,
+            "no motors means no v16"
+        );
+        assert!(
+            !text.contains("motor_speed"),
+            "no motors means no motor keys"
+        );
+        let bytes = world2_to_binary(&plain, LoadMode::Exact).expect("serializes");
+        let back = world2_from_binary(&bytes, LoadMode::Exact).expect("deserializes");
+        match &back.joints[0] {
+            Joint2::Hinge(h) => {
+                assert_eq!(h.motor_speed, 0.0);
+                assert_eq!(h.motor_max_torque, 0.0);
+                assert_eq!(h.motor_impulse, 0.0);
+            }
+            _ => panic!("expected a hinge"),
         }
     }
 }

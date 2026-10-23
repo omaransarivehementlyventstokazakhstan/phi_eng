@@ -8,6 +8,19 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Joint motors.** Hinge (2D) / twist (3D) and prismatic (2D/3D)
+  velocity motors with torque/force budgets: they hit the target
+  speed exactly when the budget covers it and slip below it,
+  impulse saturated, when stalled. Zero budget disables. Motor
+  tuning persists through save/load under the new schema v16
+  (config in every mode, impulses in Exact); older files load with
+  motors off, and unmotorized worlds keep their old schema. The FFI
+  joint blobs take optional `motorSpeed`/`motorMaxTorque` (hinge)
+  and `motorSpeed`/`motorMaxForce` (prismatic) fields.
+
+  Mirrored Rust<->C# tests: **J45-J48, K45-K48** (in-crate
+  `joint.rs` / `joint3.rs` suites and `JointTests.cs` /
+  `Joint3DTests.cs`).
 - **Suspension and arcade vehicles.** The chassis stays an ordinary
   dynamic rigid body; each 3D wheel hangs from a hardpoint whose
   suspension ray (which refuses to see its own chassis) measures the

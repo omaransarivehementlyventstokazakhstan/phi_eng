@@ -219,6 +219,12 @@ public sealed class HingeJoint : Joint2
     public Vector2 Impulse { get; set; }
     /// <summary>Accumulated angular impulse (warm start).</summary>
     public float AngularImpulse { get; set; }
+    /// <summary>Motor target relative angular velocity (rad/s, B minus A). Acts only when <see cref="MotorMaxTorque"/> is positive.</summary>
+    public float MotorSpeed { get; set; }
+    /// <summary>Motor torque budget (N·m). Zero disables the motor.</summary>
+    public float MotorMaxTorque { get; set; }
+    /// <summary>Accumulated motor impulse (warm start, clamped to the budget).</summary>
+    public float MotorImpulse { get; set; }
 
     /// <summary>
     /// Creates a validated hinge joint. <c>limitMin &gt; limitMax</c> selects a
@@ -269,12 +275,21 @@ public sealed class HingeJoint : Joint2
             a.AngularVelocity -= lam * a.InvInertia;
             b.AngularVelocity += lam * b.InvInertia;
         }
+        if (MotorImpulse != 0.0f)
+        {
+            float lam = MotorImpulse;
+            var a = bodies[BodyA];
+            var b = bodies[BodyB];
+            a.AngularVelocity -= lam * a.InvInertia;
+            b.AngularVelocity += lam * b.InvInertia;
+        }
     }
 
     /// <inheritdoc/>
     public override void Solve(List<RigidBody2> bodies, float dt)
     {
         SolvePoint(bodies, dt);
+        SolveMotor(bodies, dt);
         SolveLimits(bodies, dt);
     }
 
@@ -302,6 +317,37 @@ public sealed class HingeJoint : Joint2
             Impulse += axis * lambda;
             ApplyPairImpulse(bodies, BodyA, BodyB, axis * lambda, pa, pb);
         }
+    }
+
+    /// <summary>
+    /// Set the velocity motor: target relative angular velocity plus
+    /// torque budget. A zero budget disables the motor.
+    /// </summary>
+    public void SetMotor(float speed, float maxTorque)
+    {
+        if (!float.IsFinite(speed) || !float.IsFinite(maxTorque))
+            throw new ArgumentException("Non-finite motor speed or budget.");
+        if (maxTorque < 0.0f)
+            throw new ArgumentException("Negative motor budget.");
+        MotorSpeed = speed;
+        MotorMaxTorque = maxTorque;
+    }
+
+    private void SolveMotor(List<RigidBody2> bodies, float dt)
+    {
+        if (MotorMaxTorque <= 0.0f) return;
+        var a = bodies[BodyA];
+        var b = bodies[BodyB];
+        float wRel = b.AngularVelocity - a.AngularVelocity;
+        float k = a.InvInertia + b.InvInertia;
+        if (k <= 0.0f) return;
+        float lambda = -1.0f / k * (wRel - MotorSpeed);
+        float maxImpulse = MotorMaxTorque * MathF.Max(dt, 0.0f);
+        float old = MotorImpulse;
+        MotorImpulse = MathF.Max(-maxImpulse, MathF.Min(maxImpulse, old + lambda));
+        float applied = MotorImpulse - old;
+        a.AngularVelocity -= applied * a.InvInertia;
+        b.AngularVelocity += applied * b.InvInertia;
     }
 
     private void SolveLimits(List<RigidBody2> bodies, float dt)
@@ -355,6 +401,12 @@ public sealed class PrismaticJoint : Joint2
     public float AngularImpulse { get; set; }
     /// <summary>Accumulated travel-limit impulse (warm start).</summary>
     public float LimitImpulse { get; set; }
+    /// <summary>Motor target slide speed along the axis. Acts only when <see cref="MotorMaxForce"/> is positive.</summary>
+    public float MotorSpeed { get; set; }
+    /// <summary>Motor force budget (N). Zero disables the motor.</summary>
+    public float MotorMaxForce { get; set; }
+    /// <summary>Accumulated motor impulse (warm start, clamped to the budget).</summary>
+    public float MotorImpulse { get; set; }
 
     /// <summary>
     /// Creates a validated prismatic joint. The axis is normalized at creation.
@@ -410,6 +462,11 @@ public sealed class PrismaticJoint : Joint2
             var ax = AxisWorld(bodies);
             ApplyPairImpulse(bodies, BodyA, BodyB, ax * LimitImpulse, pa, pb);
         }
+        if (MotorImpulse != 0.0f)
+        {
+            var ax = AxisWorld(bodies);
+            ApplyPairImpulse(bodies, BodyA, BodyB, ax * MotorImpulse, pa, pb);
+        }
         if (AngularImpulse != 0.0f)
         {
             float lam = AngularImpulse;
@@ -426,6 +483,7 @@ public sealed class PrismaticJoint : Joint2
         RefAngle ??= WrapAngle(bodies[BodyB].RotationAngle - bodies[BodyA].RotationAngle);
         SolvePerp(bodies, dt);
         SolveAngular(bodies, dt);
+        SolveMotor(bodies, dt);
         SolveLimits(bodies, dt);
     }
 
@@ -466,6 +524,43 @@ public sealed class PrismaticJoint : Joint2
         AngularImpulse += lambda;
         a.AngularVelocity -= lambda * a.InvInertia;
         b.AngularVelocity += lambda * b.InvInertia;
+    }
+
+    /// <summary>
+    /// Set the velocity motor: target slide speed plus force budget.
+    /// A zero budget disables the motor.
+    /// </summary>
+    public void SetMotor(float speed, float maxForce)
+    {
+        if (!float.IsFinite(speed) || !float.IsFinite(maxForce))
+            throw new ArgumentException("Non-finite motor speed or budget.");
+        if (maxForce < 0.0f)
+            throw new ArgumentException("Negative motor budget.");
+        MotorSpeed = speed;
+        MotorMaxForce = maxForce;
+    }
+
+    private void SolveMotor(List<RigidBody2> bodies, float dt)
+    {
+        if (MotorMaxForce <= 0.0f) return;
+        var pa = WorldA(bodies);
+        var pb = WorldB(bodies);
+        var ax = AxisWorld(bodies);
+        var a = bodies[BodyA];
+        var b = bodies[BodyB];
+        var ra = pa - a.Transform.Position;
+        var rb = pb - b.Transform.Position;
+        var va = a.Velocity + Perp(ra) * a.AngularVelocity;
+        var vb = b.Velocity + Perp(rb) * b.AngularVelocity;
+        float vn = Vector2.Dot(vb - va, ax);
+        float m = EffectiveMass(a.InvMass, b.InvMass, a.InvInertia, b.InvInertia, ra, rb, ax);
+        if (m == 0.0f) return;
+        float lambda = -m * (vn - MotorSpeed);
+        float maxImpulse = MotorMaxForce * MathF.Max(dt, 0.0f);
+        float old = MotorImpulse;
+        MotorImpulse = MathF.Max(-maxImpulse, MathF.Min(maxImpulse, old + lambda));
+        float applied = MotorImpulse - old;
+        ApplyPairImpulse(bodies, BodyA, BodyB, ax * applied, pa, pb);
     }
 
     private void SolveLimits(List<RigidBody2> bodies, float dt)

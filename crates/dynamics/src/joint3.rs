@@ -90,6 +90,14 @@ pub struct HingeJoint3 {
     /// Accumulated twist impulse about the CURRENT hinge axis (warm start,
     /// scalar along the recomputed axis).
     pub twist_impulse: f32,
+    /// Motor target twist rate about the hinge axis (rad/s, B minus A).
+    /// Only acts when `motor_max_torque > 0`.
+    pub motor_speed: f32,
+    /// Motor torque budget (N·m). Zero disables the motor.
+    pub motor_max_torque: f32,
+    /// Accumulated motor impulse (warm start, clamped to the budget,
+    /// scalar along the CURRENT hinge axis).
+    pub motor_impulse: f32,
 }
 
 /// Two packed scalars (avoids pulling a 2D vector type into 3D joint state).
@@ -136,6 +144,14 @@ pub struct PrismaticJoint3 {
     /// Accumulated travel-limit impulse (warm start, scalar along the
     /// CURRENT slide axis).
     pub limit_impulse: f32,
+    /// Motor target slide speed along the axis (world units/s).
+    /// Only acts when `motor_max_force > 0`.
+    pub motor_speed: f32,
+    /// Motor force budget (N). Zero disables the motor.
+    pub motor_max_force: f32,
+    /// Accumulated motor impulse (warm start, clamped to the budget,
+    /// scalar along the CURRENT slide axis).
+    pub motor_impulse: f32,
 }
 
 /// A weld (fixed) joint: the two anchors must coincide (3 linear
@@ -196,6 +212,16 @@ impl Joint3 {
             Joint3::Hinge(j) => j.id,
             Joint3::Prismatic(j) => j.id,
             Joint3::Fixed(j) => j.id,
+        }
+    }
+
+    /// Whether this joint carries motor configuration (a set speed or
+    /// budget, even on a disabled motor): the snapshot schema gate.
+    pub fn has_motor(&self) -> bool {
+        match self {
+            Joint3::Hinge(h) => h.motor_speed != 0.0 || h.motor_max_torque != 0.0,
+            Joint3::Prismatic(p) => p.motor_speed != 0.0 || p.motor_max_force != 0.0,
+            Joint3::Distance(_) | Joint3::Fixed(_) => false,
         }
     }
 
@@ -492,13 +518,23 @@ impl HingeJoint3 {
                 self.twist_impulse,
             );
         }
+        if self.motor_impulse != 0.0 {
+            apply_angular_3(
+                bodies,
+                self.body_a,
+                self.body_b,
+                self.axis_a_world(bodies),
+                self.motor_impulse,
+            );
+        }
     }
 
     /// One iteration: point coincidence (3 axes) + axis alignment (2) +
-    /// twist limits if set.
+    /// motor if budgeted + twist limits if set.
     fn solve(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         self.solve_point(bodies, dt);
         self.solve_align(bodies, dt);
+        self.solve_motor(bodies, dt);
         self.solve_twist(bodies, dt);
     }
 
@@ -584,6 +620,29 @@ impl HingeJoint3 {
         }
     }
 
+    /// Twist motor about the hinge axis. C = w_rel - motor_speed;
+    /// λ = -m * C, with the ACCUMULATED impulse clamped to the torque
+    /// budget (max_torque * dt). Off when the budget is zero.
+    fn solve_motor(&mut self, bodies: &mut [RigidBody3], dt: f32) {
+        if self.motor_max_torque <= 0.0 {
+            return;
+        }
+        let u = self.axis_a_world(bodies);
+        let ia = bodies[self.body_a].world_inv_inertia();
+        let ib = bodies[self.body_b].world_inv_inertia();
+        let w_rel = bodies[self.body_b].angular_velocity - bodies[self.body_a].angular_velocity;
+        let m = angular_mass_3(ia, ib, u);
+        if m == 0.0 {
+            return;
+        }
+        let lambda = -m * (w_rel.dot(u) - self.motor_speed);
+        let max_impulse = self.motor_max_torque * dt.max(0.0);
+        let old = self.motor_impulse;
+        self.motor_impulse = (old + lambda).clamp(-max_impulse, max_impulse);
+        let applied = self.motor_impulse - old;
+        apply_angular_3(bodies, self.body_a, self.body_b, u, applied);
+    }
+
     /// Twist limits about the hinge axis. C = tw - clamp(tw) (0 inside
     /// range). Î» = -m_ang * (w_rel + Î² * C / dt), bilateral within the
     /// active side. Skipped entirely for free hinges (min > max).
@@ -622,7 +681,41 @@ impl HingeJoint3 {
     }
 }
 
+impl HingeJoint3 {
+    /// Set the twist motor: target twist rate plus torque budget.
+    /// A zero budget disables the motor. The accumulated impulse
+    /// survives retuning (the per-step clamp pulls it inside a shrunk
+    /// budget on its own).
+    pub fn set_motor(&mut self, speed: f32, max_torque: f32) -> Result<(), JointError> {
+        if !speed.is_finite() || !max_torque.is_finite() {
+            return Err(JointError::NonFiniteInput);
+        }
+        if max_torque < 0.0 {
+            return Err(JointError::InvalidParams);
+        }
+        self.motor_speed = speed;
+        self.motor_max_torque = max_torque;
+        Ok(())
+    }
+}
+
 impl PrismaticJoint3 {
+    /// Set the velocity motor: target slide speed plus force budget.
+    /// A zero budget disables the motor. The accumulated impulse
+    /// survives retuning (the per-step clamp pulls it inside a shrunk
+    /// budget on its own).
+    pub fn set_motor(&mut self, speed: f32, max_force: f32) -> Result<(), JointError> {
+        if !speed.is_finite() || !max_force.is_finite() {
+            return Err(JointError::NonFiniteInput);
+        }
+        if max_force < 0.0 {
+            return Err(JointError::InvalidParams);
+        }
+        self.motor_speed = speed;
+        self.motor_max_force = max_force;
+        Ok(())
+    }
+
     fn world_a(&self, bodies: &[RigidBody3]) -> Vec3 {
         bodies[self.body_a].transform.transform_point(self.anchor_a)
     }
@@ -674,6 +767,17 @@ impl PrismaticJoint3 {
                 pb,
             );
         }
+        if self.motor_impulse != 0.0 {
+            let ax = self.axis_world(bodies);
+            apply_pair_impulse_3(
+                bodies,
+                self.body_a,
+                self.body_b,
+                ax * self.motor_impulse,
+                pa,
+                pb,
+            );
+        }
         if self.angular_impulse != Vec3::ZERO {
             // Stored axes are world X/Y/Z: apply directly.
             apply_angular_vec_3(bodies, self.body_a, self.body_b, self.angular_impulse);
@@ -691,6 +795,7 @@ impl PrismaticJoint3 {
         }
         self.solve_perp(bodies, dt);
         self.solve_angular(bodies, dt);
+        self.solve_motor(bodies, dt);
         self.solve_travel(bodies, dt);
     }
 
@@ -787,6 +892,41 @@ impl PrismaticJoint3 {
     /// Travel limits along the slide axis. s = (pb - pa) Â· axis;
     /// C = s - clamp(s). Bilateral on the active side; free travel
     /// (min > max) skips entirely.
+    /// Velocity motor along the slide axis. C = v_rel - motor_speed;
+    /// λ = -m * C, with the ACCUMULATED impulse clamped to the force
+    /// budget (max_force * dt). Off when the budget is zero.
+    fn solve_motor(&mut self, bodies: &mut [RigidBody3], dt: f32) {
+        if self.motor_max_force <= 0.0 {
+            return;
+        }
+        let pa = self.world_a(bodies);
+        let pb = self.world_b(bodies);
+        let ax = self.axis_world(bodies);
+        let ra = pa - bodies[self.body_a].transform.position;
+        let rb = pb - bodies[self.body_b].transform.position;
+        let va = bodies[self.body_a].velocity + bodies[self.body_a].angular_velocity.cross(ra);
+        let vb = bodies[self.body_b].velocity + bodies[self.body_b].angular_velocity.cross(rb);
+        let vn = (vb - va).dot(ax);
+        let m = effective_mass_3(
+            bodies[self.body_a].inv_mass,
+            bodies[self.body_b].inv_mass,
+            bodies[self.body_a].world_inv_inertia(),
+            bodies[self.body_b].world_inv_inertia(),
+            ra,
+            rb,
+            ax,
+        );
+        if m == 0.0 {
+            return;
+        }
+        let lambda = -m * (vn - self.motor_speed);
+        let max_impulse = self.motor_max_force * dt.max(0.0);
+        let old = self.motor_impulse;
+        self.motor_impulse = (old + lambda).clamp(-max_impulse, max_impulse);
+        let applied = self.motor_impulse - old;
+        apply_pair_impulse_3(bodies, self.body_a, self.body_b, ax * applied, pa, pb);
+    }
+
     fn solve_travel(&mut self, bodies: &mut [RigidBody3], dt: f32) {
         if self.limit_min > self.limit_max {
             return;
@@ -1147,6 +1287,9 @@ pub fn make_hinge_joint_3(
         impulse: Vec3::ZERO,
         align_impulse: Vec2Pair::default(),
         twist_impulse: 0.0,
+        motor_speed: 0.0,
+        motor_max_torque: 0.0,
+        motor_impulse: 0.0,
     }))
 }
 
@@ -1185,6 +1328,9 @@ pub fn make_prismatic_joint_3(
         perp_impulse: Vec2Pair::default(),
         angular_impulse: Vec3::ZERO,
         limit_impulse: 0.0,
+        motor_speed: 0.0,
+        motor_max_force: 0.0,
+        motor_impulse: 0.0,
     }))
 }
 
@@ -1987,5 +2133,270 @@ mod tests {
             err < 0.4,
             "weld must keep the bodies co-rotating, err={err}"
         );
+    }
+
+    fn bits(v: f32) -> u32 {
+        v.to_bits()
+    }
+
+    /// A free-twist hinge pendulum about Y (base at the origin, arm
+    /// below), motorized.
+    fn motor_pendulum_3(speed: f32, torque: f32, gravity_y: f32) -> (World3, usize) {
+        let mut world = World3::new();
+        world.gravity = Vec3::new(0.0, gravity_y, 0.0);
+        world.linear_sleep_threshold = 0.0;
+        world.angular_sleep_threshold = 0.0;
+        let base = world
+            .add_static_body(Vec3::ZERO, Shape3::Sphere { radius: 0.2 })
+            .expect("valid shape");
+        let arm = world
+            .add_dynamic_body(
+                Vec3::new(0.0, -1.0, 0.0),
+                Shape3::Box {
+                    half_extents: Vec3::new(0.1, 1.0, 0.1),
+                },
+                1.0,
+            )
+            .expect("valid shape");
+        let mut joint = make_hinge_joint_3(
+            0,
+            base,
+            arm,
+            Vec3::ZERO,
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::Y,
+            Vec3::Y,
+            1.0,
+            -1.0,
+            0.0,
+            2,
+        )
+        .expect("valid joint");
+        if let Joint3::Hinge(h) = &mut joint {
+            h.set_motor(speed, torque).expect("valid motor");
+        }
+        world.add_joint(joint).expect("valid joint");
+        (world, arm)
+    }
+
+    /// K45: a budgeted twist motor spins its arm up to the target rate.
+    #[test]
+    fn k45_twist_motor_reaches_target_rate() {
+        let (mut world, arm) = motor_pendulum_3(2.0, 1000.0, 0.0);
+        for _ in 0..300 {
+            world.step(DT);
+        }
+        let w = world.bodies[arm].angular_velocity.y;
+        assert_eq!(bits(w), 0x3fff_f514);
+        assert!((w - 2.0).abs() < 1e-2, "motor must reach 2 rad/s, got {w}");
+    }
+
+    /// K46: a weak lift motor slips downward with its impulse
+    /// saturated at the budget, and bad tuning is rejected. (Twist
+    /// about the vertical cannot fight gravity — it spins in place —
+    /// so the prismatic lift provides the stall: a steady load the
+    /// budget cannot hold.)
+    #[test]
+    fn k46_weak_lift_motor_slips_with_saturated_impulse() {
+        let mut world = World3::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        world.linear_sleep_threshold = 0.0;
+        world.angular_sleep_threshold = 0.0;
+        let rail = world
+            .add_static_body(
+                Vec3::ZERO,
+                Shape3::Box {
+                    half_extents: Vec3::new(0.2, 5.0, 0.2),
+                },
+            )
+            .expect("valid shape");
+        // A sensor rail: joints ignore solidity, so the slide measures
+        // the motor against gravity alone instead of wrestling contact.
+        world.bodies[rail].is_sensor = true;
+        let slider = world
+            .add_dynamic_body(
+                Vec3::ZERO,
+                Shape3::Box {
+                    half_extents: Vec3::new(0.3, 0.3, 0.3),
+                },
+                1.0,
+            )
+            .expect("valid shape");
+        let mut joint = make_prismatic_joint_3(
+            0,
+            rail,
+            slider,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::Y,
+            -10.0,
+            10.0,
+            0.0,
+            2,
+        )
+        .expect("valid joint");
+        if let Joint3::Prismatic(p) = &mut joint {
+            p.set_motor(2.0, 0.5).expect("valid motor");
+            assert_eq!(p.set_motor(f32::NAN, 1.0), Err(JointError::NonFiniteInput));
+            assert_eq!(p.set_motor(1.0, -1.0), Err(JointError::InvalidParams));
+        } else {
+            panic!("expected a prismatic");
+        }
+        world.add_joint(joint).expect("valid joint");
+        for _ in 0..600 {
+            world.step(DT);
+        }
+        let y = world.bodies[slider].transform.position.y;
+        let imp = match &world.joints[0] {
+            Joint3::Prismatic(p) => p.motor_impulse,
+            _ => panic!("expected a prismatic"),
+        };
+        println!("BITS k46 y={:08x} imp={:08x}", bits(y), bits(imp));
+        assert_eq!(bits(y), 0xc120_0002);
+        assert_eq!(bits(imp), 0x3c08_8889);
+        assert!(y < -5.0, "starved lift must sink to its stop, got {y}");
+        assert!(
+            (imp - 0.5 * DT).abs() < 1e-9,
+            "impulse must sit on the budget {imp}"
+        );
+    }
+
+    /// K47: a prismatic motor extends its slider at the target speed.
+    #[test]
+    fn k47_prismatic_motor_extends_at_target_speed() {
+        let mut world = World3::new();
+        world.gravity = Vec3::ZERO;
+        world.linear_sleep_threshold = 0.0;
+        world.angular_sleep_threshold = 0.0;
+        let rail = world
+            .add_static_body(
+                Vec3::ZERO,
+                Shape3::Box {
+                    half_extents: Vec3::new(5.0, 0.2, 0.2),
+                },
+            )
+            .expect("valid shape");
+        let slider = world
+            .add_dynamic_body(
+                Vec3::ZERO,
+                Shape3::Box {
+                    half_extents: Vec3::new(0.3, 0.3, 0.3),
+                },
+                1.0,
+            )
+            .expect("valid shape");
+        let mut joint = make_prismatic_joint_3(
+            0,
+            rail,
+            slider,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::X,
+            -10.0,
+            10.0,
+            0.0,
+            2,
+        )
+        .expect("valid joint");
+        if let Joint3::Prismatic(p) = &mut joint {
+            p.set_motor(2.0, 10000.0).expect("valid motor");
+        }
+        world.add_joint(joint).expect("valid joint");
+        for _ in 0..120 {
+            world.step(DT);
+        }
+        let p = world.bodies[slider].transform.position;
+        assert_eq!(bits(p.x), 0x407f_f522);
+        assert!(
+            (p.x - 4.0).abs() < 0.05,
+            "slider must extend at 2 m/s, got {p}"
+        );
+        assert!(
+            p.y.abs() < 0.05 && p.z.abs() < 0.05,
+            "slider must stay on the rail, got {p}"
+        );
+    }
+
+    /// K48: motors round-trip through save/load (schema v16), and an
+    /// unmotorized world stays on its old schema with motors off.
+    #[test]
+    fn k48_motors_persist_through_save_load() {
+        use crate::snapshot::{
+            world3_from_binary, world3_to_binary, LoadMode, SNAPSHOT_SCHEMA_VERSION,
+        };
+        fn json_schema(text: &str) -> u32 {
+            let marker = "\"schema\": ";
+            let at = text.find(marker).expect("the JSON carries a schema");
+            let rest = &text[at + marker.len()..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            rest[..end].parse().expect("the schema is a number")
+        }
+        // Motorized: schema v16, config and impulse survive Exact.
+        let (mut world, arm) = motor_pendulum_3(2.0, 1000.0, 0.0);
+        for _ in 0..60 {
+            world.step(DT);
+        }
+        let text = crate::snapshot::world3_to_json(&world, LoadMode::Exact).expect("serializes");
+        assert_eq!(
+            json_schema(&text),
+            SNAPSHOT_SCHEMA_VERSION,
+            "a motorized world writes v16"
+        );
+        assert!(text.contains("motor_speed"), "motors must serialize");
+        let bytes = world3_to_binary(&world, LoadMode::Exact).expect("serializes");
+        let mut back = world3_from_binary(&bytes, LoadMode::Exact).expect("deserializes");
+        match &back.joints[0] {
+            Joint3::Hinge(h) => {
+                assert_eq!(bits(h.motor_speed), bits(2.0));
+                assert_eq!(bits(h.motor_max_torque), bits(1000.0));
+            }
+            _ => panic!("expected a hinge"),
+        }
+        for _ in 0..60 {
+            world.step(DT);
+            back.step(DT);
+        }
+        let (a, b) = (&world.bodies[arm], &back.bodies[arm]);
+        assert_eq!(
+            (
+                bits(a.velocity.x),
+                bits(a.velocity.y),
+                bits(a.velocity.z),
+                bits(a.angular_velocity.y)
+            ),
+            (
+                bits(b.velocity.x),
+                bits(b.velocity.y),
+                bits(b.velocity.z),
+                bits(b.angular_velocity.y)
+            ),
+            "restored motors must continue bit-identically"
+        );
+        // Unmotorized: old schema, motors off on load.
+        let (mut plain, _) = motor_pendulum_3(0.0, 0.0, 0.0);
+        for _ in 0..60 {
+            plain.step(DT);
+        }
+        let text = crate::snapshot::world3_to_json(&plain, LoadMode::Exact).expect("serializes");
+        assert!(
+            json_schema(&text) < SNAPSHOT_SCHEMA_VERSION,
+            "no motors means no v16"
+        );
+        assert!(
+            !text.contains("motor_speed"),
+            "no motors means no motor keys"
+        );
+        let bytes = world3_to_binary(&plain, LoadMode::Exact).expect("serializes");
+        let back = world3_from_binary(&bytes, LoadMode::Exact).expect("deserializes");
+        match &back.joints[0] {
+            Joint3::Hinge(h) => {
+                assert_eq!(h.motor_speed, 0.0);
+                assert_eq!(h.motor_max_torque, 0.0);
+                assert_eq!(h.motor_impulse, 0.0);
+            }
+            _ => panic!("expected a hinge"),
+        }
     }
 }

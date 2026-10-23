@@ -46,17 +46,18 @@ public static class Snapshot
     /// collision filter (layer and mask); v14 adds the per-body sensor
     /// flag; v15 adds the quantum field block (the configuration, the
     /// field's clock and the wavefunction's amplitudes), appended at the
-    /// end of the payload.
-    /// Writers emit v3 for default worlds, v4 for gravity-only worlds, v5
-    /// for ambient/fluid worlds, v6 for CCD worlds (byte-compatible with
-    /// older files), v7 for worlds with non-default solver switches, and
-    /// v15 for worlds with an active thermal config, any non-default
-    /// thermal sub-feature, the nuclear block, a non-default collision
-    /// filter, a sensor body or a quantum field. The binary layout is
-    /// byte-identical to the Rust writer's, so a file written by either
-    /// engine loads in the other.
+    /// end of the payload; v16 adds the joint motor records.
+    /// Writers emit the newest schema the world actually uses
+    /// (minimality): v3 for default worlds, v4 gravity, v5 ambient, v6
+    /// CCD, v7 solver switches, v8 thermal/broadphase, v9 the tier
+    /// ceiling, v10 thermal sub-features, v11 radiation options, v12
+    /// nuclear, v13 collision filters, v14 sensors, v15 a quantum field,
+    /// v16 joint motors. The label never rises past the newest feature
+    /// in use, so an old reader keeps reading new files. The binary
+    /// layout is byte-identical to the Rust writer's, so a file written
+    /// by either engine loads in the other.
     /// </summary>
-    public const uint SchemaVersion = 15;
+    public const uint SchemaVersion = 16;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -133,6 +134,20 @@ public static class Snapshot
     /// every older payload.
     /// </remarks>
     public const uint QuantumSchemaVersion = 15;
+
+    /// <summary>
+    /// Schema that introduced joint motor records (v16): the speed,
+    /// budget and accumulated impulse ride inside the hinge/prismatic
+    /// joint records (2D and 3D), so older payloads decode with motors
+    /// off. Must match Rust <c>SNAPSHOT_SCHEMA_MOTORS</c>.
+    /// </summary>
+    /// <remarks>
+    /// This gate is deliberately a named constant and NOT
+    /// <see cref="SchemaVersion"/>: tracking the current version would
+    /// silently retarget it whenever the schema is bumped, breaking
+    /// every older payload.
+    /// </remarks>
+    public const uint MotorsSchemaVersion = 16;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -683,6 +698,10 @@ public static class Snapshot
         [JsonPropertyName("angular_impulse")] public float AngularImpulse { get; set; }
         [JsonPropertyName("perp_impulse")] public float PerpImpulse { get; set; }
         [JsonPropertyName("limit_impulse")] public float LimitImpulse { get; set; }
+        [JsonPropertyName("motor_speed"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float MotorSpeed { get; set; }
+        [JsonPropertyName("motor_max_torque"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float MotorMaxTorque { get; set; }
+        [JsonPropertyName("motor_max_force"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float MotorMaxForce { get; set; }
+        [JsonPropertyName("motor_impulse"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float MotorImpulse { get; set; }
     }
 
     private sealed class Contact2Dto
@@ -1045,14 +1064,8 @@ public static class Snapshot
             bool hasCcd = !w.Ccd.IsDefault();
             bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            // Schema v10: an active thermal config OR any non-default
-            // thermal sub-feature needs the v10 block. Mirrors the Rust
-            // writer rule exactly.
-            bool hasThermal = w.Thermal.IsActive()
-                || w.Thermal.RadiationOcclusion
-                || w.Thermal.ForcedConvectionCoefficient != 0.0f
-                || w.Thermal.ExpansionCoefficient != 0.0f
-                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            // Schema v8/v10: split below into active vs sub-features
+            // (the label is the newest feature in use).
             // Schema v11: the radiation model options are a user choice too,
             // so they need the v11 block even when thermal stepping is
             // disabled. Mirrors the Rust writer rule exactly.
@@ -1079,9 +1092,32 @@ public static class Snapshot
             // dropped on save.
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
-            uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
-                || hasSensors || hasQuantum
-                ? SchemaVersion
+            // Schema v16: a joint with a set motor speed or budget needs
+            // the v16 motor records, or they would be silently dropped.
+            bool hasMotors = w.Joints.Any(j =>
+                (j is HingeJoint h && (h.MotorSpeed != 0.0f || h.MotorMaxTorque != 0.0f)) ||
+                (j is PrismaticJoint p && (p.MotorSpeed != 0.0f || p.MotorMaxForce != 0.0f)));
+            // The label is the newest feature in use (minimality: a
+            // motorless quantum world still writes v15, not v16).
+            // Mirrors the Rust writer rule exactly: thermal splits from
+            // its sub-features (v8 vs v10). Broadphase/tier stay on the
+            // low ladder here as before (a pre-existing gap the Rust
+            // side already closes; untouched by this change).
+            bool hasThermalActive = w.Thermal.IsActive();
+            bool hasThermalExtras = w.Thermal.RadiationOcclusion
+                || w.Thermal.ForcedConvectionCoefficient != 0.0f
+                || w.Thermal.ExpansionCoefficient != 0.0f
+                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            uint high = MaxVersion(
+                (hasThermalActive, ThermalSchemaVersion),
+                (hasThermalExtras, ThermalExtrasSchemaVersion),
+                (hasRadiationExtras, RadiationExtrasSchemaVersion),
+                (hasNuclear, NuclearSchemaVersion),
+                (hasCollisionFilters, CollisionFiltersSchemaVersion),
+                (hasSensors, SensorsSchemaVersion),
+                (hasQuantum, QuantumSchemaVersion),
+                (hasMotors, MotorsSchemaVersion));
+            uint schema = high > 0 ? high
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1299,6 +1335,9 @@ public static class Snapshot
                         d.LimitMin = x.LimitMin; d.LimitMax = x.LimitMax;
                         d.Impulse = V2(fresh ? Vector2.Zero : x.Impulse);
                         d.AngularImpulse = fresh ? 0.0f : x.AngularImpulse;
+                        d.MotorSpeed = x.MotorSpeed;
+                        d.MotorMaxTorque = x.MotorMaxTorque;
+                        d.MotorImpulse = fresh ? 0.0f : x.MotorImpulse;
                         break;
                     case PrismaticJoint x:
                         d.Type = "prismatic";
@@ -1309,6 +1348,9 @@ public static class Snapshot
                         d.PerpImpulse = fresh ? 0.0f : x.PerpImpulse;
                         d.AngularImpulse = fresh ? 0.0f : x.AngularImpulse;
                         d.LimitImpulse = fresh ? 0.0f : x.LimitImpulse;
+                        d.MotorSpeed = x.MotorSpeed;
+                        d.MotorMaxForce = x.MotorMaxForce;
+                        d.MotorImpulse = fresh ? 0.0f : x.MotorImpulse;
                         break;
                     case FixedJoint x:
                         d.Type = "fixed";
@@ -1405,6 +1447,10 @@ public static class Snapshot
         [JsonPropertyName("perp_u2")] public float? PerpU2 { get; set; }
         [JsonPropertyName("angular_impulse")] public Vec3Dto? AngularImpulse { get; set; }
         [JsonPropertyName("limit_impulse")] public float? LimitImpulse { get; set; }
+        [JsonPropertyName("motor_speed"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float? MotorSpeed { get; set; }
+        [JsonPropertyName("motor_max_torque"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float? MotorMaxTorque { get; set; }
+        [JsonPropertyName("motor_max_force"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float? MotorMaxForce { get; set; }
+        [JsonPropertyName("motor_impulse"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float? MotorImpulse { get; set; }
     }
 
     private sealed class World3Dto
@@ -1466,14 +1512,8 @@ public static class Snapshot
             bool hasCcd = !w.Ccd.IsDefault();
             bool hasSolverFlags = !w.Solver.EnableFriction || !w.Solver.EnableRestitution;
             bool hasGravity = !w.GravityConfig.IsDefault() || w.Bodies.Any(b => b.GravityScale != 1.0f);
-            // Schema v10: an active thermal config OR any non-default
-            // thermal sub-feature needs the v10 block. Mirrors the Rust
-            // writer rule exactly.
-            bool hasThermal = w.Thermal.IsActive()
-                || w.Thermal.RadiationOcclusion
-                || w.Thermal.ForcedConvectionCoefficient != 0.0f
-                || w.Thermal.ExpansionCoefficient != 0.0f
-                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            // Schema v8/v10: split below into active vs sub-features
+            // (the label is the newest feature in use).
             // Schema v11: the radiation model options are a user choice too,
             // so they need the v11 block even when thermal stepping is
             // disabled. Mirrors the Rust writer rule exactly.
@@ -1500,9 +1540,32 @@ public static class Snapshot
             // dropped on save.
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
-            uint schema = hasThermal || hasRadiationExtras || hasNuclear || hasCollisionFilters
-                || hasSensors || hasQuantum
-                ? SchemaVersion
+            // Schema v16: a joint with a set motor speed or budget needs
+            // the v16 motor records, or they would be silently dropped.
+            bool hasMotors = w.Joints.Any(j =>
+                (j.Type == Joint3Type.Hinge3 && (j.Hinge!.Value.MotorSpeed != 0.0f || j.Hinge!.Value.MotorMaxTorque != 0.0f)) ||
+                (j.Type == Joint3Type.Prismatic3 && (j.Prismatic!.Value.MotorSpeed != 0.0f || j.Prismatic!.Value.MotorMaxForce != 0.0f)));
+            // The label is the newest feature in use (minimality: a
+            // motorless quantum world still writes v15, not v16).
+            // Mirrors the Rust writer rule exactly: thermal splits from
+            // its sub-features (v8 vs v10). Broadphase/tier stay on the
+            // low ladder here as before (a pre-existing gap the Rust
+            // side already closes; untouched by this change).
+            bool hasThermalActive = w.Thermal.IsActive();
+            bool hasThermalExtras = w.Thermal.RadiationOcclusion
+                || w.Thermal.ForcedConvectionCoefficient != 0.0f
+                || w.Thermal.ExpansionCoefficient != 0.0f
+                || w.Thermal.ExpansionReferenceTemperature != ThermalConfig2.DefaultTemperature;
+            uint high = MaxVersion(
+                (hasThermalActive, ThermalSchemaVersion),
+                (hasThermalExtras, ThermalExtrasSchemaVersion),
+                (hasRadiationExtras, RadiationExtrasSchemaVersion),
+                (hasNuclear, NuclearSchemaVersion),
+                (hasCollisionFilters, CollisionFiltersSchemaVersion),
+                (hasSensors, SensorsSchemaVersion),
+                (hasQuantum, QuantumSchemaVersion),
+                (hasMotors, MotorsSchemaVersion));
+            uint schema = high > 0 ? high
                 : hasSolverFlags ? SolverFlagsSchemaVersion
                 : hasCcd ? CcdSchemaVersion
                 : hasAmbient ? AmbientSchemaVersion
@@ -1674,6 +1737,9 @@ public static class Snapshot
                         jd.AlignU1 = h.AlignU1;
                         jd.AlignU2 = h.AlignU2;
                         jd.TwistImpulse = h.TwistImpulse;
+                        if (h.MotorSpeed != 0.0f) jd.MotorSpeed = h.MotorSpeed;
+                        if (h.MotorMaxTorque != 0.0f) jd.MotorMaxTorque = h.MotorMaxTorque;
+                        if (h.MotorImpulse != 0.0f) jd.MotorImpulse = h.MotorImpulse;
                         break;
                     case Joint3Type.Prismatic3:
                         var p = j.Prismatic!.Value;
@@ -1690,6 +1756,9 @@ public static class Snapshot
                         jd.PerpU2 = p.PerpU2;
                         jd.AngularImpulse = V3(p.AngularImpulse);
                         jd.LimitImpulse = p.LimitImpulse;
+                        if (p.MotorSpeed != 0.0f) jd.MotorSpeed = p.MotorSpeed;
+                        if (p.MotorMaxForce != 0.0f) jd.MotorMaxForce = p.MotorMaxForce;
+                        if (p.MotorImpulse != 0.0f) jd.MotorImpulse = p.MotorImpulse;
                         break;
                     case Joint3Type.Fixed3:
                         var f = j.Fixed!.Value;
@@ -1718,6 +1787,7 @@ public static class Snapshot
                     jd.PerpU2 = 0f;
                     jd.AngularImpulse = new Vec3Dto();
                     jd.LimitImpulse = 0f;
+                    jd.MotorImpulse = 0f;
                     jd.RefOrientation = null;
                 }
                 dto.Contacts.Clear();
@@ -1871,6 +1941,17 @@ public static class Snapshot
 
     private static float Fin(float v, string what) =>
         float.IsFinite(v) ? v : throw new ArgumentException($"Non-finite snapshot {what}.");
+
+    /// <summary>The newest schema among the enabled features, or 0 when none apply.</summary>
+    private static uint MaxVersion(params (bool On, uint Version)[] features)
+    {
+        uint best = 0;
+        foreach (var (on, v) in features)
+        {
+            if (on && v > best) best = v;
+        }
+        return best;
+    }
 
     private static GravityConfig2 GravityConfigFrom(GravityConfig2Dto c)
     {
@@ -2373,6 +2454,23 @@ public static class Snapshot
                         break;
                 }
             }
+            // Motor configuration restores in every mode: tuning, not
+            // warm state. Only the impulse rode the Exact gate above.
+            switch (joint)
+            {
+                case HingeJoint x:
+                    x.MotorSpeed = Fin(j.MotorSpeed, "motor");
+                    x.MotorMaxTorque = Fin(j.MotorMaxTorque, "motor");
+                    if (mode == SnapshotLoadMode.Exact)
+                        x.MotorImpulse = Fin(j.MotorImpulse, "motor");
+                    break;
+                case PrismaticJoint x:
+                    x.MotorSpeed = Fin(j.MotorSpeed, "motor");
+                    x.MotorMaxForce = Fin(j.MotorMaxForce, "motor");
+                    if (mode == SnapshotLoadMode.Exact)
+                        x.MotorImpulse = Fin(j.MotorImpulse, "motor");
+                    break;
+            }
             w.AddJoint(joint);
         }
         if (dto.NextJointId != w.Joints.Count)
@@ -2588,6 +2686,9 @@ public static class Snapshot
                     AlignU1 = mode == SnapshotLoadMode.Exact ? Fin(jd.AlignU1 ?? 0f, "align_u1") : 0f,
                     AlignU2 = mode == SnapshotLoadMode.Exact ? Fin(jd.AlignU2 ?? 0f, "align_u2") : 0f,
                     TwistImpulse = mode == SnapshotLoadMode.Exact ? Fin(jd.TwistImpulse ?? 0f, "twist_impulse") : 0f,
+                    MotorSpeed = Fin(jd.MotorSpeed ?? 0f, "motor_speed"),
+                    MotorMaxTorque = Fin(jd.MotorMaxTorque ?? 0f, "motor_max_torque"),
+                    MotorImpulse = mode == SnapshotLoadMode.Exact ? Fin(jd.MotorImpulse ?? 0f, "motor_impulse") : 0f,
                 }),
                 "prismatic3" => Joint3.MakePrismatic(new PrismaticJoint3
                 {
@@ -2612,6 +2713,9 @@ public static class Snapshot
                         ? UV3(jd.AngularImpulse ?? new Vec3Dto())
                         : Vector3.Zero,
                     LimitImpulse = mode == SnapshotLoadMode.Exact ? Fin(jd.LimitImpulse ?? 0f, "limit_impulse") : 0f,
+                    MotorSpeed = Fin(jd.MotorSpeed ?? 0f, "motor_speed"),
+                    MotorMaxForce = Fin(jd.MotorMaxForce ?? 0f, "motor_max_force"),
+                    MotorImpulse = mode == SnapshotLoadMode.Exact ? Fin(jd.MotorImpulse ?? 0f, "motor_impulse") : 0f,
                 }),
                 "fixed3" => Joint3.MakeFixed(new FixedJoint3
                 {
@@ -2946,7 +3050,7 @@ public static class Snapshot
         return d;
     }
 
-    private static void WriteJoint2(BinaryWriter w, Joint2Dto j)
+    private static void WriteJoint2(BinaryWriter w, Joint2Dto j, uint version)
     {
         switch (j.Type)
         {
@@ -2966,6 +3070,13 @@ public static class Snapshot
                 w.Write(j.LimitMin); w.Write(j.LimitMax);
                 w.Write(j.Impulse.X); w.Write(j.Impulse.Y);
                 w.Write(j.AngularImpulse);
+                // Schema v16: the motor records.
+                if (version >= MotorsSchemaVersion)
+                {
+                    w.Write(j.MotorSpeed);
+                    w.Write(j.MotorMaxTorque);
+                    w.Write(j.MotorImpulse);
+                }
                 break;
             case "prismatic":
                 w.Write((byte)2);
@@ -2979,6 +3090,13 @@ public static class Snapshot
                 w.Write(j.PerpImpulse);
                 w.Write(j.AngularImpulse);
                 w.Write(j.LimitImpulse);
+                // Schema v16: the motor records.
+                if (version >= MotorsSchemaVersion)
+                {
+                    w.Write(j.MotorSpeed);
+                    w.Write(j.MotorMaxForce);
+                    w.Write(j.MotorImpulse);
+                }
                 break;
             case "fixed":
                 w.Write((byte)3);
@@ -2995,7 +3113,7 @@ public static class Snapshot
         }
     }
 
-    private static Joint2Dto ReadJoint2(BinaryReader r)
+    private static Joint2Dto ReadJoint2(BinaryReader r, uint version)
     {
         byte tag = r.ReadByte();
         var j = new Joint2Dto
@@ -3019,6 +3137,14 @@ public static class Snapshot
                 j.LimitMax = r.ReadSingle();
                 j.Impulse = new Vec2Dto { X = r.ReadSingle(), Y = r.ReadSingle() };
                 j.AngularImpulse = r.ReadSingle();
+                // Schema v16: older payloads carry no motor records, so
+                // their motors stay off.
+                if (version >= MotorsSchemaVersion)
+                {
+                    j.MotorSpeed = r.ReadSingle();
+                    j.MotorMaxTorque = r.ReadSingle();
+                    j.MotorImpulse = r.ReadSingle();
+                }
                 break;
             case 2:
                 j.Type = "prismatic";
@@ -3029,6 +3155,14 @@ public static class Snapshot
                 j.PerpImpulse = r.ReadSingle();
                 j.AngularImpulse = r.ReadSingle();
                 j.LimitImpulse = r.ReadSingle();
+                // Schema v16: older payloads carry no motor records, so
+                // their motors stay off.
+                if (version >= MotorsSchemaVersion)
+                {
+                    j.MotorSpeed = r.ReadSingle();
+                    j.MotorMaxForce = r.ReadSingle();
+                    j.MotorImpulse = r.ReadSingle();
+                }
                 break;
             case 3:
                 j.Type = "fixed";
@@ -3208,7 +3342,7 @@ public static class Snapshot
             }
         }
         w.Write(dto.Joints.Count);
-        foreach (var j in dto.Joints) WriteJoint2(w, j);
+        foreach (var j in dto.Joints) WriteJoint2(w, j, dto.Schema);
         w.Write(dto.Contacts.Count);
         foreach (var c in dto.Contacts)
         {
@@ -3590,7 +3724,7 @@ public static class Snapshot
         }
         int nj = r.ReadInt32();
         if (nj < 0 || nj > 1_000_000) throw new ArgumentException("Joint count out of range.");
-        for (int i = 0; i < nj; i++) dto.Joints.Add(ReadJoint2(r));
+        for (int i = 0; i < nj; i++) dto.Joints.Add(ReadJoint2(r, version));
         int nc = r.ReadInt32();
         if (nc < 0 || nc > 1_000_000) throw new ArgumentException("Contact pair count out of range.");
         for (int i = 0; i < nc; i++)
@@ -3957,7 +4091,7 @@ public static class Snapshot
             }
         }
         w.Write(dto.Joints.Count);
-        foreach (var j in dto.Joints) WriteJoint3(w, j);
+        foreach (var j in dto.Joints) WriteJoint3(w, j, dto.Schema);
         w.Write(dto.Contacts.Count);
         foreach (var c in dto.Contacts)
         {
@@ -4075,7 +4209,7 @@ public static class Snapshot
         int nj = r.ReadInt32();
         if (nj < 0 || nj > 1_000_000) throw new ArgumentException("Joint count out of range.");
         for (int i = 0; i < nj; i++)
-            dto.Joints.Add(ReadJoint3(r));
+            dto.Joints.Add(ReadJoint3(r, version));
         int nc = r.ReadInt32();
         if (nc < 0 || nc > 1_000_000) throw new ArgumentException("Contact pair count out of range.");
         for (int i = 0; i < nc; i++)
@@ -4104,7 +4238,7 @@ public static class Snapshot
         return dto;
     }
 
-    private static void WriteJoint3(BinaryWriter w, Joint3Dto j)
+    private static void WriteJoint3(BinaryWriter w, Joint3Dto j, uint version)
     {
         switch (j.Type)
         {
@@ -4127,6 +4261,13 @@ public static class Snapshot
                 w.Write(j.ImpulseVec?.X ?? 0f); w.Write(j.ImpulseVec?.Y ?? 0f); w.Write(j.ImpulseVec?.Z ?? 0f);
                 w.Write(j.AlignU1 ?? 0f); w.Write(j.AlignU2 ?? 0f);
                 w.Write(j.TwistImpulse ?? 0f);
+                // Schema v16: the motor records.
+                if (version >= MotorsSchemaVersion)
+                {
+                    w.Write(j.MotorSpeed ?? 0f);
+                    w.Write(j.MotorMaxTorque ?? 0f);
+                    w.Write(j.MotorImpulse ?? 0f);
+                }
                 break;
             case "prismatic3":
                 w.Write((byte)2);
@@ -4144,6 +4285,13 @@ public static class Snapshot
                 w.Write(j.PerpU1 ?? 0f); w.Write(j.PerpU2 ?? 0f);
                 w.Write(j.AngularImpulse?.X ?? 0f); w.Write(j.AngularImpulse?.Y ?? 0f); w.Write(j.AngularImpulse?.Z ?? 0f);
                 w.Write(j.LimitImpulse ?? 0f);
+                // Schema v16: the motor records.
+                if (version >= MotorsSchemaVersion)
+                {
+                    w.Write(j.MotorSpeed ?? 0f);
+                    w.Write(j.MotorMaxForce ?? 0f);
+                    w.Write(j.MotorImpulse ?? 0f);
+                }
                 break;
             case "fixed3":
                 w.Write((byte)3);
@@ -4164,7 +4312,7 @@ public static class Snapshot
         }
     }
 
-    private static Joint3Dto ReadJoint3(BinaryReader r)
+    private static Joint3Dto ReadJoint3(BinaryReader r, uint version)
     {
         byte tag = r.ReadByte();
         int id = r.ReadInt32();
@@ -4193,6 +4341,10 @@ public static class Snapshot
                     ImpulseVec = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                     AlignU1 = r.ReadSingle(), AlignU2 = r.ReadSingle(),
                     TwistImpulse = r.ReadSingle(),
+                    // Schema v16: older payloads carry no motor records.
+                    MotorSpeed = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
+                    MotorMaxTorque = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
+                    MotorImpulse = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
                 };
             case 2:
                 var pAxis = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() };
@@ -4209,6 +4361,10 @@ public static class Snapshot
                     PerpU1 = r.ReadSingle(), PerpU2 = r.ReadSingle(),
                     AngularImpulse = new Vec3Dto { X = r.ReadSingle(), Y = r.ReadSingle(), Z = r.ReadSingle() },
                     LimitImpulse = r.ReadSingle(),
+                    // Schema v16: older payloads carry no motor records.
+                    MotorSpeed = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
+                    MotorMaxForce = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
+                    MotorImpulse = version >= MotorsSchemaVersion ? r.ReadSingle() : null,
                 };
             case 3:
                 float[]? fro = null;

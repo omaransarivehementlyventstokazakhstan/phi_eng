@@ -300,6 +300,131 @@ public class JointTests
         Assert.Throws<ArgumentOutOfRangeException>(() => world.RemoveJoint(999));
     }
 
+    private static (World2 World, int Arm) MotorPendulum(float speed, float torque, float gravityY)
+    {
+        var world = new World2();
+        world.Gravity = new Vector2(0.0f, gravityY);
+        world.LinearSleepThreshold = 0.0f;
+        world.AngularSleepThreshold = 0.0f;
+        world.AddStaticBody(Vector2.Zero, new CircleShape(0.2f));
+        int arm = world.AddDynamicBody(new Vector2(0.0f, -1.0f), new BoxShape2(new Vector2(0.1f, 1.0f)), 1.0f);
+        var joint = new HingeJoint(0, arm, Vector2.Zero, new Vector2(0.0f, 1.0f), 1.0f, -1.0f, 0.0f, world.Bodies.Count);
+        joint.SetMotor(speed, torque);
+        world.AddJoint(joint);
+        return (world, arm);
+    }
+
+    /// <summary>
+    /// J45: a budgeted hinge motor spins its arm up to the target speed.
+    /// </summary>
+    [Fact]
+    public void J45_HingeMotorReachesTargetSpeed()
+    {
+        var (world, arm) = MotorPendulum(3.0f, 1000.0f, 0.0f);
+        for (int i = 0; i < 300; i++) world.Step(Dt);
+        float w = world.Bodies[arm].AngularVelocity;
+        Assert.Equal(0x403ff7cfu, Bits(w));
+        Assert.True(MathF.Abs(w - 3.0f) < 1e-2f, $"motor must reach 3 rad/s, got {w}");
+    }
+
+    /// <summary>
+    /// J46: a starved motor slips below target with its impulse
+    /// saturated at the budget, and bad tuning is rejected.
+    /// </summary>
+    [Fact]
+    public void J46_WeakMotorSlipsWithSaturatedImpulse()
+    {
+        var (world, arm) = MotorPendulum(3.0f, 0.5f, -9.81f);
+        var hinge = (HingeJoint)world.Joints[0];
+        Assert.Throws<ArgumentException>(() => hinge.SetMotor(float.NaN, 1.0f));
+        Assert.Throws<ArgumentException>(() => hinge.SetMotor(1.0f, -1.0f));
+        for (int i = 0; i < 600; i++) world.Step(Dt);
+        float w = world.Bodies[arm].AngularVelocity;
+        float imp = ((HingeJoint)world.Joints[0]).MotorImpulse;
+        Assert.Equal(0x3c088889u, Bits(imp));
+        // No bit pin on w: the stalled arm is a decaying oscillation,
+        // and pinning an oscillator's phase would pin solver jitter,
+        // not motor physics.
+        Assert.True(MathF.Abs(w) < 0.5f, $"starved motor must slip far below 3 rad/s, got {w}");
+        Assert.True(MathF.Abs(MathF.Abs(imp) - 0.5f * Dt) < 1e-9f, $"impulse must sit on the budget {imp}");
+    }
+
+    /// <summary>
+    /// J47: a prismatic motor extends its slider at the target speed.
+    /// </summary>
+    [Fact]
+    public void J47_PrismaticMotorExtendsAtTargetSpeed()
+    {
+        var world = new World2();
+        world.Gravity = Vector2.Zero;
+        world.LinearSleepThreshold = 0.0f;
+        world.AngularSleepThreshold = 0.0f;
+        world.AddStaticBody(Vector2.Zero, new BoxShape2(new Vector2(5.0f, 0.2f)));
+        world.Bodies[0].IsSensor = true;
+        int slider = world.AddDynamicBody(Vector2.Zero, new BoxShape2(new Vector2(0.3f, 0.3f)), 1.0f);
+        var joint = new PrismaticJoint(0, slider, Vector2.Zero, Vector2.Zero, Vector2.UnitX, -10.0f, 10.0f, 0.0f, world.Bodies.Count);
+        joint.SetMotor(2.0f, 10000.0f);
+        world.AddJoint(joint);
+        for (int i = 0; i < 120; i++) world.Step(Dt);
+        var p = world.Bodies[slider].Transform.Position;
+        Assert.Equal(0x407ff522u, Bits(p.X));
+        Assert.True(MathF.Abs(p.X - 4.0f) < 0.05f, $"slider must extend at 2 m/s, got {p}");
+        Assert.True(MathF.Abs(p.Y) < 0.05f, $"slider must stay on the rail, got {p}");
+    }
+
+    /// <summary>
+    /// J48: motors round-trip through save/load (schema v16), and an
+    /// unmotorized world stays on its old schema with motors off.
+    /// </summary>
+    [Fact]
+    public void J48_MotorsPersistThroughSaveLoad()
+    {
+        var (world, arm) = MotorPendulum(3.0f, 1000.0f, 0.0f);
+        for (int i = 0; i < 60; i++) world.Step(Dt);
+        string text = Snapshot.World2ToJson(world, SnapshotLoadMode.Exact);
+        Assert.Equal(Snapshot.SchemaVersion, JsonSchema(text));
+        Assert.Contains("motor_speed", text);
+        byte[] bytes = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
+        var back = Snapshot.World2FromBinary(bytes, SnapshotLoadMode.Exact);
+        var h = (HingeJoint)back.Joints[0];
+        Assert.Equal(Bits(3.0f), Bits(h.MotorSpeed));
+        Assert.Equal(Bits(1000.0f), Bits(h.MotorMaxTorque));
+        for (int i = 0; i < 60; i++)
+        {
+            world.Step(Dt);
+            back.Step(Dt);
+        }
+        var (a, b) = (world.Bodies[arm], back.Bodies[arm]);
+        Assert.Equal(
+            (Bits(a.Velocity.X), Bits(a.Velocity.Y), Bits(a.AngularVelocity)),
+            (Bits(b.Velocity.X), Bits(b.Velocity.Y), Bits(b.AngularVelocity)));
+
+        var (plain, _) = MotorPendulum(0.0f, 0.0f, 0.0f);
+        for (int i = 0; i < 60; i++) plain.Step(Dt);
+        string text2 = Snapshot.World2ToJson(plain, SnapshotLoadMode.Exact);
+        Assert.True(JsonSchema(text2) < Snapshot.SchemaVersion, "no motors means no v16");
+        Assert.DoesNotContain("motor_speed", text2);
+        byte[] bytes2 = Snapshot.World2ToBinary(plain, SnapshotLoadMode.Exact);
+        var back2 = Snapshot.World2FromBinary(bytes2, SnapshotLoadMode.Exact);
+        var h2 = (HingeJoint)back2.Joints[0];
+        Assert.Equal(0.0f, h2.MotorSpeed);
+        Assert.Equal(0.0f, h2.MotorMaxTorque);
+        Assert.Equal(0.0f, h2.MotorImpulse);
+    }
+
+    private static uint Bits(float v) => BitConverter.SingleToUInt32Bits(v);
+
+    private static uint JsonSchema(string text)
+    {
+        const string marker = "\"schema\": ";
+        int at = text.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) throw new InvalidOperationException("the JSON carries no schema");
+        string rest = text[(at + marker.Length)..];
+        int end = 0;
+        while (end < rest.Length && char.IsAsciiDigit(rest[end])) end++;
+        return uint.Parse(rest[..end]);
+    }
+
     private static float Wrap(float a)
     {
         a %= MathF.Tau;

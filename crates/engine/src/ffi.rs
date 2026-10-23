@@ -2602,9 +2602,11 @@ pub unsafe extern "C" fn phieng_world_fluid_get(
 pub const JOINT_DISTANCE: u32 = 0;
 /// Hinge joint tag: `{"anchorA":[x,y],"anchorB":[x,y],
 /// "limitMin":f,"limitMax":f,"compliance":f}` (`min > max` = free).
+/// Optional `"motorSpeed":f,"motorMaxTorque":f` drive it.
 pub const JOINT_HINGE: u32 = 1;
 /// Prismatic joint tag: `{"anchorA":[x,y],"anchorB":[x,y],"axis":[x,y],
 /// "limitMin":f,"limitMax":f,"compliance":f}` (`min > max` = free travel).
+/// Optional `"motorSpeed":f,"motorMaxForce":f` drive it.
 pub const JOINT_PRISMATIC: u32 = 2;
 /// Fixed joint tag: `{"anchorA":[x,y],"anchorB":[x,y],"compliance":f}`.
 pub const JOINT_FIXED: u32 = 3;
@@ -2645,6 +2647,27 @@ fn json_compliance(v: &serde_json::Value) -> Option<f32> {
             x.is_finite().then_some(x)
         }
     }
+}
+
+/// Read the optional motor fields (`motorSpeed` plus the budget field,
+/// both defaulting to off when absent; must be finite when present —
+/// negativity is rejected by `set_motor` downstream).
+fn json_motor(v: &serde_json::Value, max_field: &str) -> Option<(f32, f32)> {
+    let speed = match v.get("motorSpeed") {
+        None => 0.0,
+        Some(s) => {
+            let x = s.as_f64()? as f32;
+            x.is_finite().then_some(x)?
+        }
+    };
+    let max = match v.get(max_field) {
+        None => 0.0,
+        Some(m) => {
+            let x = m.as_f64()? as f32;
+            x.is_finite().then_some(x)?
+        }
+    };
+    Some((speed, max))
 }
 
 /// Add a joint from a JSON param blob.
@@ -2710,12 +2733,13 @@ pub unsafe extern "C" fn phieng_world_add_joint(
             }
         }
         JOINT_HINGE => {
-            let (Some(a), Some(b), Some(lo), Some(hi), Some(comp)) = (
+            let (Some(a), Some(b), Some(lo), Some(hi), Some(comp), Some((ms, mm))) = (
                 json_vec2(&v, "anchorA"),
                 json_vec2(&v, "anchorB"),
                 json_f32(&v, "limitMin"),
                 json_f32(&v, "limitMax"),
                 json_compliance(&v),
+                json_motor(&v, "motorMaxTorque"),
             ) else {
                 return -1;
             };
@@ -2730,18 +2754,26 @@ pub unsafe extern "C" fn phieng_world_add_joint(
                 comp,
                 n,
             ) {
-                Ok(j) => j,
+                Ok(mut j) => {
+                    if let phieng_dynamics::Joint2::Hinge(h) = &mut j {
+                        if h.set_motor(ms, mm).is_err() {
+                            return -1;
+                        }
+                    }
+                    j
+                }
                 Err(_) => return -1,
             }
         }
         JOINT_PRISMATIC => {
-            let (Some(a), Some(b), Some(ax), Some(lo), Some(hi), Some(comp)) = (
+            let (Some(a), Some(b), Some(ax), Some(lo), Some(hi), Some(comp), Some((ms, mm))) = (
                 json_vec2(&v, "anchorA"),
                 json_vec2(&v, "anchorB"),
                 json_vec2(&v, "axis"),
                 json_f32(&v, "limitMin"),
                 json_f32(&v, "limitMax"),
                 json_compliance(&v),
+                json_motor(&v, "motorMaxForce"),
             ) else {
                 return -1;
             };
@@ -2757,7 +2789,14 @@ pub unsafe extern "C" fn phieng_world_add_joint(
                 comp,
                 n,
             ) {
-                Ok(j) => j,
+                Ok(mut j) => {
+                    if let phieng_dynamics::Joint2::Prismatic(p) = &mut j {
+                        if p.set_motor(ms, mm).is_err() {
+                            return -1;
+                        }
+                    }
+                    j
+                }
                 Err(_) => return -1,
             }
         }
@@ -2913,7 +2952,16 @@ pub unsafe extern "C" fn phieng_world3_add_joint(
             }
         }
         JOINT3_HINGE => {
-            let (Some(a), Some(b), Some(ax_a), Some(ax_b), Some(lo), Some(hi), Some(comp)) = (
+            let (
+                Some(a),
+                Some(b),
+                Some(ax_a),
+                Some(ax_b),
+                Some(lo),
+                Some(hi),
+                Some(comp),
+                Some((ms, mm)),
+            ) = (
                 json_vec3(&v, "anchorA"),
                 json_vec3(&v, "anchorB"),
                 json_vec3(&v, "axisA"),
@@ -2921,7 +2969,9 @@ pub unsafe extern "C" fn phieng_world3_add_joint(
                 json_f32(&v, "limitMin"),
                 json_f32(&v, "limitMax"),
                 json_compliance(&v),
-            ) else {
+                json_motor(&v, "motorMaxTorque"),
+            )
+            else {
                 return -1;
             };
             match make_hinge_joint_3(
@@ -2937,18 +2987,26 @@ pub unsafe extern "C" fn phieng_world3_add_joint(
                 comp,
                 n,
             ) {
-                Ok(j) => j,
+                Ok(mut j) => {
+                    if let phieng_dynamics::Joint3::Hinge(h) = &mut j {
+                        if h.set_motor(ms, mm).is_err() {
+                            return -1;
+                        }
+                    }
+                    j
+                }
                 Err(_) => return -1,
             }
         }
         JOINT3_PRISMATIC => {
-            let (Some(a), Some(b), Some(ax), Some(lo), Some(hi), Some(comp)) = (
+            let (Some(a), Some(b), Some(ax), Some(lo), Some(hi), Some(comp), Some((ms, mm))) = (
                 json_vec3(&v, "anchorA"),
                 json_vec3(&v, "anchorB"),
                 json_vec3(&v, "axis"),
                 json_f32(&v, "limitMin"),
                 json_f32(&v, "limitMax"),
                 json_compliance(&v),
+                json_motor(&v, "motorMaxForce"),
             ) else {
                 return -1;
             };
@@ -2964,7 +3022,14 @@ pub unsafe extern "C" fn phieng_world3_add_joint(
                 comp,
                 n,
             ) {
-                Ok(j) => j,
+                Ok(mut j) => {
+                    if let phieng_dynamics::Joint3::Prismatic(p) = &mut j {
+                        if p.set_motor(ms, mm).is_err() {
+                            return -1;
+                        }
+                    }
+                    j
+                }
                 Err(_) => return -1,
             }
         }
