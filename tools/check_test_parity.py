@@ -128,6 +128,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               classical bound, the noisy channels, the Lindblad step and
               its trace, the mixed-state ladder, and the three-qubit
               partial traces)
+    M73-M80  the 3D grid and the fields (mirrored both languages: the
+              grid bookkeeping, the cubic box and harmonic trap spectra
+              with their triple degeneracies bit-identical, the
+              normalised tensor-product ground state, the matrix-free
+              versus dense cross-check, the zero-flux ring, the
+              quarter-flux lift, and the flux periodicity)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

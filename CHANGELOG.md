@@ -8,6 +8,28 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Three-dimensional quantum mechanics and the Aharonov-Bohm ring.**
+  The one-dimensional machinery lifts onto 3D grids: the x-fastest
+  grid with its Dirichlet unknown map, the separable Hamiltonian that
+  never builds the full matrix for a splitting potential, and the
+  spectra that add three one-dimensional ladders smallest-first so the
+  triple degeneracies of the cubic box and the harmonic trap stay
+  bit-identical. The tensor-product ground state matches the dense
+  diagonalisation to a fidelity past 1 - 1e-6. A charged particle on a
+  ring threaded by flux gets Peierls phases on its hopping: the
+  spectrum slides with the flux and returns every quantum, pinned at
+  zero flux, quarter flux, and across the period.
+
+  Building the 64-point ring caught two kernel bugs the small stages
+  never exercised: the complex Jacobi rotation carried its phase
+  conjugated the wrong way, converging silently to wrong spectra for
+  genuinely complex matrices, and a subnormal off-diagonal overflowed
+  `1/r` to infinity, NaN-ing large diagonalisations late. Both are
+  fixed in the Rust core and the C# mirror; M14 now pins the correctly
+  rounded ±√2.
+
+  Mirrored Rust<->C# tests: **M73-M80** (`crates/engine/tests/quantum_3d.rs`,
+  `tests/PhiEng.Tests/Quantum3DTests.cs`).
 - **Entanglement and quantum information.** Density matrices join
   state vectors: the maximally mixed state, the partial trace that
   answers what a subset of qubits looks like alone, the purity, the von

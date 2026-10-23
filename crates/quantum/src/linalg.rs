@@ -94,21 +94,39 @@ pub fn eigen_hermitian(a: &ComplexMatrix, max_sweeps: usize, tol: f32) -> Hermit
                 if !r.is_finite() || r <= 0.0 {
                     continue;
                 }
+                // A subnormal entry is already zero for every purpose
+                // that matters: 1/r would overflow to infinity and the
+                // rotation angle is ~1e-42, so rotating would only turn
+                // the matrix into infinities and NaNs. Skipping is the
+                // numerically honest move, and the C# mirror skips the
+                // same entries to stay bit-identical.
+                if r < f32::MIN_POSITIVE {
+                    continue;
+                }
                 // The phase of the entry and the rotation that zeroes
                 // it: tan(2 theta) = 2|a_pq| / (a_qq - a_pp).
                 //
-                // The rotation is G = [[c, s*conj(phi)], [-s*phi, c]] on
-                // the (p, q) plane, so that A' = G^H A G has a zero
-                // (p, q) entry. Writing it the other way round (with the
-                // signs of s swapped) would need the opposite angle.
+                // Write the entry as w = |w| e^{i phi}. The rotation is
+                // G = [[c, s phi], [-s conj(phi), c]] on the (p, q)
+                // plane, so that A' = G^H A G has a zero (p, q) entry:
+                // with j0 = (c, -s conj(phi)) and j1 = (s phi, c), the
+                // new entry is j0^H A j1 = e^{i phi} [s c (a-b) + |w|
+                // (c^2 - s^2)], which vanishes exactly when theta
+                // satisfies the real Jacobi equation above. Note the
+                // phase goes on the upper entry UNconjugated: putting
+                // conj(phi) there instead leaves an e^{-3 i phi} residue
+                // and the solver silently converges to wrong spectra for
+                // genuinely complex matrices (real inputs are unaffected
+                // since phi = +-1 is self-conjugate, which is how the
+                // mistake survived the Stage B tests).
                 let phase = apq.scale(1.0 / r);
                 let app = m.get(p, p).re;
                 let aqq = m.get(q, q).re;
                 let theta = 0.5 * atan2(2.0 * r, aqq - app);
                 let (c, s) = compute_cos_sin(theta);
                 let gpp = Complex32::new(c, 0.0);
-                let gpq = Complex32::new(s, 0.0) * phase.conj();
-                let gqp = Complex32::new(-s, 0.0) * phase;
+                let gpq = Complex32::new(s, 0.0) * phase;
+                let gqp = Complex32::new(-s, 0.0) * phase.conj();
                 let gqq = Complex32::new(c, 0.0);
 
                 // A <- A G: the columns p and q are mixed.

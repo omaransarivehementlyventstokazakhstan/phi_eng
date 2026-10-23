@@ -94,22 +94,41 @@ public static partial class QuantumLinalg
                     {
                         continue;
                     }
+                    // A subnormal entry is already zero for every purpose
+                    // that matters: 1/r would overflow to infinity and the
+                    // rotation angle is ~1e-42, so rotating would only turn
+                    // the matrix into infinities and NaNs. Skipping is the
+                    // numerically honest move, and the Rust core skips the
+                    // same entries to stay bit-identical. Note: this is the
+                    // smallest *normal* float, not float.Epsilon.
+                    if (r < 1.17549435e-38f)
+                    {
+                        continue;
+                    }
                     // The phase of the entry and the rotation that zeroes
                     // it: tan(2 theta) = 2|a_pq| / (a_qq - a_pp).
                     //
-                    // The rotation is G = [[c, s*conj(phi)], [-s*phi, c]]
-                    // on the (p, q) plane, so that A' = G^H A G has a zero
-                    // (p, q) entry. Writing it the other way round (with
-                    // the signs of s swapped) would need the opposite
-                    // angle.
+                    // Write the entry as w = |w| e^{i phi}. The rotation is
+                    // G = [[c, s phi], [-s conj(phi), c]] on the (p, q)
+                    // plane, so that A' = G^H A G has a zero (p, q) entry:
+                    // with j0 = (c, -s conj(phi)) and j1 = (s phi, c), the
+                    // new entry is j0^H A j1 = e^{i phi} [s c (a-b) + |w|
+                    // (c^2 - s^2)], which vanishes exactly when theta
+                    // satisfies the real Jacobi equation above. Note the
+                    // phase goes on the upper entry UNconjugated: putting
+                    // conj(phi) there instead leaves an e^{-3 i phi} residue
+                    // and the solver silently converges to wrong spectra for
+                    // genuinely complex matrices (real inputs are unaffected
+                    // since phi = +-1 is self-conjugate, which is how the
+                    // mistake survived the Stage B tests).
                     var phase = Complex32.Scale(apq, 1.0f / r);
                     float app = m.Get(p, p).Re;
                     float aqq = m.Get(q, q).Re;
                     float theta = 0.5f * DeterministicTrig.Atan2(2.0f * r, aqq - app);
                     var (c, s) = DeterministicTrig.ComputeCosSin(theta);
                     var gpp = new Complex32(c, 0.0f);
-                    var gpq = Complex32.Scale(Complex32.Conjugate(phase), s);
-                    var gqp = Complex32.Scale(phase, -s);
+                    var gpq = Complex32.Scale(phase, s);
+                    var gqp = Complex32.Scale(Complex32.Conjugate(phase), -s);
                     var gqq = new Complex32(c, 0.0f);
 
                     // A <- A G: the columns p and q are mixed.

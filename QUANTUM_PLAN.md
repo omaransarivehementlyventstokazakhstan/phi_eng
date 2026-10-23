@@ -186,7 +186,19 @@ parity checker's ID list, and the native DLL restaged.
       `src/PhiEng.Quantum/{Density,Entanglement}.cs`. Pinned by M65-M72.
       A Z-jump dephases at twice its rate; the CHSH count is pinned,
       not just bounded.
-- [ ] **Stage I** — the 3D grid and the fields.
+- [x] **Stage I** — the 3D grid and the fields.
+      `crates/quantum/src/{grid3,hamiltonian3,gauge}.rs`, mirrored by
+      `src/PhiEng.Quantum/{Grid3D,Hamiltonian3D,Gauge}.cs`. Pinned by
+      M73-M80. The separable spectrum adds three one-dimensional
+      ladders smallest-first, so degenerate permutations stay
+      bit-identical; the ring threads flux through Peierls phases and
+      its spectrum slides with the flux and returns every quantum.
+      Building it caught two kernel bugs the small stages never
+      exercised: the complex Jacobi rotation carried its phase
+      conjugated the wrong way (silent wrong spectra past 2x2), and a
+      subnormal off-diagonal overflowed 1/r to infinity (NaNs past
+      sweep 9 on 64x64). Both are fixed in the Rust core and the C#
+      mirror, and M14 now pins the correctly rounded +-sqrt(2).
 - [ ] **Stage J** — the advanced.
 
 ## The crate layout

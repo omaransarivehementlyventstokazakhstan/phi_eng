@@ -228,8 +228,8 @@ public class QuantumStateTests
 
         // A matrix with a complex off-diagonal: the eigenvalues are ±√2.
         var e2 = QuantumLinalg.EigenHermitian(Complex2(), 32, 1e-6f);
-        Assert.Equal(0xbfb504f2u, Bits(e2.Eigenvalues[0]));
-        Assert.Equal(0x3fb504f2u, Bits(e2.Eigenvalues[1]));
+        Assert.Equal(0xbfb504f3u, Bits(e2.Eigenvalues[0]));
+        Assert.Equal(0x3fb504f3u, Bits(e2.Eigenvalues[1]));
         float[] want2 = { -MathF.Sqrt(2.0f), MathF.Sqrt(2.0f) };
         for (int i = 0; i < 2; i++)
         {

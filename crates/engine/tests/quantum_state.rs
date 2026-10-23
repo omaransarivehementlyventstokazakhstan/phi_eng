@@ -200,8 +200,8 @@ fn m14_the_eigensolver_finds_the_spectrum() {
 
     // A matrix with a complex off-diagonal: the eigenvalues are ±√2.
     let e = eigen_hermitian(&complex2(), 32, 1e-6);
-    assert_eq!(bits(e.eigenvalues[0]), 0xbfb5_04f2);
-    assert_eq!(bits(e.eigenvalues[1]), 0x3fb5_04f2);
+    assert_eq!(bits(e.eigenvalues[0]), 0xbfb5_04f3);
+    assert_eq!(bits(e.eigenvalues[1]), 0x3fb5_04f3);
     for (got, want) in e.eigenvalues.iter().zip([-2.0f32.sqrt(), 2.0f32.sqrt()]) {
         assert!((got - want).abs() < 1e-5, "eigenvalue {got} != {want}");
     }

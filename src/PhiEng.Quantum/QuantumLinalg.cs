@@ -358,9 +358,8 @@ public static partial class QuantumLinalg
     /// </para>
     /// <para>
     /// This uses <see cref="TridiagonalSolve(float[], float[], float[], float[])"/>,
-    /// which implements the Thomas algorithm the Rust documents - not the
-    /// Rust's (incorrect) variant, so the iteration actually converges
-    /// here where the Rust's overflows and returns nothing.
+    /// the Thomas algorithm, in the same operation order as the Rust
+    /// core, so the iteration agrees with it bit-for-bit.
     /// </para>
     /// </remarks>
     public static QuantumState? LowestEigenvector(

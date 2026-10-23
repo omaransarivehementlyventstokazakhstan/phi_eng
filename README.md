@@ -424,6 +424,12 @@ contact for that frame rather than a guessed depth.
   noisy channels and the Lindblad master equation, plus the Bell states
   and the CHSH game -- pinned at 1696 wins in 2000 rounds, past the
   classical 3/4. Pinned by M65-M72 (Rust<->C# parity).
+- **Three-dimensional quantum mechanics (both languages):** the
+  x-fastest 3D grid with its Dirichlet unknown map, the separable
+  Hamiltonian with its bit-identical degenerate spectra, the
+  tensor-product ground state, and the Aharonov-Bohm ring whose
+  spectrum slides with the flux and returns every quantum. Pinned by
+  M73-M80 (Rust<->C# parity).
 - **Spin and particles (both languages):** the Pauli matrices as
   observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
   the Rabi flop and Larmor precession, plus second quantization: the
