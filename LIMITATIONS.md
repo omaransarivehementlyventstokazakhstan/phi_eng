@@ -190,9 +190,11 @@ rejected with `JointError::UnsupportedCompliance` rather than faked),
 and breakable limits. The ray cast covers the analytic shapes
 (a circle, an oriented box and a convex polygon in 2D; a sphere, an
 oriented box and a capsule in 3D) but not the convex ones: a ray that
-would hit a convex hull or a convex mesh is reported as a miss. The
-other shape queries (shape overlap, point test, closest point) are not
-built yet. The ray cast's distance is the parameter along the direction
+would hit a convex hull or a convex mesh is reported as a miss. Point
+tests and closest-point queries exist in both dimensions
+(`World2/3::point_test` / `closest_point`), analytic for every shape and
+with the same convex-shape miss. A shape-against-shape overlap query is
+not built yet. The ray cast's distance is the parameter along the direction
 as it was given: a direction that is not a unit vector scales the
 range, and so does `max_t`. A caller that wants a distance in world
 units should normalize the direction first.

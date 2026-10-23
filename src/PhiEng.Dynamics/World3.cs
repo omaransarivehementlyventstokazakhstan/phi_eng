@@ -368,6 +368,57 @@ public class World3
     /// </summary>
     public bool CollectContactEvents { get; set; }
 
+    /// <summary>Every body whose shape contains <paramref name="point"/>, in ascending id order.</summary>
+    /// <remarks>See <see cref="World2.PointTest"/> for the sensor rule.</remarks>
+    public int[] PointTest(Vector3 point, QueryFilter filter)
+    {
+        var hits = new List<int>();
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            if (ShapeQuery3.PointInShape(
+                    body.Shape, body.Transform.Position, body.Transform.Rotation, point))
+            {
+                hits.Add(body.Id);
+            }
+        }
+        return hits.ToArray();
+    }
+
+    /// <summary>The nearest body surface to <paramref name="point"/>, within <paramref name="maxDistance"/>.</summary>
+    /// <remarks>
+    /// See <see cref="World2.ClosestPoint"/>; the convex hull and convex
+    /// mesh report a miss, as in the 3D ray cast.
+    /// </remarks>
+    public WorldClosestHit3? ClosestPoint(Vector3 point, QueryFilter filter, float maxDistance)
+    {
+        float max = float.IsFinite(maxDistance) ? MathF.Max(maxDistance, 0.0f) : float.MaxValue;
+        WorldClosestHit3? best = null;
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            var hit = ShapeQuery3.ClosestPoint(
+                body.Shape, body.Transform.Position, body.Transform.Rotation, point);
+            if (hit == null) continue;
+            var h = hit.Value;
+            if (!h.Inside && h.Distance > max) continue;
+            if (best == null || h.Distance < best.Value.Distance)
+            {
+                best = new WorldClosestHit3
+                {
+                    Body = body.Id,
+                    Inside = h.Inside,
+                    Point = h.Point,
+                    Normal = h.Normal,
+                    Distance = h.Distance,
+                };
+            }
+        }
+        return best;
+    }
+
     /// <summary>
     /// Cast a ray into the world and return the first thing it hits.
     /// </summary>

@@ -440,6 +440,65 @@ public class World2
     public bool CollectContactEvents { get; set; }
 
     /// <summary>
+    /// Every body whose shape contains <paramref name="point"/>, in
+    /// ascending id order.
+    /// </summary>
+    /// <remarks>
+    /// Sensors are included: a point test is a pick or trigger query, and
+    /// a trigger volume is exactly what it should find. (The ray cast
+    /// skips sensors because a ray passes through them.)
+    /// </remarks>
+    public int[] PointTest(Vector2 point, QueryFilter filter)
+    {
+        var hits = new List<int>();
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            if (ShapeQuery2.PointInShape(
+                    body.Shape, body.Transform.Position, body.Transform.Rotation, point))
+            {
+                hits.Add(body.Id);
+            }
+        }
+        return hits.ToArray();
+    }
+
+    /// <summary>The nearest body surface to <paramref name="point"/>, within <paramref name="maxDistance"/>.</summary>
+    /// <remarks>
+    /// A point inside a shape wins (distance zero) over any outside
+    /// surface; ties keep the lower body id. Sensors are included, as in
+    /// <see cref="PointTest"/>.
+    /// </remarks>
+    public WorldClosestHit2? ClosestPoint(Vector2 point, QueryFilter filter, float maxDistance)
+    {
+        float max = float.IsFinite(maxDistance) ? MathF.Max(maxDistance, 0.0f) : float.MaxValue;
+        WorldClosestHit2? best = null;
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            var hit = ShapeQuery2.ClosestPoint(
+                body.Shape, body.Transform.Position, body.Transform.Rotation, point);
+            if (hit == null) continue;
+            var h = hit.Value;
+            if (!h.Inside && h.Distance > max) continue;
+            if (best == null || h.Distance < best.Value.Distance)
+            {
+                best = new WorldClosestHit2
+                {
+                    Body = body.Id,
+                    Inside = h.Inside,
+                    Point = h.Point,
+                    Normal = h.Normal,
+                    Distance = h.Distance,
+                };
+            }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// Cast a ray into the world and return the first thing it hits.
     /// </summary>
     /// <remarks>

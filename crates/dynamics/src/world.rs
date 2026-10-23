@@ -299,6 +299,31 @@ pub struct WorldRayHit3 {
     pub normal: Vec3,
 }
 
+/// The nearest surface point a world closest-point query found.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldClosestHit2 {
+    /// The body that owns the surface.
+    pub body: u32,
+    /// Whether the query point is inside that body.
+    pub inside: bool,
+    /// The surface point, in world space.
+    pub point: Vec2,
+    /// The outward unit normal there.
+    pub normal: Vec2,
+    /// The distance to the surface (zero when inside).
+    pub distance: f32,
+}
+
+/// The 3D form of [`WorldClosestHit2`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldClosestHit3 {
+    pub body: u32,
+    pub inside: bool,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub distance: f32,
+}
+
 impl World2 {
     pub fn new() -> Self {
         Self {
@@ -1351,6 +1376,88 @@ impl World2 {
     /// The scan is over the *current* body positions, not the broad
     /// phase's grid, which holds the positions from before the last
     /// solve.
+    /// Every body whose shape contains `point`, in ascending id order.
+    ///
+    /// Sensors are included: a point test is a pick or trigger query, and
+    /// a trigger volume is exactly what it should find. (The ray cast
+    /// skips sensors because a ray passes through them.)
+    pub fn point_test(&self, point: Vec2, filter: &QueryFilter) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            if super::shape_query::point_in_shape2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                point,
+            ) {
+                out.push(body.id as u32);
+            }
+        }
+        out
+    }
+
+    /// The nearest body surface to `point`, within `max_distance`.
+    ///
+    /// A point inside a shape wins (distance zero) over any outside
+    /// surface; ties keep the lower body id, because bodies are visited
+    /// in ascending order and a strictly nearer hit is required to
+    /// replace the best so far. Sensors are included, as in
+    /// [`Self::point_test`].
+    pub fn closest_point(
+        &self,
+        point: Vec2,
+        filter: &QueryFilter,
+        max_distance: f32,
+    ) -> Option<WorldClosestHit2> {
+        let max = if max_distance.is_finite() {
+            max_distance.max(0.0)
+        } else {
+            f32::MAX
+        };
+        let mut best: Option<WorldClosestHit2> = None;
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            let Some(hit) = super::shape_query::closest_point2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                point,
+            ) else {
+                continue;
+            };
+            // An inside hit is always in range: its surface is at the
+            // query point's own distance zero.
+            if !hit.inside && hit.distance > max {
+                continue;
+            }
+            let nearer = match best {
+                Some(current) => hit.distance < current.distance,
+                None => true,
+            };
+            if nearer {
+                best = Some(WorldClosestHit2 {
+                    body: body.id as u32,
+                    inside: hit.inside,
+                    point: hit.point,
+                    normal: hit.normal,
+                    distance: hit.distance,
+                });
+            }
+        }
+        best
+    }
+
     pub fn raycast(&self, ray: &Ray2, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit2> {
         let mut best: Option<WorldRayHit2> = None;
         for body in &self.bodies {
@@ -3548,6 +3655,79 @@ impl World3 {
     /// See [`World2::raycast`]. The convex shapes (a convex hull and a
     /// convex mesh) are not tested yet: a ray that would hit one is
     /// reported as a miss.
+    /// Every body whose shape contains `point`, in ascending id order.
+    /// See [`World2::point_test`] for the sensor rule.
+    pub fn point_test(&self, point: Vec3, filter: &QueryFilter) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            if super::shape_query::point_in_shape3(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                point,
+            ) {
+                out.push(body.id as u32);
+            }
+        }
+        out
+    }
+
+    /// The nearest body surface to `point`, within `max_distance`.
+    /// See [`World2::closest_point`]; the convex hull and convex mesh
+    /// report a miss, as in the 3D ray cast.
+    pub fn closest_point(
+        &self,
+        point: Vec3,
+        filter: &QueryFilter,
+        max_distance: f32,
+    ) -> Option<WorldClosestHit3> {
+        let max = if max_distance.is_finite() {
+            max_distance.max(0.0)
+        } else {
+            f32::MAX
+        };
+        let mut best: Option<WorldClosestHit3> = None;
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            let Some(hit) = super::shape_query::closest_point3(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                point,
+            ) else {
+                continue;
+            };
+            if !hit.inside && hit.distance > max {
+                continue;
+            }
+            let nearer = match best {
+                Some(current) => hit.distance < current.distance,
+                None => true,
+            };
+            if nearer {
+                best = Some(WorldClosestHit3 {
+                    body: body.id as u32,
+                    inside: hit.inside,
+                    point: hit.point,
+                    normal: hit.normal,
+                    distance: hit.distance,
+                });
+            }
+        }
+        best
+    }
+
     pub fn raycast(&self, ray: &Ray3, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit3> {
         let mut best: Option<WorldRayHit3> = None;
         for body in &self.bodies {

@@ -29,6 +29,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
              step's only, and removing a body ends its contacts)
     V01-V11  runtime validation layer (mirrored both languages)
     J31-J44  joint constraints (mirrored both languages)
+    o01-o06  point and closest-point shape queries (mirrored both
+              languages: 2D/3D containment across every analytic shape,
+              winding-independent polygons, exact surface points and
+              escape normals, the convex miss, world ordering/filters/
+              sensors, and the nearest-hit/range rules)
     J45-J48  joint motors (mirrored both languages: hinge target
              speed, torque-starved slip with saturated impulse, bad
              tuning rejected, prismatic target speed, and v16

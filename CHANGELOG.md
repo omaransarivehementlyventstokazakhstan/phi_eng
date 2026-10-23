@@ -8,6 +8,28 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Point and closest-point shape queries.** Picking, trigger probes and
+  ground sampling no longer need their own geometry: `World2/3::point_test`
+  answers which bodies contain a point (sensors included, ascending id
+  order, filter-aware) and `closest_point` returns the nearest surface
+  with an outward escape normal and a range limit. Both are analytic for
+  every shape - circles/spheres, oriented boxes, polygons (winding is
+  derived, not trusted) and capsules - with the least-penetration axis
+  as the normal inside a box. The convex hull and mesh report a miss,
+  matching the ray cast. A shape-against-shape overlap query remains
+  future work, as does the C ABI for these (the managed API is the
+  supported surface today).
+
+  Two release-workflow defects were fixed alongside: `fail-fast` was
+  nested inside `matrix` (GitHub rejected the whole workflow, which is
+  the "No jobs were run" mail), and the archive step used
+  `github.repository` verbatim, so its `owner/repo` slash named a
+  nonexistent path. All four RIDs are now built on their own runners
+  (macOS/Windows cannot be cross-linked from Linux), and
+  `publish-nuget.yml` was restructured the same way.
+
+  Mirrored Rust<->C# tests: **o01-o06** (`crates/engine/tests/shape_query.rs`,
+  `tests/PhiEng.Tests/ShapeQueryTests.cs`).
 - **Joint motors.** Hinge (2D) / twist (3D) and prismatic (2D/3D)
   velocity motors with torque/force budgets: they hit the target
   speed exactly when the budget covers it and slip below it,

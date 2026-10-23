@@ -440,6 +440,11 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **Point and closest-point queries (both languages):** analytic
+  containment and nearest-surface queries over every supported shape
+  (winding-independent polygons, capsule axes, box least-penetration
+  normals), with world-level ordering, filters and sensor rules. Pinned
+  by o01-o06 (Rust<->C# parity).
 - **Joint motors (both languages):** velocity motors with
   torque/force budgets on hinge/twist and prismatic joints, warm
   started and budget-clamped, persisting through schema-v16

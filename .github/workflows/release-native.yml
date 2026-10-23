@@ -1,47 +1,63 @@
 name: Release with Native Artifacts
 
+# Runs when a release is published: builds the native library on each
+# platform's own runner (cross-linking to macOS/Windows from Linux is
+# not possible without the platform SDKs, so a single ubuntu job cannot
+# produce all four), then attaches one archive per RID to the release.
 on:
   release:
     types: [published]
+  # Manual runs are allowed so the build can be exercised without
+  # cutting a release. The attach step is skipped for them.
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build-native:
-    runs-on: ubuntu-latest
     strategy:
+      # fail-fast belongs to `strategy`, not `matrix`: inside `matrix`
+      # it is an unknown key and GitHub rejects the whole workflow,
+      # which surfaces as "No jobs were run" on every release.
+      fail-fast: false
       matrix:
         include:
           - rid: win-x64
-            target: x86_64-pc-windows-gnu
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
             output: phieng.dll
           - rid: linux-x64
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             output: libphieng.so
           - rid: osx-x64
+            os: macos-13
             target: x86_64-apple-darwin
             output: libphieng.dylib
           - rid: osx-arm64
+            os: macos-14
             target: aarch64-apple-darwin
             output: libphieng.dylib
-        fail-fast: false
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
       - name: Build native
-        run: cargo build --manifest-path Cargo.toml --target ${{ matrix.target }} --release -p phieng
+        run: cargo build --locked --target ${{ matrix.target }} --release -p phieng
       - name: Stage artifact
+        shell: bash
         run: |
           mkdir -p artifacts/${{ matrix.rid }}
-          cp target/${{ matrix.target }}/release/${{ matrix.output }} artifacts/${{ matrix.rid }}/
+          cp "target/${{ matrix.target }}/release/${{ matrix.output }}" artifacts/${{ matrix.rid }}/
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.rid }}
           path: artifacts/${{ matrix.rid }}/
+          if-no-files-found: error
           retention-days: 90
 
   create-release-assets:
@@ -53,24 +69,38 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+          # Keep the per-artifact directories (native-win-x64/...): the
+          # merge mode flattens them and the loop below would find no
+          # RID folders to archive.
+          merge-multiple: false
       - name: Create release archives
+        shell: bash
         run: |
+          set -euo pipefail
           cd artifacts
-          for dir in win-x64 linux-x64 osx-x64 osx-arm64; do
-            if [ -d "$dir" ]; then
-              cd $dir
-              if [[ "$dir" == win-x64 ]]; then
-                zip -r ../${{ github.repository }}-${{ github.event.release.tag_name }}-$dir.zip .
-              else
-                tar -czf ../${{ github.repository }}-${{ github.event.release.tag_name }}-$dir.tar.gz .
-              fi
-              cd ..
+          # github.repository is "owner/repo"; its slash would turn the
+          # archive path into a nonexistent directory, so sanitize it.
+          repo="${GITHUB_REPOSITORY//\//-}"
+          for dir in native-*; do
+            [ -d "$dir" ] || continue
+            rid="${dir#native-}"
+            if [ "$rid" = "win-x64" ]; then
+              (cd "$dir" && zip -9 -r "../${repo}-${TAG}-${rid}.zip" .)
+            else
+              (cd "$dir" && tar -czf "../${repo}-${TAG}-${rid}.tar.gz" .)
             fi
           done
+          ls -l ./*.zip ./*.tar.gz
+        env:
+          TAG: ${{ github.event.release.tag_name }}
       - name: Upload to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.zip artifacts/*.tar.gz
+          # action-gh-release wants a newline-delimited list; the
+          # space-separated form silently matches nothing.
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,4 +1,4 @@
-﻿name: Publish NuGet Packages
+name: Publish NuGet Packages
 
 on:
   release:
@@ -15,7 +15,54 @@ permissions:
   packages: write
 
 jobs:
+  # Each native library is built on its own OS: a Mach-O or ELF link
+  # needs that platform's SDK, so one Windows runner cannot produce all
+  # four. The managed publish job then stages every artifact into the
+  # runtimes/<rid>/native folders the NuGet package expects.
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            output: phieng.dll
+          - rid: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            output: libphieng.so
+          - rid: osx-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            output: libphieng.dylib
+          - rid: osx-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            output: libphieng.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build native
+        run: cargo build --locked --target ${{ matrix.target }} --release -p phieng
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p "stage/runtimes/${{ matrix.rid }}/native"
+          cp "target/${{ matrix.target }}/release/${{ matrix.output }}" \
+             "stage/runtimes/${{ matrix.rid }}/native/${{ matrix.output }}"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: stage/
+          if-no-files-found: error
+
   build-and-publish:
+    needs: build-native
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +72,24 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
         with:
-          targets: x86_64-pc-windows-gnu
+          path: natives
+          merge-multiple: false
 
-      - name: Build native for all RIDs
+      - name: Stage natives into runtimes
+        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/build-native-all.ps1 -Rids win-x64,linux-x64,osx-x64,osx-arm64
+          foreach ($dir in Get-ChildItem natives -Directory) {
+            $rid = $dir.Name -replace '^native-', ''
+            Get-ChildItem $dir.FullName -Recurse -File | ForEach-Object {
+              $dest = "src/PhiEng.Native/runtimes/$rid/native"
+              New-Item -ItemType Directory -Force -Path $dest | Out-Null
+              Copy-Item -Force $_.FullName $dest
+              Write-Host "  $rid <- $($_.Name)"
+            }
+          }
 
       - name: Restore .NET dependencies
         run: dotnet restore PhiEng.slnx
@@ -51,7 +108,7 @@ jobs:
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          dotnet nuget push ./artifacts/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json \
+          dotnet nuget push ./artifacts/*.nupkg `
+            --api-key ${{ secrets.NUGET_API_KEY }} `
+            --source https://api.nuget.org/v3/index.json `
             --skip-duplicate
