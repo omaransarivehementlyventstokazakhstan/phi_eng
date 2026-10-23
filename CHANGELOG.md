@@ -8,6 +8,31 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Suspension and arcade vehicles.** The chassis stays an ordinary
+  dynamic rigid body; each 3D wheel hangs from a hardpoint whose
+  suspension ray (which refuses to see its own chassis) measures the
+  ground for a spring-damper with a bump-stop cap, while a
+  steady-state tire pushes forward and sideways inside a friction
+  circle. The 2D top-down car drives the same tire model without
+  suspension. The models are stateless — every rate comes from the
+  current rigid-body state — so saving needs no vehicle block: the
+  game re-passes config and input and continues bit for bit. Pinned:
+  the analytic static compression, straight full-throttle driving,
+  right-hand steering, braking to a stop, airborne no-op wheels, the
+  2D drive, grip killing a slide that the handbrake prolongs, and a
+  drop that bottoms the stops and recovers. The native bridge
+  (`phieng_world[_3]_vehicle_step`) round-trips the same bits.
+
+  Building the steering pins caught three engine mirror bugs the
+  earlier suites never exercised: the managed 3x3 inverse kept a
+  diagonal fast path that rounds differently from the core's
+  adjugate, the platform quaternion multiply and normalize associate
+  differently from the compiled core (SIMD pairwise dot, shuffle
+  multiply, divide normalize), and the rotation gate tested speed
+  where the core tests angle. All now match to the bit.
+
+  Mirrored Rust<->C# tests: **I01-I08** (`crates/engine/tests/vehicle.rs`,
+  `tests/PhiEng.Tests/VehicleTests.cs`).
 - **Many-body and variational quantum methods.** The ladder closes:
   tight-binding chains with their cosine band, the SSH chain with its
   topological edge modes (and their absence in the trivial phase),

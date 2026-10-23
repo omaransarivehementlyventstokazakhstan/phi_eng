@@ -89,22 +89,27 @@ public struct Matrix3x3
         );
     }
 
+    /// <summary>
+    /// The matrix inverse, by the cross-product adjugate in exactly
+    /// the association the Rust side (glam) uses: the columns cross,
+    /// the determinant dots, one reciprocal scales.
+    /// </summary>
+    /// <remarks>
+    /// There is deliberately no diagonal fast path: <c>1 / M11</c>
+    /// rounds differently from the adjugate quotient, and the engines
+    /// must agree to the bit. A near-singular matrix still returns
+    /// zero, as before.
+    /// </remarks>
     public Matrix3x3 Inverse()
     {
-        // For diagonal matrix (common case in physics)
-        if (M12 == 0 && M13 == 0 && M21 == 0 && M23 == 0 && M31 == 0 && M32 == 0)
-        {
-            return new Matrix3x3(
-                1.0f / M11, 0, 0,
-                0, 1.0f / M22, 0,
-                0, 0, 1.0f / M33
-            );
-        }
-
-        // General inverse using cofactors
-        float det = M11 * (M22 * M33 - M23 * M32) -
-                    M12 * (M21 * M33 - M23 * M31) +
-                    M13 * (M21 * M32 - M22 * M31);
+        // Columns, as glam names them.
+        var c0 = new Vector3(M11, M21, M31);
+        var c1 = new Vector3(M12, M22, M32);
+        var c2 = new Vector3(M13, M23, M33);
+        var t0 = Vector3.Cross(c1, c2);
+        var t1 = Vector3.Cross(c2, c0);
+        var t2 = Vector3.Cross(c0, c1);
+        float det = Vector3.Dot(c2, t2);
 
         if (MathF.Abs(det) < 1e-10f)
         {
@@ -112,11 +117,13 @@ public struct Matrix3x3
         }
 
         float invDet = 1.0f / det;
-
+        var r0 = t0 * invDet;
+        var r1 = t1 * invDet;
+        var r2 = t2 * invDet;
+        // Transposed back into rows.
         return new Matrix3x3(
-            (M22 * M33 - M23 * M32) * invDet, -(M12 * M33 - M13 * M32) * invDet, (M12 * M23 - M13 * M22) * invDet,
-            -(M21 * M33 - M23 * M31) * invDet, (M11 * M33 - M13 * M31) * invDet, -(M11 * M23 - M13 * M21) * invDet,
-            (M21 * M32 - M22 * M31) * invDet, -(M11 * M32 - M12 * M31) * invDet, (M11 * M22 - M12 * M21) * invDet
-        );
+            r0.X, r0.Y, r0.Z,
+            r1.X, r1.Y, r1.Z,
+            r2.X, r2.Y, r2.Z);
     }
 }

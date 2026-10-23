@@ -524,7 +524,7 @@ public static class Joint3Math
     /// <summary>Relative rotation from frame A to frame B.</summary>
     public static Quaternion RelativeQuat(Quaternion qa, Quaternion qb)
     {
-        return Quaternion.Normalize(Quaternion.Multiply(qb, Quaternion.Inverse(qa)));
+        return DeterministicRotation.Normalize(DeterministicRotation.Multiply(qb, Quaternion.Inverse(qa)));
     }
 
     /// <summary>Flips to the hemisphere containing the identity (shortest path).</summary>

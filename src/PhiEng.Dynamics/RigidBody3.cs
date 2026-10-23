@@ -315,7 +315,10 @@ public class RigidBody3
     private static Quaternion IntegrateRotation(Quaternion rotation, Vector3 angularVelocity, float dt)
     {
         float angSpeed = angularVelocity.Length();
-        if (angSpeed > 1e-6f)
+        // The gate is on the angle, not the speed: a slow spin over a
+        // long step still turns. Mirrors the Rust integrate exactly.
+        float angle = angSpeed * dt;
+        if (angle > 1e-6f)
         {
             // Angular velocity is world-space, so the increment composes
             // on the left (mirrors the Rust integrate).
@@ -324,9 +327,9 @@ public class RigidBody3
             // Quaternion.CreateFromAxisAngle, which uses the platform math
             // library and therefore differs between Windows and Linux in
             // the last ULP. See PhiEng.Math.DeterministicTrig.
-            var (cosHalf, sinHalf) = DeterministicTrig.ComputeCosSin(angSpeed * dt * 0.5f);
+            var (cosHalf, sinHalf) = DeterministicTrig.ComputeCosSin(angle * 0.5f);
             var dq = new Quaternion(axis.X * sinHalf, axis.Y * sinHalf, axis.Z * sinHalf, cosHalf);
-            return Quaternion.Normalize(Quaternion.Multiply(dq, rotation));
+            return DeterministicRotation.Normalize(DeterministicRotation.Multiply(dq, rotation));
         }
         return rotation;
     }

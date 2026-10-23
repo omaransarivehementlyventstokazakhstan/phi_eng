@@ -140,6 +140,12 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               free flight, the variational Hubbard dimer, the
               truncatable entanglement spectrum, the exact parameter
               shift, the converged VQE loop, and the Berry phase)
+    I01-I08  suspension and arcade vehicles (mirrored both languages:
+              the static suspension compression, full-throttle driving,
+              right-hand steering, braking to a stop, airborne wheels
+              pushing nothing, the 2D arcade drive, grip versus the
+              handbrake slide, and bottoming out the bump stops; the
+              native bridge round-trips the same bits)
     M35-M38  the quantum field in the snapshot (mirrored both languages:
               a world with a wavefunction round-trips through the binary
               and the JSON with its configuration and its amplitudes

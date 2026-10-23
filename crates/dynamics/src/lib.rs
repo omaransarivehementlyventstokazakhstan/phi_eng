@@ -22,6 +22,8 @@ pub mod solver;
 pub mod solver3d;
 pub mod thermal;
 pub mod validation;
+pub mod vehicle;
+pub mod vehicle3;
 pub mod world;
 // NOTE: world_soa is an experimental SoA prototype, currently disabled.
 // It duplicates World2 narrowphase/solver logic and does not compile against
@@ -51,5 +53,7 @@ pub use solver::*;
 pub use solver3d::*;
 pub use thermal::*;
 pub use validation::*;
+pub use vehicle::*;
+pub use vehicle3::*;
 pub use world::*;
 // pub use world_soa::*;

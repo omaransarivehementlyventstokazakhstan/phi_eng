@@ -1451,6 +1451,24 @@ impl World2 {
         true
     }
 
+    /// Run one arcade-vehicle step on a chassis: the top-down tires
+    /// push it, the telemetry reports each wheel. See
+    /// [`super::vehicle::step_vehicle2`].
+    ///
+    /// Call it before [`World2::step`] with the same `dt`. Returns the
+    /// wheels processed (0 for an unknown chassis, no wheels, or a
+    /// non-positive `dt`).
+    pub fn step_vehicle(
+        &mut self,
+        chassis: usize,
+        config: &super::vehicle::VehicleConfig2,
+        input: &super::vehicle::VehicleInput2,
+        dt: f32,
+        telemetry: &mut [super::vehicle::WheelTelemetry2],
+    ) -> usize {
+        super::vehicle::step_vehicle2(self, chassis, config, input, dt, telemetry)
+    }
+
     /// Work out which sensor pairs began and which ended.
     ///
     /// The sensor pairs of this step are in the order the broad phase
@@ -3639,6 +3657,25 @@ impl World3 {
         body.velocity.x = v;
         body.is_sleeping = false;
         true
+    }
+
+    /// Run one suspension-vehicle step on a chassis: the rays measure
+    /// the ground, the springs and tires push it, the telemetry
+    /// reports each wheel. See
+    /// [`super::vehicle3::step_vehicle3`].
+    ///
+    /// Call it before [`World3::step`] with the same `dt`. Returns the
+    /// wheels processed (0 for an unknown chassis, no wheels, or a
+    /// non-positive `dt`).
+    pub fn step_vehicle3(
+        &mut self,
+        chassis: usize,
+        config: &super::vehicle3::VehicleConfig3,
+        input: &super::vehicle3::VehicleInput3,
+        dt: f32,
+        telemetry: &mut [super::vehicle3::WheelTelemetry3],
+    ) -> usize {
+        super::vehicle3::step_vehicle3(self, chassis, config, input, dt, telemetry)
     }
 
     /// Work out which sensor pairs began and which ended (3D).

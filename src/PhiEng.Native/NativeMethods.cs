@@ -1568,4 +1568,89 @@ public float OccluderTransmittance;
         IntPtr world,
         float* @out,
         uint cap);
+
+    /// <summary>One wheel's telemetry. Mirrors Rust <c>VehicleWheelFfi</c> — never reorder (24 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct VehicleWheelFfi
+    {
+        public byte InContact;
+        public fixed byte Pad[3];
+        public float Compression01;
+        public float NormalLoad;
+        public float ForceLong;
+        public float ForceLat;
+        public float Spin;
+    }
+
+    /// <summary>Driver input. Mirrors Rust <c>VehicleInputFfi</c> — never reorder (16 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct VehicleInputFfi
+    {
+        public float Throttle;
+        public float Brake;
+        public float Steering;
+        public float Handbrake;
+    }
+
+    /// <summary>3D vehicle tuning. Mirrors Rust <c>VehicleConfig3Ffi</c> — never reorder (164 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct VehicleConfig3Ffi
+    {
+        public uint WheelCount;
+        public fixed float Offsets[24];
+        public fixed byte Steer[8];
+        public fixed byte Drive[8];
+        public float RestLength;
+        public float SpringK;
+        public float DampingC;
+        public float MaxSuspensionForce;
+        public float WheelRadius;
+        public float EngineForce;
+        public float BrakeForce;
+        public float GripLateral;
+        public float FrictionMu;
+        public float DragK;
+        public float RollingResist;
+        public float MaxSteer;
+    }
+
+    /// <summary>2D vehicle tuning. Mirrors Rust <c>VehicleConfig2Ffi</c> — never reorder (116 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct VehicleConfig2Ffi
+    {
+        public uint WheelCount;
+        public fixed float Offsets[16];
+        public fixed byte Steer[8];
+        public fixed byte Drive[8];
+        public float EngineForce;
+        public float BrakeForce;
+        public float GripLateral;
+        public float FrictionMu;
+        public float DragK;
+        public float RollingResist;
+        public float MaxSteer;
+        public float WheelRadius;
+    }
+
+    /// <returns>Wheels written; with a null array, the wheel count alone. 0 for a bad world/config/input/chassis.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_vehicle_step(
+        IntPtr world,
+        uint chassis,
+        VehicleConfig3Ffi* config,
+        VehicleInputFfi* input,
+        float dt,
+        VehicleWheelFfi* @out,
+        uint cap);
+
+    /// <returns>Wheels written; with a null array, the wheel count alone. 0 for a bad world/config/input/chassis.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_vehicle_step(
+        IntPtr world,
+        uint chassis,
+        VehicleConfig2Ffi* config,
+        VehicleInputFfi* input,
+        float dt,
+        VehicleWheelFfi* @out,
+        uint cap);
 }

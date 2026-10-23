@@ -435,6 +435,11 @@ contact for that frame rather than a guessed depth.
   the variational Hubbard dimer, the truncatable entanglement
   spectrum, parameter-shift gradients with the VQE loop, and the Berry
   phase. Pinned by M81-M88 (Rust<->C# parity).
+- **Suspension and arcade vehicles (both languages):** raycast
+  suspension with bump stops and friction-circle tires in 3D, the
+  same tire model top-down in 2D, stateless so saves need no vehicle
+  block, over the native bridge with the same bits. Pinned by I01-I08
+  (Rust<->C# parity).
 - **Spin and particles (both languages):** the Pauli matrices as
   observables, the Stern-Gerlach measurement, the Zeeman Hamiltonian,
   the Rabi flop and Larmor precession, plus second quantization: the

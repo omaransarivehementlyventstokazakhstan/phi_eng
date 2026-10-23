@@ -194,6 +194,21 @@ built yet. The ray cast's distance is the parameter along the direction
 as it was given: a direction that is not a unit vector scales the
 range, and so does `max_t`. A caller that wants a distance in world
 units should normalize the direction first.
+Vehicles exist in both dimensions (raycast suspension with bump
+stops and friction-circle tires in 3D, the same tire model top-down
+in 2D — see `crates/dynamics/src/vehicle.rs` / `vehicle3.rs`, the
+I01–I08 parity tests, and the `phieng_world[_3]_vehicle_step` FFI
+bridges with their managed mirrors). They are stateless by design:
+no wheel-spin memory, no slip-ratio state, no holding brake at
+standstill, no load transfer and no anti-roll — a driven wheel that
+unloads simply pulls less. Two envelope edges to respect: a
+hardpoint driven below the ground surface reads as airborne (rays
+that start inside a shape report a miss, the house rule), so size
+`max_suspension_force` to stop the chassis before the springs run
+out; and a belly graze hands the motion to the contact solver, whose
+sub-penetration touches can resolve a last bit apart across mirrors
+(the I04/I08 pins stay in the contact-free envelope for exactly this
+reason).
 Save/load exists (JSON + versioned binary, exact + fresh modes, 2D + 3D,
 see `crates/dynamics/src/snapshot.rs` and the E01–E07 parity tests).
 The parallel island solver (`Solver.Parallel`, P31–P34) is 2D-only;

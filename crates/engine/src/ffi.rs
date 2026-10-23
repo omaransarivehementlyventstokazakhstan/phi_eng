@@ -7846,3 +7846,353 @@ pub unsafe extern "C" fn phieng_world3_quantum_phase(
     world_ref.quantum.phase(phase);
     n as u32
 }
+
+// ---------------------------------------------------------------------------
+// Vehicles: the stateless suspension (3D) and arcade (2D) drivers.
+// ---------------------------------------------------------------------------
+
+/// One wheel's telemetry as it crosses the C ABI: 24 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleWheelFfi {
+    /// 1 when the wheel touches ground (always 1 top-down).
+    pub in_contact: u8,
+    pub _pad: [u8; 3],
+    /// The suspension compression, 0 at full droop, 1 bottomed.
+    pub compression01: f32,
+    /// The suspension force (N): the tire's normal load.
+    pub normal_load: f32,
+    /// The longitudinal tire force (N).
+    pub force_long: f32,
+    /// The lateral tire force (N).
+    pub force_lat: f32,
+    /// The rolling spin (rad/s, visual only).
+    pub spin: f32,
+}
+
+// Guard the cross-language layout contract: any field change that
+// alters the size breaks the C# mirror silently. Update both sides.
+const _: () = assert!(std::mem::size_of::<VehicleWheelFfi>() == 24);
+
+/// The driver's hands as they cross the C ABI (2D and 3D share it).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleInputFfi {
+    /// Throttle, -1..1 (clamped by the step).
+    pub throttle: f32,
+    /// Brake, 0..1 (clamped by the step).
+    pub brake: f32,
+    /// Steering, -1..1 (clamped by the step).
+    pub steering: f32,
+    /// Handbrake, 0..1 (clamped by the step).
+    pub handbrake: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<VehicleInputFfi>() == 16);
+
+/// A 3D suspension vehicle's tuning as it crosses the C ABI: 164 bytes.
+///
+/// Wheels pack as flat arrays: `offsets` holds xyz triplets,
+/// `steer`/`drive` hold 0/1 flags. Only the first `wheel_count`
+/// (clamped to 8) are read.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleConfig3Ffi {
+    pub wheel_count: u32,
+    pub offsets: [f32; 24],
+    pub steer: [u8; 8],
+    pub drive: [u8; 8],
+    pub rest_length: f32,
+    pub spring_k: f32,
+    pub damping_c: f32,
+    pub max_suspension_force: f32,
+    pub wheel_radius: f32,
+    pub engine_force: f32,
+    pub brake_force: f32,
+    pub grip_lateral: f32,
+    pub friction_mu: f32,
+    pub drag_k: f32,
+    pub rolling_resist: f32,
+    pub max_steer: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<VehicleConfig3Ffi>() == 164);
+
+/// A 2D arcade car's tuning as it crosses the C ABI: 116 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleConfig2Ffi {
+    pub wheel_count: u32,
+    pub offsets: [f32; 16],
+    pub steer: [u8; 8],
+    pub drive: [u8; 8],
+    pub engine_force: f32,
+    pub brake_force: f32,
+    pub grip_lateral: f32,
+    pub friction_mu: f32,
+    pub drag_k: f32,
+    pub rolling_resist: f32,
+    pub max_steer: f32,
+    pub wheel_radius: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<VehicleConfig2Ffi>() == 116);
+
+/// Build a 3D vehicle config from its FFI form. `None` for a
+/// non-finite scalar or a negative rate: the bridge refuses those
+/// rather than driving on garbage.
+fn vehicle_config3_from_ffi(c: &VehicleConfig3Ffi) -> Option<phieng_dynamics::VehicleConfig3> {
+    use phieng_dynamics::{VehicleConfig3, WheelMount3};
+    let scalars = [
+        c.rest_length,
+        c.spring_k,
+        c.damping_c,
+        c.max_suspension_force,
+        c.wheel_radius,
+        c.engine_force,
+        c.brake_force,
+        c.grip_lateral,
+        c.friction_mu,
+        c.drag_k,
+        c.rolling_resist,
+        c.max_steer,
+    ];
+    if scalars.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    if c.rest_length <= 0.0
+        || c.wheel_radius <= 0.0
+        || c.max_suspension_force <= 0.0
+        || c.spring_k < 0.0
+        || c.damping_c < 0.0
+        || c.engine_force < 0.0
+        || c.brake_force < 0.0
+        || c.grip_lateral < 0.0
+        || c.friction_mu < 0.0
+        || c.drag_k < 0.0
+        || c.rolling_resist < 0.0
+        || c.max_steer < 0.0
+    {
+        return None;
+    }
+    for o in c.offsets.iter() {
+        if !o.is_finite() {
+            return None;
+        }
+    }
+    let mut wheels = [WheelMount3 {
+        offset: glam::Vec3::ZERO,
+        steer: false,
+        drive: false,
+    }; phieng_dynamics::MAX_WHEELS];
+    let count = (c.wheel_count as usize).min(phieng_dynamics::MAX_WHEELS);
+    for (i, w) in wheels.iter_mut().enumerate().take(count) {
+        w.offset = glam::Vec3::new(c.offsets[3 * i], c.offsets[3 * i + 1], c.offsets[3 * i + 2]);
+        w.steer = c.steer[i] != 0;
+        w.drive = c.drive[i] != 0;
+    }
+    Some(VehicleConfig3 {
+        wheels,
+        wheel_count: count,
+        rest_length: c.rest_length,
+        spring_k: c.spring_k,
+        damping_c: c.damping_c,
+        max_suspension_force: c.max_suspension_force,
+        wheel_radius: c.wheel_radius,
+        engine_force: c.engine_force,
+        brake_force: c.brake_force,
+        grip_lateral: c.grip_lateral,
+        friction_mu: c.friction_mu,
+        drag_k: c.drag_k,
+        rolling_resist: c.rolling_resist,
+        max_steer: c.max_steer,
+    })
+}
+
+/// Build a 2D vehicle config from its FFI form. Same refusal rule as
+/// the 3D form.
+fn vehicle_config2_from_ffi(c: &VehicleConfig2Ffi) -> Option<phieng_dynamics::VehicleConfig2> {
+    use phieng_dynamics::{VehicleConfig2, WheelMount2};
+    let scalars = [
+        c.engine_force,
+        c.brake_force,
+        c.grip_lateral,
+        c.friction_mu,
+        c.drag_k,
+        c.rolling_resist,
+        c.max_steer,
+        c.wheel_radius,
+    ];
+    if scalars.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    if c.wheel_radius <= 0.0
+        || c.engine_force < 0.0
+        || c.brake_force < 0.0
+        || c.grip_lateral < 0.0
+        || c.friction_mu < 0.0
+        || c.drag_k < 0.0
+        || c.rolling_resist < 0.0
+        || c.max_steer < 0.0
+    {
+        return None;
+    }
+    for o in c.offsets.iter() {
+        if !o.is_finite() {
+            return None;
+        }
+    }
+    let mut wheels = [WheelMount2 {
+        offset: glam::Vec2::ZERO,
+        steer: false,
+        drive: false,
+    }; phieng_dynamics::MAX_WHEELS_2D];
+    let count = (c.wheel_count as usize).min(phieng_dynamics::MAX_WHEELS_2D);
+    for (i, w) in wheels.iter_mut().enumerate().take(count) {
+        w.offset = glam::Vec2::new(c.offsets[2 * i], c.offsets[2 * i + 1]);
+        w.steer = c.steer[i] != 0;
+        w.drive = c.drive[i] != 0;
+    }
+    Some(VehicleConfig2 {
+        wheels,
+        wheel_count: count,
+        engine_force: c.engine_force,
+        brake_force: c.brake_force,
+        grip_lateral: c.grip_lateral,
+        friction_mu: c.friction_mu,
+        drag_k: c.drag_k,
+        rolling_resist: c.rolling_resist,
+        max_steer: c.max_steer,
+        wheel_radius: c.wheel_radius,
+    })
+}
+
+fn vehicle_input_from_ffi(c: &VehicleInputFfi) -> Option<(f32, f32, f32, f32)> {
+    if [c.throttle, c.brake, c.steering, c.handbrake]
+        .iter()
+        .any(|v| !v.is_finite())
+    {
+        return None;
+    }
+    Some((c.throttle, c.brake, c.steering, c.handbrake))
+}
+
+/// Run one 3D suspension-vehicle step through the native bridge.
+///
+/// Returns the wheels written; a null `out` asks for the wheel count
+/// alone (no step, no forces). Returns 0 for a null world, config or
+/// input, a rejected config, a non-finite `dt`, or an unknown chassis.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `config`/`input` must be null or valid. `out` must be null or valid
+/// for `cap` wheel structs. Use-after-free and forged pointers are
+/// undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_vehicle_step(
+    world: *mut phieng_dynamics::World3,
+    chassis_id: u32,
+    config: *const VehicleConfig3Ffi,
+    input: *const VehicleInputFfi,
+    dt: f32,
+    out: *mut VehicleWheelFfi,
+    cap: u32,
+) -> u32 {
+    use phieng_dynamics::{VehicleInput3, WheelTelemetry3};
+    if world.is_null() || config.is_null() || input.is_null() {
+        return 0;
+    }
+    let Some(cfg) = vehicle_config3_from_ffi(unsafe { &*config }) else {
+        return 0;
+    };
+    let Some((throttle, brake, steering, handbrake)) = vehicle_input_from_ffi(unsafe { &*input })
+    else {
+        return 0;
+    };
+    if out.is_null() {
+        return cfg.wheel_count as u32;
+    }
+    if !valid(dt) || dt <= 0.0 {
+        return 0;
+    }
+    let world_ref: &mut phieng_dynamics::World3 = unsafe { &mut *world };
+    let input = VehicleInput3 {
+        throttle,
+        brake,
+        steering,
+        handbrake,
+    };
+    let mut tele = [WheelTelemetry3::default(); phieng_dynamics::MAX_WHEELS];
+    let n = world_ref.step_vehicle3(chassis_id as usize, &cfg, &input, dt, &mut tele);
+    let n = n.min(cap as usize);
+    let wheels = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    for (slot, t) in wheels.iter_mut().zip(tele.iter()) {
+        slot.in_contact = u8::from(t.in_contact);
+        slot._pad = [0; 3];
+        slot.compression01 = t.compression01;
+        slot.normal_load = t.normal_load;
+        slot.force_long = t.force_long;
+        slot.force_lat = t.force_lat;
+        slot.spin = t.spin;
+    }
+    n as u32
+}
+
+/// Run one 2D arcade-vehicle step through the native bridge.
+///
+/// See [`phieng_world3_vehicle_step`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `config`/`input` must be null or valid. `out` must be null or valid
+/// for `cap` wheel structs. Use-after-free and forged pointers are
+/// undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_vehicle_step(
+    world: *mut World2,
+    chassis_id: u32,
+    config: *const VehicleConfig2Ffi,
+    input: *const VehicleInputFfi,
+    dt: f32,
+    out: *mut VehicleWheelFfi,
+    cap: u32,
+) -> u32 {
+    use phieng_dynamics::{VehicleInput2, WheelTelemetry2};
+    if world.is_null() || config.is_null() || input.is_null() {
+        return 0;
+    }
+    let Some(cfg) = vehicle_config2_from_ffi(unsafe { &*config }) else {
+        return 0;
+    };
+    let Some((throttle, brake, steering, handbrake)) = vehicle_input_from_ffi(unsafe { &*input })
+    else {
+        return 0;
+    };
+    if out.is_null() {
+        return cfg.wheel_count as u32;
+    }
+    if !valid(dt) || dt <= 0.0 {
+        return 0;
+    }
+    let world_ref: &mut World2 = unsafe { &mut *world };
+    let input = VehicleInput2 {
+        throttle,
+        brake,
+        steering,
+        handbrake,
+    };
+    let mut tele = [WheelTelemetry2::default(); phieng_dynamics::MAX_WHEELS_2D];
+    let n = world_ref.step_vehicle(chassis_id as usize, &cfg, &input, dt, &mut tele);
+    let n = n.min(cap as usize);
+    let wheels = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    for (slot, t) in wheels.iter_mut().zip(tele.iter()) {
+        slot.in_contact = u8::from(t.in_contact);
+        slot._pad = [0; 3];
+        slot.compression01 = t.compression01;
+        slot.normal_load = t.normal_load;
+        slot.force_long = t.force_long;
+        slot.force_lat = t.force_lat;
+        slot.spin = t.spin;
+    }
+    n as u32
+}

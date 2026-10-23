@@ -1885,4 +1885,62 @@ public sealed class PhiNativeWorld : IDisposable
         }
     }
 
+    /// <summary>Run one arcade-vehicle step on a native chassis. Returns the wheels processed.</summary>
+    public unsafe int StepVehicle2(
+        int chassis, Dynamics.VehicleConfig2 config, Dynamics.VehicleInput2 input,
+        float dt, Dynamics.WheelTelemetry2[] telemetry)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var cfg = new NativeMethods.VehicleConfig2Ffi
+            {
+                WheelCount = (uint)config.WheelCount,
+                EngineForce = config.EngineForce,
+                BrakeForce = config.BrakeForce,
+                GripLateral = config.GripLateral,
+                FrictionMu = config.FrictionMu,
+                DragK = config.DragK,
+                RollingResist = config.RollingResist,
+                MaxSteer = config.MaxSteer,
+                WheelRadius = config.WheelRadius,
+            };
+            for (int i = 0; i < Dynamics.VehicleConfig2.MaxWheels; i++)
+            {
+                var w = i < config.Wheels.Length ? config.Wheels[i] : default;
+                cfg.Offsets[i * 2] = w.Offset.X;
+                cfg.Offsets[i * 2 + 1] = w.Offset.Y;
+                cfg.Steer[i] = (byte)(w.Steer ? 1 : 0);
+                cfg.Drive[i] = (byte)(w.Drive ? 1 : 0);
+            }
+            var inp = new NativeMethods.VehicleInputFfi
+            {
+                Throttle = input.Throttle,
+                Brake = input.Brake,
+                Steering = input.Steering,
+                Handbrake = input.Handbrake,
+            };
+            var wheels = new NativeMethods.VehicleWheelFfi[Dynamics.VehicleConfig2.MaxWheels];
+            fixed (NativeMethods.VehicleWheelFfi* p = wheels)
+            {
+                uint n = NativeMethods.phieng_world_vehicle_step(
+                    _handle, (uint)chassis, &cfg, &inp, dt, p, (uint)wheels.Length);
+                int count = (int)System.Math.Min(n, (uint)telemetry.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    telemetry[i] = new Dynamics.WheelTelemetry2
+                    {
+                        InContact = wheels[i].InContact != 0,
+                        Compression01 = wheels[i].Compression01,
+                        NormalLoad = wheels[i].NormalLoad,
+                        ForceLong = wheels[i].ForceLong,
+                        ForceLat = wheels[i].ForceLat,
+                        Spin = wheels[i].Spin,
+                    };
+                }
+                return (int)n;
+            }
+        }
+    }
+
 }
