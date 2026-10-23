@@ -440,6 +440,11 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **A 2D kinematic character controller (both languages):**
+  move-and-slide for a placed circle, with substeps that cannot tunnel,
+  contacts that only block motion into them, a ground probe with a
+  walkable-slope limit, and filter-aware solidity. Pinned by O01-O06
+  (Rust<->C# parity).
 - **Shape overlap queries (both languages):** exact shape-vs-world
   overlap in 2D and 3D — SAT plus a containment check in 2D, GJK plus a
   point fallback in 3D, so a shape wholly inside another is never

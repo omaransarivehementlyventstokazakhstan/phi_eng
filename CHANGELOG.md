@@ -8,6 +8,24 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **A 2D kinematic character controller.** `Character2.Move` /
+  `move_character2` advance a kinematic circle by a desired
+  translation, stop at the first surface, and slide the remainder
+  along it — the move-and-slide primitive a platformer needs. The
+  controller never integrates gravity: it reports `grounded` and the
+  ground normal from a probe, and the caller decides. Three design
+  points carry the behaviour: moves substep by half a radius (an
+  endpoint test alone steps clean over thin walls), contacts only
+  block motion pushing *into* them (standing on a closed box counts as
+  inside it, so an "inside means blocked" test would freeze a resting
+  character), and the blocking normal comes from the closest-point
+  query's outward direction, which is the separating direction both
+  outside a surface and deep inside a shape. Walkable slopes are set
+  by `max_slope_cos`; steep ones climb but do not ground.
+
+  Mirrored Rust<->C# tests: **O01-O06** (`crates/engine/tests/character_2d.rs`,
+  `tests/PhiEng.Tests/Character2DTests.cs`). The block letter is `O`,
+  the only free one, documented as the operator/character block.
 - **Shape overlap queries.** `World2/3::overlap_shape` reports every body
   a query shape touches or penetrates: exact SAT per pair in 2D and GJK
   in 3D, each with an explicit containment check. That fallback is the

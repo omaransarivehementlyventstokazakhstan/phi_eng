@@ -198,7 +198,11 @@ too (`World2/3::overlap_shape`): exact SAT (2D) and GJK (3D) per body
 with a containment fallback, so deep containment is never reported as
 separation; the convex hull participates there. Both query families are
 O(body count) — there is no broad-phase prefilter yet — and neither has
-a C ABI export, so native hosts go through the managed API. The ray cast's distance is the parameter along the direction
+a C ABI export, so native hosts go through the managed API.
+The character controller is 2D only for now (`Character2::move`): a
+kinematic circle with move-and-slide, gravity left to the caller. There
+is no 3D controller yet, and no step-up over low ledges (a step must be
+walked around or jumped); both are follow-up work. The ray cast's distance is the parameter along the direction
 as it was given: a direction that is not a unit vector scales the
 range, and so does `max_t`. A caller that wants a distance in world
 units should normalize the direction first.

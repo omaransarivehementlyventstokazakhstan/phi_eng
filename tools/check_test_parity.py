@@ -34,6 +34,11 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               winding-independent polygons, exact surface points and
               escape normals, the convex miss, world ordering/filters/
               sensors, and the nearest-hit/range rules)
+    O01-O06  the 2D kinematic character controller (mirrored both
+              languages; O is the only free letter, chosen for the
+              operator/character block: free moves, wall stops without
+              tunnelling, sliding, the ground probe and slope rule, the
+              query filter, and climbing a walkable ramp)
     o07-o10  shape overlap (mirrored both languages: the 2D and 3D
               overlap matrices incl. deep containment, the world
               ordering/filter/sensor rules, and symmetry)
