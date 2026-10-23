@@ -50,6 +50,9 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               operator/character block: free moves, wall stops without
               tunnelling, sliding, the ground probe and slope rule, the
               query filter, and climbing a walkable ramp)
+    o13      the query prefilter is invisible (mirrored both languages:
+              point, closest and overlap answers match a brute-force
+              loop over every body, ties included)
     o07-o10  shape overlap (mirrored both languages: the 2D and 3D
               overlap matrices incl. deep containment, the world
               ordering/filter/sensor rules, and symmetry)

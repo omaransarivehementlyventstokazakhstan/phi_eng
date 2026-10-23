@@ -307,3 +307,97 @@ fn o06_the_world_closest_point_picks_the_nearest() {
     assert_eq!(bits(hit3.distance), 0x4000_0000);
     assert_eq!(bits(hit3.point.y), bits(1.0));
 }
+/// o13: the AABB prefilter is invisible - every query returns exactly
+/// what a brute-force loop over all bodies returns, including ties.
+#[test]
+fn o13_the_prefilter_matches_brute_force() {
+    let mut w = World2::new();
+    w.gravity = Vec2::ZERO;
+    for iy in 0..12 {
+        for ix in 0..12 {
+            w.add_static_body(
+                Vec2::new(ix as f32, iy as f32),
+                Shape2::Circle { radius: 0.45 },
+            )
+            .expect("valid shape");
+        }
+    }
+    let all = QueryFilter::everything();
+    let probes: Vec<Vec2> = (0..40)
+        .map(|k| {
+            let f = k as f32 * 0.61;
+            Vec2::new(f % 11.0, (f * 1.3) % 11.0)
+        })
+        .collect();
+
+    for p in &probes {
+        // Point test against a brute-force loop.
+        let mut brute = Vec::new();
+        for body in &w.bodies {
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            if phieng_dynamics::shape_query::point_in_shape2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                *p,
+            ) {
+                brute.push(body.id as u32);
+            }
+        }
+        assert_eq!(w.point_test(*p, &all), brute, "point test at {p:?}");
+
+        // Closest point against a brute-force loop, ties included.
+        let mut best: Option<(u32, f32)> = None;
+        for body in &w.bodies {
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            let Some(hit) = phieng_dynamics::shape_query::closest_point2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+                *p,
+            ) else {
+                continue;
+            };
+            if !hit.inside && hit.distance > 1000.0 {
+                continue;
+            }
+            if best.map(|(_, d)| hit.distance < d).unwrap_or(true) {
+                best = Some((body.id as u32, hit.distance));
+            }
+        }
+        let fast = w
+            .closest_point(*p, &all, 1000.0)
+            .map(|h| (h.body, h.distance));
+        assert_eq!(fast, best, "closest point at {p:?}");
+    }
+
+    // Overlap against a brute-force loop.
+    let probe = Shape2::Circle { radius: 0.6 };
+    for p in probes.iter().take(10) {
+        let mut brute = Vec::new();
+        for body in &w.bodies {
+            let Some(shape) = body.shape.as_ref() else {
+                continue;
+            };
+            if phieng_dynamics::shape_query::shapes_overlap2(
+                &probe,
+                *p,
+                Mat2::IDENTITY,
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+            ) {
+                brute.push(body.id as u32);
+            }
+        }
+        assert_eq!(
+            w.overlap_shape(&probe, *p, Mat2::IDENTITY, &all),
+            brute,
+            "overlap at {p:?}"
+        );
+    }
+}

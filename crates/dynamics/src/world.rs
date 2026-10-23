@@ -1390,6 +1390,17 @@ impl World2 {
             let Some(shape) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: the AABB is exact, so a point outside it cannot
+            // be inside the shape.
+            if !super::shape_query::shape_aabb2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+            )
+            .contains(point)
+            {
+                continue;
+            }
             if super::shape_query::point_in_shape2(
                 shape,
                 body.transform.position,
@@ -1421,6 +1432,7 @@ impl World2 {
             f32::MAX
         };
         let mut best: Option<WorldClosestHit2> = None;
+        let mut best_distance = max;
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
                 continue;
@@ -1428,6 +1440,18 @@ impl World2 {
             let Some(shape) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: the box's distance lower-bounds the surface
+            // distance, so a box farther than the best hit is skipped.
+            // Equal distances are still evaluated, so ties keep the
+            // lower id.
+            let aabb = super::shape_query::shape_aabb2(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+            );
+            if super::shape_query::aabb_distance2(&aabb, point) > best_distance {
+                continue;
+            }
             let Some(hit) = super::shape_query::closest_point2(
                 shape,
                 body.transform.position,
@@ -1446,6 +1470,7 @@ impl World2 {
                 None => true,
             };
             if nearer {
+                best_distance = hit.distance;
                 best = Some(WorldClosestHit2 {
                     body: body.id as u32,
                     inside: hit.inside,
@@ -1473,6 +1498,7 @@ impl World2 {
         filter: &QueryFilter,
     ) -> Vec<u32> {
         let mut out = Vec::new();
+        let query_aabb = super::shape_query::shape_aabb2(shape, position, rotation);
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
                 continue;
@@ -1480,6 +1506,14 @@ impl World2 {
             let Some(other) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: exact AABBs, so a disjoint pair cannot overlap.
+            if !query_aabb.intersects(&super::shape_query::shape_aabb2(
+                other,
+                body.transform.position,
+                body.transform.rotation,
+            )) {
+                continue;
+            }
             if super::shape_query::shapes_overlap2(
                 shape,
                 position,
@@ -3697,6 +3731,17 @@ impl World3 {
             let Some(shape) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: the AABB is exact, so a point outside it cannot
+            // be inside the shape.
+            if !super::shape_query::shape_aabb3(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+            )
+            .contains(point)
+            {
+                continue;
+            }
             if super::shape_query::point_in_shape3(
                 shape,
                 body.transform.position,
@@ -3724,6 +3769,7 @@ impl World3 {
             f32::MAX
         };
         let mut best: Option<WorldClosestHit3> = None;
+        let mut best_distance = max;
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
                 continue;
@@ -3731,6 +3777,17 @@ impl World3 {
             let Some(shape) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: the box's distance lower-bounds the surface
+            // distance; equal distances are still evaluated so ties keep
+            // the lower id.
+            let aabb = super::shape_query::shape_aabb3(
+                shape,
+                body.transform.position,
+                body.transform.rotation,
+            );
+            if super::shape_query::aabb_distance3(&aabb, point) > best_distance {
+                continue;
+            }
             let Some(hit) = super::shape_query::closest_point3(
                 shape,
                 body.transform.position,
@@ -3747,6 +3804,7 @@ impl World3 {
                 None => true,
             };
             if nearer {
+                best_distance = hit.distance;
                 best = Some(WorldClosestHit3 {
                     body: body.id as u32,
                     inside: hit.inside,
@@ -3770,6 +3828,7 @@ impl World3 {
         filter: &QueryFilter,
     ) -> Vec<u32> {
         let mut out = Vec::new();
+        let query_aabb = super::shape_query::shape_aabb3(shape, position, rotation);
         for body in &self.bodies {
             if !filter.accepts(body.collision_group, body.collision_mask) {
                 continue;
@@ -3777,6 +3836,14 @@ impl World3 {
             let Some(other) = body.shape.as_ref() else {
                 continue;
             };
+            // Prefilter: exact AABBs, so a disjoint pair cannot overlap.
+            if !query_aabb.intersects(&super::shape_query::shape_aabb3(
+                other,
+                body.transform.position,
+                body.transform.rotation,
+            )) {
+                continue;
+            }
             if super::shape_query::shapes_overlap3(
                 shape,
                 position,

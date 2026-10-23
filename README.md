@@ -440,6 +440,10 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **Prefiltered scene queries (both languages):** exact AABB culling
+  before the exact test — 3.9x point tests, 2.6x closest point, 10.9x
+  overlap on 10k bodies — with answers pinned identical to brute force
+  (o13) and separate bounds so the broad phase is untouched.
 - **Scene queries over the C ABI (both languages):** point tests and
   closest-point queries for native hosts, with count-only and
   truncating forms, the layer rule, and a size-asserted hit struct.

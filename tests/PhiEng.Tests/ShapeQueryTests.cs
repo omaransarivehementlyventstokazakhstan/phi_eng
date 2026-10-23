@@ -197,4 +197,81 @@ public class ShapeQueryTests
         Assert.Equal(0x40000000u, Bits(hit3.Distance));
         Assert.Equal(Bits(1.0f), Bits(hit3.Point.Y));
     }
+
+    /// <summary>
+    /// o13: the AABB prefilter is invisible — every query returns
+    /// exactly what a brute-force loop over all bodies returns,
+    /// including ties.
+    /// </summary>
+    [Fact]
+    public void o13_ThePrefilterMatchesBruteForce()
+    {
+        var w = new World2 { Gravity = Vector2.Zero };
+        for (int iy = 0; iy < 12; iy++)
+        {
+            for (int ix = 0; ix < 12; ix++)
+            {
+                w.AddStaticBody(new Vector2(ix, iy), new CircleShape(0.45f));
+            }
+        }
+        var all = QueryFilter.Everything;
+        var id = Matrix3x2.Identity;
+        var probes = new List<Vector2>();
+        for (int k = 0; k < 40; k++)
+        {
+            float f = k * 0.61f;
+            probes.Add(new Vector2(f % 11.0f, (f * 1.3f) % 11.0f));
+        }
+
+        foreach (var p in probes)
+        {
+            var brute = new List<int>();
+            foreach (var body in w.Bodies)
+            {
+                if (body.Shape == null) continue;
+                if (ShapeQuery2.PointInShape(
+                        body.Shape, body.Transform.Position, body.Transform.Rotation, p))
+                {
+                    brute.Add(body.Id);
+                }
+            }
+            Assert.Equal(brute, w.PointTest(p, all));
+
+            (int Body, float Distance)? best = null;
+            foreach (var body in w.Bodies)
+            {
+                if (body.Shape == null) continue;
+                var hit = ShapeQuery2.ClosestPoint(
+                    body.Shape, body.Transform.Position, body.Transform.Rotation, p);
+                if (hit == null) continue;
+                var h = hit.Value;
+                if (!h.Inside && h.Distance > 1000.0f) continue;
+                if (best == null || h.Distance < best.Value.Distance)
+                {
+                    best = (body.Id, h.Distance);
+                }
+            }
+            var fast = w.ClosestPoint(p, all, 1000.0f);
+            Assert.Equal(
+                best,
+                fast == null ? null : (fast.Value.Body, fast.Value.Distance));
+        }
+
+        var probe = new CircleShape(0.6f);
+        foreach (var p in probes.Take(10))
+        {
+            var brute = new List<int>();
+            foreach (var body in w.Bodies)
+            {
+                if (body.Shape == null) continue;
+                if (ShapeQuery2.Overlap(
+                        probe, p, id,
+                        body.Shape, body.Transform.Position, body.Transform.Rotation))
+                {
+                    brute.Add(body.Id);
+                }
+            }
+            Assert.Equal(brute, w.OverlapShape(probe, p, id, all));
+        }
+    }
 }

@@ -8,6 +8,19 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Queries are prefiltered, and the prefilter is provably invisible.**
+  Point tests, closest-point queries and shape overlaps now cull bodies
+  by exact AABB first: the point test skips bodies whose box does not
+  contain the point, the closest-point query skips boxes farther than
+  the best hit so far (equal distances still evaluated, so ties keep the
+  lower id), and the overlap query skips disjoint boxes. Measured on a
+  10,000-body grid (`crates/engine/examples/bench_queries.rs`):
+  **3.9x** point tests, **2.6x** closest point, **10.9x** overlap, with
+  the harness asserting every answer is identical to a brute-force loop
+  before timing. `o13` pins that equivalence in both languages.
+  The shape AABBs are built by `shape_query::shape_aabb2/3` and are
+  deliberately separate from the broad phase's own bounds, so query
+  culling can never move a pair census (or a pinned solver hash).
 - **The query surface over the C ABI.** `phieng_world[_3]_point_test`
   and `phieng_world[_3]_closest_point` put the scene queries in front of
   native hosts, with the house conventions: out-pointer plus capacity

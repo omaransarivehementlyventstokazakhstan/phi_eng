@@ -22,7 +22,8 @@
 //! own signed area, so a clockwise-authored polygon behaves the same as
 //! a counter-clockwise one.
 
-use glam::{Mat2, Vec2, Vec3};
+use glam::{Mat2, Quat, Vec2, Vec3};
+use phieng_math::{AABB2, AABB3};
 
 use super::body::{Shape2, Shape3};
 
@@ -433,4 +434,109 @@ pub fn shapes_overlap3(
     matches!(result, GjkResult::Colliding)
         || point_in_shape3(a, a_position, a_rotation, b_position)
         || point_in_shape3(b, b_position, b_rotation, a_position)
+}
+
+/// The axis-aligned bounds of a 2D shape at a pose.
+///
+/// Exact for every shape (the support of a rotated box is its rotated
+/// corners; a convex polygon's is its rotated vertices), so a query may
+/// use these to skip bodies without changing any answer. This is the
+/// prefilter's only input, and it is deliberately separate from the
+/// broad phase's own bounds so query culling cannot move a pair census.
+pub fn shape_aabb2(shape: &Shape2, position: Vec2, rotation: Mat2) -> AABB2 {
+    match shape {
+        Shape2::Circle { radius } => {
+            let r = radius.abs();
+            AABB2::from_center_half_extents(position, Vec2::splat(r))
+        }
+        Shape2::Box { half_extents } => {
+            // The support of the rotated box: |R| * half extents.
+            let x = rotation * Vec2::X;
+            let y = rotation * Vec2::Y;
+            let he = Vec2::new(
+                x.x.abs() * half_extents.x + y.x.abs() * half_extents.y,
+                x.y.abs() * half_extents.x + y.y.abs() * half_extents.y,
+            );
+            AABB2::from_center_half_extents(position, he)
+        }
+        Shape2::Polygon { vertices } => {
+            if vertices.is_empty() {
+                return AABB2::new(position, position);
+            }
+            let mut min = Vec2::splat(f32::INFINITY);
+            let mut max = Vec2::splat(f32::NEG_INFINITY);
+            for v in vertices {
+                let p = position + rotation * *v;
+                min = min.min(p);
+                max = max.max(p);
+            }
+            AABB2::new(min, max)
+        }
+    }
+}
+
+/// The axis-aligned bounds of a 3D shape at a pose. See [`shape_aabb2`].
+pub fn shape_aabb3(shape: &Shape3, position: Vec3, rotation: Quat) -> AABB3 {
+    match shape {
+        Shape3::Sphere { radius } => {
+            let r = radius.abs();
+            AABB3::from_center_half_extents(position, Vec3::splat(r))
+        }
+        Shape3::Box { half_extents } => {
+            // The support of the rotated box: |R| * half extents.
+            let ax = rotation * Vec3::X;
+            let ay = rotation * Vec3::Y;
+            let az = rotation * Vec3::Z;
+            let he = Vec3::new(
+                ax.x.abs() * half_extents.x
+                    + ay.x.abs() * half_extents.y
+                    + az.x.abs() * half_extents.z,
+                ax.y.abs() * half_extents.x
+                    + ay.y.abs() * half_extents.y
+                    + az.y.abs() * half_extents.z,
+                ax.z.abs() * half_extents.x
+                    + ay.z.abs() * half_extents.y
+                    + az.z.abs() * half_extents.z,
+            );
+            AABB3::from_center_half_extents(position, he)
+        }
+        Shape3::Capsule {
+            radius,
+            half_length,
+        } => {
+            let r = radius.abs();
+            let axis = rotation * Vec3::Y * half_length.abs();
+            let a = position + axis;
+            let b = position - axis;
+            AABB3::new(a.min(b) - Vec3::splat(r), a.max(b) + Vec3::splat(r))
+        }
+        Shape3::ConvexHull { vertices } | Shape3::ConvexMesh { vertices, .. } => {
+            if vertices.is_empty() {
+                return AABB3::new(position, position);
+            }
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for v in vertices {
+                let p = position + rotation * *v;
+                min = min.min(p);
+                max = max.max(p);
+            }
+            AABB3::new(min, max)
+        }
+    }
+}
+
+/// The distance from a point to a 2D box (zero inside).
+pub fn aabb_distance2(aabb: &AABB2, point: Vec2) -> f32 {
+    let dx = (aabb.min.x - point.x).max(0.0).max(point.x - aabb.max.x);
+    let dy = (aabb.min.y - point.y).max(0.0).max(point.y - aabb.max.y);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// The distance from a point to a 3D box (zero inside).
+pub fn aabb_distance3(aabb: &AABB3, point: Vec3) -> f32 {
+    let dx = (aabb.min.x - point.x).max(0.0).max(point.x - aabb.max.x);
+    let dy = (aabb.min.y - point.y).max(0.0).max(point.y - aabb.max.y);
+    let dz = (aabb.min.z - point.z).max(0.0).max(point.z - aabb.max.z);
+    (dx * dx + dy * dy + dz * dz).sqrt()
 }

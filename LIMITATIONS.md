@@ -197,8 +197,11 @@ with the same convex-shape miss. Shape-vs-world overlap queries exist
 too (`World2/3::overlap_shape`): exact SAT (2D) and GJK (3D) per body
 with a containment fallback, so deep containment is never reported as
 separation; the convex hull participates there. Both query families are
-O(body count) — there is no broad-phase prefilter yet. Point tests and closest-point queries also cross the C
-ABI (`phieng_world[_3]_point_test`, `phieng_world[_3]_closest_point`);
+still O(body count): the AABB prefilter removes the exact test for
+clearly-disjoint bodies but walks the body list to do so, and there is no
+broad-phase tree/grid index behind queries yet. Point tests and
+closest-point queries also cross the C ABI
+(`phieng_world[_3]_point_test`, `phieng_world[_3]_closest_point`);
 the shape-overlap query does not, because it needs a shape
 serialisation for the bridge.
 The character controller exists in both dimensions (`Character2::move`,
