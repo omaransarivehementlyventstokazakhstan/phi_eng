@@ -1458,6 +1458,42 @@ impl World2 {
         best
     }
 
+    /// Every body that overlaps `shape` at the given pose, in ascending
+    /// id order.
+    ///
+    /// Sensors are included, as in [`Self::point_test`]: a shape query
+    /// is a pick/trigger query. Touching counts as overlapping. O(body
+    /// count): the query is exact against every body's shape, with no
+    /// broad-phase prefilter yet.
+    pub fn overlap_shape(
+        &self,
+        shape: &Shape2,
+        position: Vec2,
+        rotation: glam::Mat2,
+        filter: &QueryFilter,
+    ) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(other) = body.shape.as_ref() else {
+                continue;
+            };
+            if super::shape_query::shapes_overlap2(
+                shape,
+                position,
+                rotation,
+                other,
+                body.transform.position,
+                body.transform.rotation,
+            ) {
+                out.push(body.id as u32);
+            }
+        }
+        out
+    }
+
     pub fn raycast(&self, ray: &Ray2, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit2> {
         let mut best: Option<WorldRayHit2> = None;
         for body in &self.bodies {
@@ -3650,11 +3686,6 @@ impl World3 {
         }
     }
 
-    /// Cast a ray into the world and return the first thing it hits.
-    ///
-    /// See [`World2::raycast`]. The convex shapes (a convex hull and a
-    /// convex mesh) are not tested yet: a ray that would hit one is
-    /// reported as a miss.
     /// Every body whose shape contains `point`, in ascending id order.
     /// See [`World2::point_test`] for the sensor rule.
     pub fn point_test(&self, point: Vec3, filter: &QueryFilter) -> Vec<u32> {
@@ -3728,6 +3759,43 @@ impl World3 {
         best
     }
 
+    /// Every body that overlaps `shape` at the given pose, in ascending
+    /// id order. See [`World2::overlap_shape`]; the convex hull and mesh
+    /// participate here (GJK handles them), unlike the point queries.
+    pub fn overlap_shape(
+        &self,
+        shape: &Shape3,
+        position: Vec3,
+        rotation: glam::Quat,
+        filter: &QueryFilter,
+    ) -> Vec<u32> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if !filter.accepts(body.collision_group, body.collision_mask) {
+                continue;
+            }
+            let Some(other) = body.shape.as_ref() else {
+                continue;
+            };
+            if super::shape_query::shapes_overlap3(
+                shape,
+                position,
+                rotation,
+                other,
+                body.transform.position,
+                body.transform.rotation,
+            ) {
+                out.push(body.id as u32);
+            }
+        }
+        out
+    }
+
+    /// Cast a ray into the world and return the first thing it hits.
+    ///
+    /// See [`World2::raycast`]. The convex shapes (a convex hull and a
+    /// convex mesh) are not tested yet: a ray that would hit one is
+    /// reported as a miss.
     pub fn raycast(&self, ray: &Ray3, filter: &QueryFilter, max_t: f32) -> Option<WorldRayHit3> {
         let mut best: Option<WorldRayHit3> = None;
         for body in &self.bodies {

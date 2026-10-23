@@ -34,6 +34,9 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               winding-independent polygons, exact surface points and
               escape normals, the convex miss, world ordering/filters/
               sensors, and the nearest-hit/range rules)
+    o07-o10  shape overlap (mirrored both languages: the 2D and 3D
+              overlap matrices incl. deep containment, the world
+              ordering/filter/sensor rules, and symmetry)
     J45-J48  joint motors (mirrored both languages: hinge target
              speed, torque-starved slip with saturated impulse, bad
              tuning rejected, prismatic target speed, and v16

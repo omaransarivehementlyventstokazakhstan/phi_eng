@@ -8,6 +8,19 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **Shape overlap queries.** `World2/3::overlap_shape` reports every body
+  a query shape touches or penetrates: exact SAT per pair in 2D and GJK
+  in 3D, each with an explicit containment check. That fallback is the
+  point of the feature: SAT and GJK both call a wholly-contained shape
+  separated (no separating axis or support plane runs through the
+  interior), and a small collider inside a large one must report a hit.
+  Touching counts as overlapping, convex hulls participate, and sensors
+  are included like the other pick queries. `shapes_overlap2/3` expose
+  the pair test directly. Both families remain O(body count) with no
+  broad-phase prefilter and no C ABI yet, both documented.
+
+  Mirrored Rust<->C# tests: **o07-o10** (`crates/engine/tests/shape_overlap.rs`,
+  `tests/PhiEng.Tests/ShapeOverlapTests.cs`).
 - **Point and closest-point shape queries.** Picking, trigger probes and
   ground sampling no longer need their own geometry: `World2/3::point_test`
   answers which bodies contain a point (sensors included, ascending id

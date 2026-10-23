@@ -193,8 +193,12 @@ oriented box and a capsule in 3D) but not the convex ones: a ray that
 would hit a convex hull or a convex mesh is reported as a miss. Point
 tests and closest-point queries exist in both dimensions
 (`World2/3::point_test` / `closest_point`), analytic for every shape and
-with the same convex-shape miss. A shape-against-shape overlap query is
-not built yet. The ray cast's distance is the parameter along the direction
+with the same convex-shape miss. Shape-vs-world overlap queries exist
+too (`World2/3::overlap_shape`): exact SAT (2D) and GJK (3D) per body
+with a containment fallback, so deep containment is never reported as
+separation; the convex hull participates there. Both query families are
+O(body count) — there is no broad-phase prefilter yet — and neither has
+a C ABI export, so native hosts go through the managed API. The ray cast's distance is the parameter along the direction
 as it was given: a direction that is not a unit vector scales the
 range, and so does `max_t`. A caller that wants a distance in world
 units should normalize the direction first.

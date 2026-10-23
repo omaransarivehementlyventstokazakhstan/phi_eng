@@ -419,6 +419,28 @@ public class World3
         return best;
     }
 
+    /// <summary>Every body that overlaps <paramref name="shape"/> at the given pose, in ascending id order.</summary>
+    /// <remarks>
+    /// See <see cref="World2.OverlapShape"/>; the convex hull participates
+    /// here (GJK handles it), unlike the point queries.
+    /// </remarks>
+    public int[] OverlapShape(Shape3 shape, Vector3 position, Quaternion rotation, QueryFilter filter)
+    {
+        var hits = new List<int>();
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            if (ShapeQuery3.Overlap(
+                    shape, position, rotation,
+                    body.Shape, body.Transform.Position, body.Transform.Rotation))
+            {
+                hits.Add(body.Id);
+            }
+        }
+        return hits.ToArray();
+    }
+
     /// <summary>
     /// Cast a ray into the world and return the first thing it hits.
     /// </summary>

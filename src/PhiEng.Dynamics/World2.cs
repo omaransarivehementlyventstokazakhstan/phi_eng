@@ -498,6 +498,29 @@ public class World2
         return best;
     }
 
+    /// <summary>Every body that overlaps <paramref name="shape"/> at the given pose, in ascending id order.</summary>
+    /// <remarks>
+    /// Sensors are included, as in <see cref="PointTest"/>: a shape query
+    /// is a pick/trigger query. Touching counts as overlapping. O(body
+    /// count): exact against every body, with no broad-phase prefilter yet.
+    /// </remarks>
+    public int[] OverlapShape(Shape2 shape, Vector2 position, Matrix3x2 rotation, QueryFilter filter)
+    {
+        var hits = new List<int>();
+        foreach (var body in Bodies)
+        {
+            if (!filter.Accepts(body)) continue;
+            if (body.Shape == null) continue;
+            if (ShapeQuery2.Overlap(
+                    shape, position, rotation,
+                    body.Shape, body.Transform.Position, body.Transform.Rotation))
+            {
+                hits.Add(body.Id);
+            }
+        }
+        return hits.ToArray();
+    }
+
     /// <summary>
     /// Cast a ray into the world and return the first thing it hits.
     /// </summary>

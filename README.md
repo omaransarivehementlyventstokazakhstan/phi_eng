@@ -440,6 +440,11 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **Shape overlap queries (both languages):** exact shape-vs-world
+  overlap in 2D and 3D — SAT plus a containment check in 2D, GJK plus a
+  point fallback in 3D, so a shape wholly inside another is never
+  reported as separated; touching counts; sensors included; convex hulls
+  participate. Pinned by o07-o10 (Rust<->C# parity).
 - **Point and closest-point queries (both languages):** analytic
   containment and nearest-surface queries over every supported shape
   (winding-independent polygons, capsule axes, box least-penetration

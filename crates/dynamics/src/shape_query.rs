@@ -307,3 +307,130 @@ pub fn closest_point3(
         Shape3::ConvexHull { .. } | Shape3::ConvexMesh { .. } => None,
     }
 }
+
+/// The polygon outline of a 2D shape in world space (`None` for a
+/// circle, which the SAT routines take as a centre and a radius).
+fn outline2(shape: &Shape2, position: Vec2, rotation: Mat2) -> Option<Vec<Vec2>> {
+    match shape {
+        Shape2::Circle { .. } => None,
+        Shape2::Box { half_extents } => Some(
+            [
+                Vec2::new(-half_extents.x, -half_extents.y),
+                Vec2::new(half_extents.x, -half_extents.y),
+                Vec2::new(half_extents.x, half_extents.y),
+                Vec2::new(-half_extents.x, half_extents.y),
+            ]
+            .iter()
+            .map(|v| position + rotation * *v)
+            .collect(),
+        ),
+        Shape2::Polygon { vertices } => {
+            Some(vertices.iter().map(|v| position + rotation * *v).collect())
+        }
+    }
+}
+
+/// Whether two shapes overlap (touch or penetrate) in 2D.
+///
+/// Analytic per pair through the shared SAT routines. Because SAT
+/// reports separation for a shape wholly inside another (no separating
+/// axis through the interior), containment is checked explicitly, so a
+/// small circle inside a large box still overlaps.
+pub fn shapes_overlap2(
+    a: &Shape2,
+    a_position: Vec2,
+    a_rotation: Mat2,
+    b: &Shape2,
+    b_position: Vec2,
+    b_rotation: Mat2,
+) -> bool {
+    use phieng_collision::sat::{sat_circle_polygon, sat_polygon_polygon};
+
+    let hit = match (a, b) {
+        (Shape2::Circle { radius: ra }, Shape2::Circle { radius: rb }) => {
+            let sum = ra.abs() + rb.abs();
+            (b_position - a_position).length_squared() <= sum * sum
+        }
+        (Shape2::Circle { radius }, other) => {
+            let poly = outline2(other, b_position, b_rotation).unwrap_or_default();
+            sat_circle_polygon(a_position, radius.abs(), &poly).is_some()
+        }
+        (other, Shape2::Circle { radius }) => {
+            let poly = outline2(other, a_position, a_rotation).unwrap_or_default();
+            sat_circle_polygon(b_position, radius.abs(), &poly).is_some()
+        }
+        _ => {
+            let pa = outline2(a, a_position, a_rotation).unwrap_or_default();
+            let pb = outline2(b, b_position, b_rotation).unwrap_or_default();
+            sat_polygon_polygon(&pa, &pb).is_some()
+        }
+    };
+    hit || point_in_shape2(a, a_position, a_rotation, b_position)
+        || point_in_shape2(b, b_position, b_rotation, a_position)
+}
+
+/// The support function of a 3D shape at a pose, matching the
+/// narrowphase's mapping exactly (see `World3::support_function_for`).
+fn support_for3<'a>(
+    shape: &'a Shape3,
+    position: Vec3,
+    rotation: glam::Quat,
+) -> Box<dyn Fn(Vec3) -> Vec3 + 'a> {
+    match shape {
+        Shape3::Sphere { radius } => {
+            let r = radius.abs();
+            Box::new(move |dir: Vec3| position + dir.normalize() * r)
+        }
+        Shape3::Box { half_extents } => {
+            let he = *half_extents;
+            Box::new(move |dir: Vec3| {
+                let local_dir = rotation.inverse() * dir;
+                let local_support = Vec3::new(
+                    if local_dir.x > 0.0 { he.x } else { -he.x },
+                    if local_dir.y > 0.0 { he.y } else { -he.y },
+                    if local_dir.z > 0.0 { he.z } else { -he.z },
+                );
+                position + rotation * local_support
+            })
+        }
+        Shape3::Capsule {
+            radius,
+            half_length,
+        } => {
+            let r = radius.abs();
+            let pa = position + rotation * (Vec3::Y * half_length.abs());
+            let pb = position - rotation * (Vec3::Y * half_length.abs());
+            Box::new(move |dir: Vec3| phieng_collision::gjk3d::support_capsule(pa, pb, r, dir))
+        }
+        Shape3::ConvexHull { vertices } => {
+            let verts: Vec<Vec3> = vertices.iter().map(|v| rotation * *v + position).collect();
+            Box::new(move |dir: Vec3| phieng_collision::gjk3d::support_convex_hull(&verts, dir))
+        }
+        Shape3::ConvexMesh { vertices, .. } => {
+            let verts: Vec<Vec3> = vertices.iter().map(|v| rotation * *v + position).collect();
+            Box::new(move |dir: Vec3| phieng_collision::gjk3d::support_convex_hull(&verts, dir))
+        }
+    }
+}
+
+/// Whether two shapes overlap (touch or penetrate) in 3D.
+///
+/// GJK decides, with an explicit containment check on top: a sphere
+/// wholly inside a box has no support plane that separates it, and the
+/// point fallback makes that case unambiguous.
+pub fn shapes_overlap3(
+    a: &Shape3,
+    a_position: Vec3,
+    a_rotation: glam::Quat,
+    b: &Shape3,
+    b_position: Vec3,
+    b_rotation: glam::Quat,
+) -> bool {
+    use phieng_collision::gjk3d::{gjk, GjkResult};
+    let sa = support_for3(a, a_position, a_rotation);
+    let sb = support_for3(b, b_position, b_rotation);
+    let (result, _simplex) = gjk(&*sa, &*sb);
+    matches!(result, GjkResult::Colliding)
+        || point_in_shape3(a, a_position, a_rotation, b_position)
+        || point_in_shape3(b, b_position, b_rotation, a_position)
+}
