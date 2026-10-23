@@ -8459,3 +8459,245 @@ pub unsafe extern "C" fn phieng_world3_closest_point(
     slot.normal_z = hit.normal.z;
     1
 }
+
+// ---------------------------------------------------------------------------
+// Shape-overlap queries (a query shape described by a JSON blob).
+// ---------------------------------------------------------------------------
+
+/// Maximum accepted shape JSON length (64 KiB), the same ceiling as the
+/// joint bridge: a query shape is tens of bytes, anything bigger is
+/// caller error.
+const MAX_SHAPE_JSON_LEN: usize = 64 * 1024;
+
+/// Parse `[[x, y], ...]` into points, rejecting non-finite values.
+fn json_points2(v: &serde_json::Value, field: &str) -> Option<Vec<Vec2>> {
+    let arr = v.get(field)?.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let pair = item.as_array()?;
+        if pair.len() != 2 {
+            return None;
+        }
+        let x = pair[0].as_f64()? as f32;
+        let y = pair[1].as_f64()? as f32;
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        out.push(Vec2::new(x, y));
+    }
+    Some(out)
+}
+
+/// Parse `[[x, y, z], ...]` into points, rejecting non-finite values.
+fn json_points3(v: &serde_json::Value, field: &str) -> Option<Vec<Vec3>> {
+    let arr = v.get(field)?.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let triple = item.as_array()?;
+        if triple.len() != 3 {
+            return None;
+        }
+        let x = triple[0].as_f64()? as f32;
+        let y = triple[1].as_f64()? as f32;
+        let z = triple[2].as_f64()? as f32;
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return None;
+        }
+        out.push(Vec3::new(x, y, z));
+    }
+    Some(out)
+}
+
+/// Build a 2D query shape from its JSON form:
+/// `{"type":"circle","radius":r}`,
+/// `{"type":"box","halfExtents":[x,y]}`,
+/// `{"type":"polygon","vertices":[[x,y],...]}` (at least three points).
+fn shape2_from_json(v: &serde_json::Value) -> Option<Shape2> {
+    match v.get("type")?.as_str()? {
+        "circle" => {
+            let r = json_f32(v, "radius")?;
+            valid_positive(r).then_some(Shape2::Circle { radius: r })
+        }
+        "box" => {
+            let he = json_vec2(v, "halfExtents")?;
+            (valid_positive(he.x) && valid_positive(he.y))
+                .then_some(Shape2::Box { half_extents: he })
+        }
+        "polygon" => {
+            let vertices = json_points2(v, "vertices")?;
+            (vertices.len() >= 3).then_some(Shape2::Polygon { vertices })
+        }
+        _ => None,
+    }
+}
+
+/// Build a 3D query shape from its JSON form:
+/// `{"type":"sphere","radius":r}`,
+/// `{"type":"box","halfExtents":[x,y,z]}`,
+/// `{"type":"capsule","radius":r,"halfLength":h}`,
+/// `{"type":"hull","vertices":[[x,y,z],...]}`.
+fn shape3_from_json(v: &serde_json::Value) -> Option<phieng_dynamics::Shape3> {
+    match v.get("type")?.as_str()? {
+        "sphere" => {
+            let r = json_f32(v, "radius")?;
+            valid_positive(r).then_some(phieng_dynamics::Shape3::Sphere { radius: r })
+        }
+        "box" => {
+            let he = json_vec3(v, "halfExtents")?;
+            (valid_positive(he.x) && valid_positive(he.y) && valid_positive(he.z))
+                .then_some(phieng_dynamics::Shape3::Box { half_extents: he })
+        }
+        "capsule" => {
+            let r = json_f32(v, "radius")?;
+            let h = json_f32(v, "halfLength")?;
+            (valid_positive(r) && valid(h)).then_some(phieng_dynamics::Shape3::Capsule {
+                radius: r,
+                half_length: h,
+            })
+        }
+        "hull" => {
+            let vertices = json_points3(v, "vertices")?;
+            (vertices.len() >= 4).then_some(phieng_dynamics::Shape3::ConvexHull { vertices })
+        }
+        _ => None,
+    }
+}
+
+/// Every body overlapping a 2D query shape at a pose.
+///
+/// The shape is a JSON blob: `{"type":"circle","radius":r}`,
+/// `{"type":"box","halfExtents":[x,y]}` or
+/// `{"type":"polygon","vertices":[[x,y],...]}`. Writes ids in ascending
+/// order and returns the count written; a null `out` asks for the count
+/// alone. Returns 0 for a null world, malformed JSON, an unknown type or
+/// a rejected shape.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+/// `json_ptr` must point at `json_len` readable UTF-8 bytes when
+/// `json_len > 0`. `out` must be null or valid for `cap` u32s.
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_overlap_shape(
+    world: *const World2,
+    x: f32,
+    y: f32,
+    angle: f32,
+    group: u32,
+    mask: u32,
+    json_ptr: *const u8,
+    json_len: u32,
+    out: *mut u32,
+    cap: u32,
+) -> u32 {
+    if world.is_null()
+        || !valid(x)
+        || !valid(y)
+        || !valid(angle)
+        || json_ptr.is_null()
+        || json_len == 0
+        || json_len as usize > MAX_SHAPE_JSON_LEN
+    {
+        return 0;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json_ptr, json_len as usize) };
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return 0;
+    };
+    let Some(shape) = shape2_from_json(&value) else {
+        return 0;
+    };
+    let world_ref: &World2 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let hits = world_ref.overlap_shape(
+        &shape,
+        Vec2::new(x, y),
+        glam::Mat2::from_angle(angle),
+        &filter,
+    );
+    if out.is_null() {
+        return hits.len() as u32;
+    }
+    let n = hits.len().min(cap as usize);
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    slice.copy_from_slice(&hits[..n]);
+    n as u32
+}
+
+/// Every body overlapping a 3D query shape at a pose.
+///
+/// The shape is a JSON blob: `{"type":"sphere","radius":r}`,
+/// `{"type":"box","halfExtents":[x,y,z]}`,
+/// `{"type":"capsule","radius":r,"halfLength":h}` or
+/// `{"type":"hull","vertices":[[x,y,z],...]}`. The quaternion is the
+/// query shape's orientation. See [`phieng_world_overlap_shape`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+/// `json_ptr` must point at `json_len` readable UTF-8 bytes when
+/// `json_len > 0`. `out` must be null or valid for `cap` u32s.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn phieng_world3_overlap_shape(
+    world: *const phieng_dynamics::World3,
+    x: f32,
+    y: f32,
+    z: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+    group: u32,
+    mask: u32,
+    json_ptr: *const u8,
+    json_len: u32,
+    out: *mut u32,
+    cap: u32,
+) -> u32 {
+    if world.is_null()
+        || !valid(x)
+        || !valid(y)
+        || !valid(z)
+        || !valid(qx)
+        || !valid(qy)
+        || !valid(qz)
+        || !valid(qw)
+        || json_ptr.is_null()
+        || json_len == 0
+        || json_len as usize > MAX_SHAPE_JSON_LEN
+    {
+        return 0;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json_ptr, json_len as usize) };
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return 0;
+    };
+    let Some(shape) = shape3_from_json(&value) else {
+        return 0;
+    };
+    let rotation = glam::Quat::from_xyzw(qx, qy, qz, qw);
+    if !rotation.is_finite() {
+        return 0;
+    }
+    let world_ref: &phieng_dynamics::World3 = unsafe { &*world };
+    let filter = phieng_dynamics::body::QueryFilter { group, mask };
+    let hits = world_ref.overlap_shape(&shape, Vec3::new(x, y, z), rotation, &filter);
+    if out.is_null() {
+        return hits.len() as u32;
+    }
+    let n = hits.len().min(cap as usize);
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    slice.copy_from_slice(&hits[..n]);
+    n as u32
+}

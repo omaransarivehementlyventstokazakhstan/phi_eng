@@ -1863,6 +1863,48 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    /// <summary>Every body overlapping a query shape at a pose, in ascending id order.</summary>
+    /// <remarks>
+    /// The shape crosses the bridge as JSON: <c>{"type":"sphere","radius":r}</c>,
+    /// <c>{"type":"box","halfExtents":[x,y,z]}</c>,
+    /// <c>{"type":"capsule","radius":r,"halfLength":h}</c> or
+    /// <c>{"type":"hull","vertices":[[x,y,z],...]}</c>.
+    /// </remarks>
+    public unsafe int[] OverlapShape(
+        Dynamics.Shape3 shape, Vector3 position, Quaternion rotation,
+        uint group = 1u, uint mask = uint.MaxValue)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            string json = ShapeJson.From(shape);
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            fixed (byte* jsonPtr = bytes)
+            {
+                uint count = NativeMethods.phieng_world3_overlap_shape(
+                    _handle, position.X, position.Y, position.Z,
+                    rotation.X, rotation.Y, rotation.Z, rotation.W,
+                    group, mask, jsonPtr, (uint)bytes.Length, null, 0);
+                if (count == 0) return Array.Empty<int>();
+                var ids = new uint[count];
+                fixed (uint* p = ids)
+                {
+                    uint written = NativeMethods.phieng_world3_overlap_shape(
+                        _handle, position.X, position.Y, position.Z,
+                        rotation.X, rotation.Y, rotation.Z, rotation.W,
+                        group, mask, jsonPtr, (uint)bytes.Length, p, count);
+                    if (written != count)
+                    {
+                        throw new InvalidOperationException("Native 3D overlap query failed.");
+                    }
+                }
+                var result = new int[count];
+                for (int i = 0; i < count; i++) result[i] = (int)ids[i];
+                return result;
+            }
+        }
+    }
+
     /// <summary>Run one suspension-vehicle step on a native chassis. Returns the wheels processed.</summary>
     public unsafe int StepVehicle3(
         int chassis, Dynamics.VehicleConfig3 config, Dynamics.VehicleInput3 input,

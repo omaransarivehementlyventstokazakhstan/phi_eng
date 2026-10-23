@@ -1729,4 +1729,37 @@ public float OccluderTransmittance;
         float dt,
         VehicleWheelFfi* @out,
         uint cap);
+
+    /// <returns>Ids written; with a null array, the count alone. 0 for a bad world/shape JSON/pose.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world_overlap_shape(
+        IntPtr world,
+        float x,
+        float y,
+        float angle,
+        uint group,
+        uint mask,
+        byte* json,
+        uint jsonLength,
+        uint* @out,
+        uint cap);
+
+    /// <returns>Ids written; with a null array, the count alone. 0 for a bad world/shape JSON/pose.</returns>
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial uint phieng_world3_overlap_shape(
+        IntPtr world,
+        float x,
+        float y,
+        float z,
+        float qx,
+        float qy,
+        float qz,
+        float qw,
+        uint group,
+        uint mask,
+        byte* json,
+        uint jsonLength,
+        uint* @out,
+        uint cap);
+
 }

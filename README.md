@@ -440,6 +440,10 @@ contact for that frame rather than a guessed depth.
   same tire model top-down in 2D, stateless so saves need no vehicle
   block, over the native bridge with the same bits. Pinned by I01-I08
   (Rust<->C# parity).
+- **Shape overlap over the C ABI (both languages):** query shapes cross
+  the bridge as strict JSON blobs (circle/box/polygon; sphere/box/
+  capsule/hull), with malformed input rejected as a clean zero. Pinned
+  by F51-F53 (Rust<->C# parity).
 - **Prefiltered scene queries (both languages):** exact AABB culling
   before the exact test — 3.9x point tests, 2.6x closest point, 10.9x
   overlap on 10k bodies — with answers pinned identical to brute force

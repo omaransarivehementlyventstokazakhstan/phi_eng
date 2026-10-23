@@ -199,11 +199,12 @@ with a containment fallback, so deep containment is never reported as
 separation; the convex hull participates there. Both query families are
 still O(body count): the AABB prefilter removes the exact test for
 clearly-disjoint bodies but walks the body list to do so, and there is no
-broad-phase tree/grid index behind queries yet. Point tests and
-closest-point queries also cross the C ABI
-(`phieng_world[_3]_point_test`, `phieng_world[_3]_closest_point`);
-the shape-overlap query does not, because it needs a shape
-serialisation for the bridge.
+broad-phase tree/grid index behind queries yet. All three query kinds
+cross the C ABI (`phieng_world[_3]_point_test`,
+`phieng_world[_3]_closest_point`, `phieng_world[_3]_overlap_shape`);
+the overlap query takes its shape as a strict JSON blob, so its
+supported shapes are the ones that blob names (a convex mesh has no
+form there yet, while the hull does).
 The character controller exists in both dimensions (`Character2::move`,
 `Character3::move`): a placed circle/sphere with move-and-slide, gravity
 left to the caller. Two honest edges: there is no step-up over low

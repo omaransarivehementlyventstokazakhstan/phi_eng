@@ -34,6 +34,10 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               winding-independent polygons, exact surface points and
               escape normals, the convex miss, world ordering/filters/
               sensors, and the nearest-hit/range rules)
+    F51-F53  the native shape-overlap query (mirrored both languages:
+              the JSON shape blob in 2D and 3D with a rotation, the
+              count-only form, layer filters, and rejection of malformed
+              or unsupported shapes)
     F47-F50  the native query surface (mirrored both languages: the 2D
               and 3D point tests with their count-only and truncating
               forms plus filters, and the closest-point queries with

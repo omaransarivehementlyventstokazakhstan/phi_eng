@@ -8,6 +8,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [Unreleased]
 
 ### Added
+- **The shape-overlap query over the C ABI.** `phieng_world[_3]_overlap_shape`
+  closes the bridge: the query shape arrives as a small JSON blob (the
+  same convention the joint bridge already uses) —
+  circle/box/polygon in 2D, sphere/box/capsule/hull in 3D, with the pose
+  and rotation as scalars. The parser is strict: malformed JSON, unknown
+  types, non-finite or non-positive dimensions and short polygons are
+  clean zeros, never guesses. The managed wrapper builds the blob with
+  round-trippable invariant numbers, so a comma-decimal culture cannot
+  produce JSON the bridge refuses.
+
+  Mirrored Rust<->C# tests: **F51-F53** (`crates/engine/tests/ffi_overlap.rs`,
+  `tests/PhiEng.Tests/NativeOverlapTests.cs`).
 - **Queries are prefiltered, and the prefilter is provably invisible.**
   Point tests, closest-point queries and shape overlaps now cull bodies
   by exact AABB first: the point test skips bodies whose box does not
