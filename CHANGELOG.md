@@ -7,6 +7,16 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Fixed
+- **3D box-box contact manifold: bowtie incident quad fixed.**
+  The incident face vertices were staged in an order that produced a
+  self-intersecting (bowtie) polygon, corrupting the clipped contact
+  manifold. The winding is now explicit counter-clockwise:
+  (-1,-1), (1,-1), (1,1), (-1,1). This changes the 3D contact
+  manifold for face-on-box collisions; the 3D determinism anchor
+  (`HASH_3D`) is re-pinned to `0x2a03c4fa2060939f`. The 3D pile
+  benchmark hash (`HASH_PILE_3D`) is re-pinned to `0x4aad96014e832f5b`.
+
 ### Added
 - **The shape-overlap query over the C ABI.** `phieng_world[_3]_overlap_shape`
   closes the bridge: the query shape arrives as a small JSON blob (the

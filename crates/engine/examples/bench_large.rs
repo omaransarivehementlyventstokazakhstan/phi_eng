@@ -102,7 +102,7 @@ const HASH_PILE_2D: u64 = 0x4acb6694f3a9917;
 const HASH_ISLANDS: u64 = 0xd4a3a56f185c13b2;
 
 /// Pinned trajectory hash of the 3D pile scene.
-const HASH_PILE_3D: u64 = 0x66ae94fb463de60;
+const HASH_PILE_3D: u64 = 0x4aad96014e832f5b;
 
 /// Fail with a message that says what to do about it.
 fn check_hash(label: &str, got: u64, expected: u64) {

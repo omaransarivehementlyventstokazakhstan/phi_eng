@@ -45,7 +45,7 @@ const BODIES_3D: usize = 60;
 /// physics). Never silence it by loosening the comparison.
 const HASH_2D: u64 = 0xb12fcb9a19506312;
 
-const HASH_3D: u64 = 0xd057471127ba77ab;
+const HASH_3D: u64 = 0x2a03c4fa2060939f;
 
 /// The canonical 2D scene: a static floor and a grid of mixed boxes
 /// and circles dropped onto it.

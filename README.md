@@ -657,7 +657,7 @@ noise-sensitive (±40%); hashes are the determinism gate.
 | pile 3D allocs | 0.0/step | — | gc0 0.000/step | — |
 
 Hashes: pile 2D `0x4acb6694f3a9917`, islands `0xd4a3a56f185c13b2`
-(serial == parallel), pile3d `0x66ae94fb463de60`. Hashes moved in
+(serial == parallel), pile3d `0x4aad96014e832f5b`. Hashes moved in
 0.4.0 (3D friction cone is now a true cone clamp, default sleep
 thresholds 0.01 → 0.05, distance-joint zero-separation fallback, EPA
 seed-margin scaling). C# hashes are run-local (worlds keep evolving

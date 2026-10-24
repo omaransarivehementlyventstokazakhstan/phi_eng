@@ -133,13 +133,19 @@ pub fn box_box_contact_points_into(
     let ii = (inc_k + 1) % 3;
     let jj = (inc_k + 2) % 3;
     tmp.clear();
-    for &si in &[-1.0f32, 1.0] {
-        for &sj in &[-1.0f32, 1.0] {
-            let local = axes[ii] * (hs_b[ii] * si)
-                + axes[jj] * (hs_b[jj] * sj)
-                + axes[inc_k] * (hs_b[inc_k] * inc_s);
-            tmp.push(center_b + rot_b * local);
-        }
+    // Counter-clockwise winding to avoid bowtie (self-intersecting) quad:
+    // (-1,-1), (1,-1), (1,1), (-1,1)
+    let corners = [
+        (-1.0f32, -1.0f32),
+        (1.0f32, -1.0f32),
+        (1.0f32, 1.0f32),
+        (-1.0f32, 1.0f32),
+    ];
+    for &(si, sj) in &corners {
+        let local = axes[ii] * (hs_b[ii] * si)
+            + axes[jj] * (hs_b[jj] * sj)
+            + axes[inc_k] * (hs_b[inc_k] * inc_s);
+        tmp.push(center_b + rot_b * local);
     }
     let before = out.len();
     // Clip incident quad to the reference face rectangle.

@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PINNED = {
     "pile2d": ("0x4acb6694f3a9917", "pile 2D"),
     "islands": ("0xd4a3a56f185c13b2", "islands"),
-    "pile3d": ("0x66ae94fb463de60", "pile 3D"),
+    "pile3d": ("0x4aad96014e832f5b", "pile 3D"),
 }
 
 # The measurement lines `bench_large` prints, and the label used for them.
