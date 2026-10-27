@@ -244,6 +244,9 @@ pub struct World2 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Electromagnetic simulation state (see [`crate::electro`]).
+    /// Disabled by default.
+    pub electro: super::electro::ElectroWorldState2,
     /// Quantum wavefunction (see [`phieng_quantum::field`]). Disabled by
     /// default, so a world that never asks for a wavefunction behaves
     /// exactly as it did before the field existed — down to the last
@@ -353,6 +356,7 @@ impl World2 {
             thermal: super::thermal::ThermalState2::new(),
             quantum: phieng_quantum::field::QuantumField::default(),
             nuclear: super::nuclear::NuclearState2::new(),
+            electro: super::electro::ElectroWorldState2::new(),
             #[cfg(feature = "phase-timing")]
             phase_timings: super::phase_timing::PhaseTimings::default(),
             scratch: ScratchBuffers2D::new(),
@@ -827,6 +831,13 @@ impl World2 {
             if self.ambient.is_active() {
                 super::ambient::ambient_kick_2(&mut self.bodies, &self.ambient, self.time, h);
             }
+
+            // 1a-2. Electromagnetic kick (see `crate::electro`). Same slot
+            // and same Verlet split as gravity: a pure velocity kick
+            // pre-solve. A no-op unless enabled.
+            if self.electro.is_active() {
+                super::electro::electro_kick_2(&mut self.bodies, &mut self.electro, h);
+            }
         });
 
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
@@ -1181,6 +1192,9 @@ impl World2 {
                         dt * 0.5,
                     );
                 }
+                if self.electro.is_active() {
+                    super::electro::electro_kick_2(&mut self.bodies, &mut self.electro, dt * 0.5);
+                }
             } else {
                 // 5. Integrate motion (sleeping bodies are frozen until woken).
                 for body in self.bodies.iter_mut() {
@@ -1191,6 +1205,14 @@ impl World2 {
                 }
             }
         });
+
+        // 5b-2. Electromagnetic bookkeeping: drain grounded conductors
+        // and, in field mode, rebuild and solve the grid from the final
+        // positions. It changes no velocity, so it neither wakes nor is
+        // gated by sleep.
+        if self.electro.is_active() {
+            super::electro::electro_step_2(&mut self.bodies, &mut self.electro, dt);
+        }
 
         // 5c. Nuclear decay and fission: fills a per-body heat budget
         // (and an ionizing-radiation budget) from the nuclides the
@@ -2367,6 +2389,9 @@ pub struct World3 {
     /// Nuclear simulation state (see [`crate::nuclear`]). Disabled by
     /// default.
     pub nuclear: super::nuclear::NuclearState2,
+    /// Electromagnetic simulation state (see [`crate::electro`]).
+    /// Disabled by default.
+    pub electro: super::electro::ElectroWorldState3,
     /// Quantum wavefunction (see [`phieng_quantum::field`]). Disabled by
     /// default, so a world that never asks for a wavefunction behaves
     /// exactly as it did before the field existed — down to the last
@@ -2454,6 +2479,7 @@ impl World3 {
             thermal: super::thermal::ThermalState3::new(),
             quantum: phieng_quantum::field::QuantumField::default(),
             nuclear: super::nuclear::NuclearState2::new(),
+            electro: super::electro::ElectroWorldState3::new(),
             #[cfg(feature = "phase-timing")]
             phase_timings: super::phase_timing::PhaseTimings::default(),
             validation: ValidationConfig::default(),
@@ -2768,6 +2794,12 @@ impl World3 {
             // and same Verlet split as the gravity kick above.
             if self.ambient.is_active() {
                 super::ambient::ambient_kick_3(&mut self.bodies, &self.ambient, self.time, h);
+            }
+
+            // 1a-2. Electromagnetic kick (see `crate::electro`). Same slot
+            // and same Verlet split as gravity.
+            if self.electro.is_active() {
+                super::electro::electro_kick_3(&mut self.bodies, &mut self.electro, h);
             }
         });
 
@@ -3098,6 +3130,9 @@ impl World3 {
                         dt * 0.5,
                     );
                 }
+                if self.electro.is_active() {
+                    super::electro::electro_kick_3(&mut self.bodies, &mut self.electro, dt * 0.5);
+                }
             } else {
                 // 5. Integrate motion (sleeping bodies are frozen until woken).
                 for body in self.bodies.iter_mut() {
@@ -3108,6 +3143,11 @@ impl World3 {
                 }
             }
         });
+
+        // 5b-2. Electromagnetic bookkeeping (see World2::step_inner).
+        if self.electro.is_active() {
+            super::electro::electro_step_3(&mut self.bodies, &mut self.electro, dt);
+        }
 
         // 5c. Nuclear decay and fission (see World2::step_inner phase 5c).
         timed!(timings.thermal, {

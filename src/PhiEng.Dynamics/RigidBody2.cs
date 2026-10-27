@@ -1,4 +1,5 @@
 using System.Numerics;
+using PhiEng.Electromagnetics;
 using PhiEng.Math;
 
 namespace PhiEng.Dynamics;
@@ -86,6 +87,12 @@ public class RigidBody2
     /// is given one.
     /// </summary>
     public NuclearState Nuclear { get; } = new();
+    /// <summary>
+    /// The electromagnetic state (cold: the electro phase). The default
+    /// charge is zero, so a body takes no part in the electromagnetics
+    /// until it is given one. Mirrors Rust <c>RigidBody2::electro</c>.
+    /// </summary>
+    public ElectroState2 Electro { get; set; } = ElectroState2.Default;
     /// <summary>
     /// Thermal-expansion factor currently applied to this body's shape
     /// (1.0 = not expanded). Mirrors Rust
@@ -423,3 +430,4 @@ public class PolygonShape : Shape2
         Type = Shape2Type.Polygon;
     }
 }
+

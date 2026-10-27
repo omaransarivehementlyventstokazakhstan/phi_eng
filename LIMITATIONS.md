@@ -12,7 +12,47 @@ snapshots, P31–P34 parallel islands, A01–A05 ambient forces, C01–C04 CCD,
 Q01–Q05 solver quality, T01–T24 thermal, B01–B06 broadphase tiers,
 K31–K44 3D joints,
 H01–H05 collision tiers, R01–R07 deterministic trigonometry,
-U01–U12 radiation expansion, Y01–Y28 nuclear physics).
+U01–U12 radiation expansion, Y01–Y28 nuclear physics,
+EM01–EM12 electromagnetics).
+
+## The electromagnetic model is monopole, quasi-static and grid-limited (EM01–EM12)
+
+- **Bodies are point monopoles.** The charge lives at the body centre;
+  there is no per-shape surface charge, no dielectric polarisation tensor
+  and no induced dipole. A conductor is either isolated (its net charge
+  is fixed) or grounded (its charge drains); touching conductors do not
+  share charge.
+- **The pairwise solver is the 3D point-charge law.** `Pairwise` mode uses
+  `1/r^2` in both 2D and 3D, which is the 3D field sampled on a plane.
+  The 2D Poisson grid has the 2D line-charge Green's function (`1/r`,
+  logarithmic potential), so **2D `Field` mode and 2D `Pairwise` mode are
+  different physical models** and are not interchangeable. The 3D grid and
+  the 3D pairwise solver agree.
+- **The grid includes the body's own field.** A charge sees its own
+  deposited field when it is sampled at its centre; the resulting
+  self-force is a grid artefact. Use `Pairwise` mode for a few bodies
+  where exactness matters.
+- **No pairwise magnetostatics.** Only the uniform external `B` (the
+  `q v x B` force) and the magnetic-dipole torque are modelled. Two
+  moving charges do not attract/repel magnetically, and there is no
+  retarded-potential or radiation-reaction term.
+- **No FDTD Maxwell waves.** `Field` mode is the electrostatic Poisson
+  solve (red-black SOR) with a fixed iteration count. Time-varying
+  radiation, absorbing boundaries and material dispersion are future
+  work; the plan is in `ELECTROMAGNETICS_PLAN.md`.
+- **`f32` charges in SI units lose precision.** The engine is
+  unit-agnostic and defaults to game units (`k = 1`). The SI preset is
+  available, but the product of two elementary charges (~`2.6e-38`) is
+  near the `f32` subnormal floor; scale charges (e.g. microcoulombs) for
+  a physical scene.
+- **The grid and its snapshot are capped.** A grid may hold at most
+  262,144 cells in memory and in a snapshot (512x512 in 2D or 64^3 in
+  3D). A larger grid is rejected rather than silently truncated.
+- **The C# binary mirror carries the v17 block.** JSON and binary
+  round-trips are mirrored, including the solved potential when
+  `SnapshotField` is set.
+
+
 
 ## The nuclear model is game-scale, not reactor-scale (Y01–Y28)
 

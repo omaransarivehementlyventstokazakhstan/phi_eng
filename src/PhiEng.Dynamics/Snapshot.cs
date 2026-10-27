@@ -1,5 +1,6 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Electromagnetics;
 using PhiEng.Math;
 using PhiEng.Quantum;
 using System.Text.Json;
@@ -57,7 +58,7 @@ public static class Snapshot
     /// layout is byte-identical to the Rust writer's, so a file written
     /// by either engine loads in the other.
     /// </summary>
-    public const uint SchemaVersion = 16;
+    public const uint SchemaVersion = 17;
 
     /// <summary>Schema that introduced the gravity block (v4).</summary>
     public const uint GravitySchemaVersion = 4;
@@ -148,6 +149,9 @@ public static class Snapshot
     /// every older payload.
     /// </remarks>
     public const uint MotorsSchemaVersion = 16;
+
+    /// <summary>Schema that introduced the electromagnetic block (v17).</summary>
+    public const uint ElectroSchemaVersion = 17;
 
     /// <summary>
     /// Oldest schema this build can read. v3 predates gravity fields;
@@ -506,6 +510,118 @@ public static class Snapshot
     }
 
     /// <summary>
+    /// Schema v17 field-grid configuration (2D).
+    /// </summary>
+    private sealed class ElectroFieldConfig2Dto
+    {
+        [JsonPropertyName("nx")] public uint Nx { get; set; } = 128;
+        [JsonPropertyName("ny")] public uint Ny { get; set; } = 128;
+        [JsonPropertyName("dx")] public float Dx { get; set; } = 0.1f;
+        [JsonPropertyName("origin")] public float[] Origin { get; set; } = new float[2];
+        [JsonPropertyName("iterations")] public uint Iterations { get; set; } = 40;
+        [JsonPropertyName("omega")] public float Omega { get; set; } = 1.8f;
+        [JsonPropertyName("boundary")] public uint Boundary { get; set; }
+        [JsonPropertyName("eps_r")] public float EpsR { get; set; } = 1.0f;
+        [JsonPropertyName("snapshot_field")] public bool SnapshotField { get; set; } = true;
+    }
+
+    /// <summary>Schema v17 field-grid configuration (3D).</summary>
+    private sealed class ElectroFieldConfig3Dto
+    {
+        [JsonPropertyName("nx")] public uint Nx { get; set; } = 32;
+        [JsonPropertyName("ny")] public uint Ny { get; set; } = 32;
+        [JsonPropertyName("nz")] public uint Nz { get; set; } = 32;
+        [JsonPropertyName("dx")] public float Dx { get; set; } = 0.25f;
+        [JsonPropertyName("origin")] public float[] Origin { get; set; } = new float[3];
+        [JsonPropertyName("iterations")] public uint Iterations { get; set; } = 40;
+        [JsonPropertyName("omega")] public float Omega { get; set; } = 1.8f;
+        [JsonPropertyName("boundary")] public uint Boundary { get; set; }
+        [JsonPropertyName("eps_r")] public float EpsR { get; set; } = 1.0f;
+        [JsonPropertyName("snapshot_field")] public bool SnapshotField { get; set; } = true;
+    }
+
+    /// <summary>Schema v17 electromagnetic configuration (2D).</summary>
+    private sealed class ElectroConfig2Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("mode")] public uint Mode { get; set; }
+        [JsonPropertyName("coulomb_k")] public float CoulombK { get; set; } = ElectroConstants.CoulombK;
+        [JsonPropertyName("softening")] public float Softening { get; set; }
+        [JsonPropertyName("ex")] public float Ex { get; set; }
+        [JsonPropertyName("ey")] public float Ey { get; set; }
+        [JsonPropertyName("bz")] public float Bz { get; set; }
+        [JsonPropertyName("permittivity")] public float Permittivity { get; set; } = 1.0f;
+        [JsonPropertyName("permeability")] public float Permeability { get; set; } = 1.0f;
+        [JsonPropertyName("max_acceleration")] public float MaxAcceleration { get; set; } = ElectroConstants.MaxAcceleration;
+        [JsonPropertyName("field")] public ElectroFieldConfig2Dto Field { get; set; } = new();
+    }
+
+    /// <summary>Schema v17 electromagnetic configuration (3D).</summary>
+    private sealed class ElectroConfig3Dto
+    {
+        [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+        [JsonPropertyName("mode")] public uint Mode { get; set; }
+        [JsonPropertyName("coulomb_k")] public float CoulombK { get; set; } = ElectroConstants.CoulombK;
+        [JsonPropertyName("softening")] public float Softening { get; set; }
+        [JsonPropertyName("ex")] public float Ex { get; set; }
+        [JsonPropertyName("ey")] public float Ey { get; set; }
+        [JsonPropertyName("ez")] public float Ez { get; set; }
+        [JsonPropertyName("bx")] public float Bx { get; set; }
+        [JsonPropertyName("by")] public float By { get; set; }
+        [JsonPropertyName("bz")] public float Bz { get; set; }
+        [JsonPropertyName("permittivity")] public float Permittivity { get; set; } = 1.0f;
+        [JsonPropertyName("permeability")] public float Permeability { get; set; } = 1.0f;
+        [JsonPropertyName("max_acceleration")] public float MaxAcceleration { get; set; } = ElectroConstants.MaxAcceleration;
+        [JsonPropertyName("field")] public ElectroFieldConfig3Dto Field { get; set; } = new();
+    }
+
+    /// <summary>Schema v17 per-body electromagnetic state (2D).</summary>
+    private sealed class ElectroBody2Dto
+    {
+        [JsonPropertyName("charge")] public float Charge { get; set; }
+        [JsonPropertyName("charge_scale")] public float ChargeScale { get; set; } = 1.0f;
+        [JsonPropertyName("conductivity")] public float Conductivity { get; set; }
+        [JsonPropertyName("permittivity")] public float Permittivity { get; set; } = 1.0f;
+        [JsonPropertyName("permeability")] public float Permeability { get; set; } = 1.0f;
+        [JsonPropertyName("magnetic_moment")] public float MagneticMoment { get; set; }
+        [JsonPropertyName("capacitance")] public float Capacitance { get; set; } = 1.0f;
+        [JsonPropertyName("resistance")] public float Resistance { get; set; }
+        [JsonPropertyName("is_conductor")] public bool IsConductor { get; set; }
+        [JsonPropertyName("is_grounded")] public bool IsGrounded { get; set; }
+    }
+
+    /// <summary>Schema v17 per-body electromagnetic state (3D).</summary>
+    private sealed class ElectroBody3Dto
+    {
+        [JsonPropertyName("charge")] public float Charge { get; set; }
+        [JsonPropertyName("charge_scale")] public float ChargeScale { get; set; } = 1.0f;
+        [JsonPropertyName("conductivity")] public float Conductivity { get; set; }
+        [JsonPropertyName("permittivity")] public float Permittivity { get; set; } = 1.0f;
+        [JsonPropertyName("permeability")] public float Permeability { get; set; } = 1.0f;
+        [JsonPropertyName("magnetic_moment")] public float[] MagneticMoment { get; set; } = new float[3];
+        [JsonPropertyName("capacitance")] public float Capacitance { get; set; } = 1.0f;
+        [JsonPropertyName("resistance")] public float Resistance { get; set; }
+        [JsonPropertyName("is_conductor")] public bool IsConductor { get; set; }
+        [JsonPropertyName("is_grounded")] public bool IsGrounded { get; set; }
+    }
+
+    /// <summary>Schema v17 world-level electromagnetic block (2D).</summary>
+    private sealed class Electro2Dto
+    {
+        [JsonPropertyName("config")] public ElectroConfig2Dto Config { get; set; } = new();
+        [JsonPropertyName("phi")] public List<float> Phi { get; set; } = new();
+        [JsonPropertyName("time")] public float Time { get; set; }
+    }
+
+    /// <summary>Schema v17 world-level electromagnetic block (3D).</summary>
+    private sealed class Electro3Dto
+    {
+        [JsonPropertyName("config")] public ElectroConfig3Dto Config { get; set; } = new();
+        [JsonPropertyName("phi")] public List<float> Phi { get; set; } = new();
+        [JsonPropertyName("time")] public float Time { get; set; }
+    }
+
+    /// <summary>
     /// Schema v15 quantum configuration DTO. The field names mirror the
     /// Rust <c>QuantumConfigDto</c>; <c>method</c> and <c>boundary</c>
     /// are the enum discriminants (0 = Crank-Nicolson/Dirichlet, 1 = the
@@ -634,6 +750,8 @@ public static class Snapshot
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
 
         [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
+        /// <summary>Electromagnetic state (schema v17).</summary>
+        [JsonPropertyName("electro")] public ElectroBody2Dto Electro { get; set; } = new();
         /// <summary>Collision layer the body belongs to (schema v13).</summary>
         [JsonPropertyName("collision_group")]
         public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
@@ -670,6 +788,8 @@ public static class Snapshot
         [JsonPropertyName("expansion_scale")] public float ExpansionScale { get; set; } = 1.0f;
 
         [JsonPropertyName("nuclear")] public NuclearBodyDto Nuclear { get; set; } = new();
+        /// <summary>Electromagnetic state (schema v17).</summary>
+        [JsonPropertyName("electro")] public ElectroBody3Dto Electro { get; set; } = new();
         /// <summary>Collision layer the body belongs to (schema v13).</summary>
         [JsonPropertyName("collision_group")]
         public uint CollisionGroup { get; set; } = CollisionFilter.DefaultGroup;
@@ -1020,6 +1140,8 @@ public static class Snapshot
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
 
         [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
+        /// <summary>Electromagnetic block (schema v17).</summary>
+        [JsonPropertyName("electro")] public Electro2Dto Electro { get; set; } = new();
 
         /// <summary>
         /// The quantum field's configuration and wavefunction (schema v15).
@@ -1092,6 +1214,8 @@ public static class Snapshot
             // dropped on save.
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
+            bool hasElectro = !w.Electro.Config.IsDefault()
+                || w.Bodies.Any(b => !b.Electro.IsDefault());
             // Schema v16: a joint with a set motor speed or budget needs
             // the v16 motor records, or they would be silently dropped.
             bool hasMotors = w.Joints.Any(j =>
@@ -1116,6 +1240,7 @@ public static class Snapshot
                 (hasCollisionFilters, CollisionFiltersSchemaVersion),
                 (hasSensors, SensorsSchemaVersion),
                 (hasQuantum, QuantumSchemaVersion),
+                (hasElectro, ElectroSchemaVersion),
                 (hasMotors, MotorsSchemaVersion));
             uint schema = high > 0 ? high
                 : hasSolverFlags ? SolverFlagsSchemaVersion
@@ -1232,6 +1357,7 @@ public static class Snapshot
                     ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
                 Quantum = quantum,
+                Electro = ElectroFrom(w),
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -1313,6 +1439,7 @@ public static class Snapshot
             CaptureProgress = b.Nuclear.CaptureProgress,
         },
         CollisionGroup = b.CollisionGroup,
+        Electro = ElectroBody2From(b.Electro),
         CollisionMask = b.CollisionMask,
         IsSensor = b.IsSensor,
                 });
@@ -1473,6 +1600,8 @@ public static class Snapshot
         [JsonPropertyName("radiation_extras")] public RadiationExtrasDto RadiationExtras { get; set; } = new();
 
         [JsonPropertyName("nuclear")] public NuclearConfigDto Nuclear { get; set; } = new();
+        /// <summary>Electromagnetic block (schema v17).</summary>
+        [JsonPropertyName("electro")] public Electro3Dto Electro { get; set; } = new();
 
         /// <summary>See <c>World2Dto.Quantum</c>.</summary>
         [JsonPropertyName("quantum")] public QuantumDto Quantum { get; set; } = new();
@@ -1540,6 +1669,8 @@ public static class Snapshot
             // dropped on save.
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
+            bool hasElectro = !w.Electro.Config.IsDefault()
+                || w.Bodies.Any(b => !b.Electro.IsDefault());
             // Schema v16: a joint with a set motor speed or budget needs
             // the v16 motor records, or they would be silently dropped.
             bool hasMotors = w.Joints.Any(j =>
@@ -1564,6 +1695,7 @@ public static class Snapshot
                 (hasCollisionFilters, CollisionFiltersSchemaVersion),
                 (hasSensors, SensorsSchemaVersion),
                 (hasQuantum, QuantumSchemaVersion),
+                (hasElectro, ElectroSchemaVersion),
                 (hasMotors, MotorsSchemaVersion));
             uint schema = high > 0 ? high
                 : hasSolverFlags ? SolverFlagsSchemaVersion
@@ -1680,6 +1812,7 @@ public static class Snapshot
                     ExpansionReferenceTemperature = w.Thermal.ExpansionReferenceTemperature,
                 },
                 Quantum = quantum,
+                Electro = ElectroFrom(w),
                 Dt = w.Dt,
                 LinearSleepThreshold = w.LinearSleepThreshold,
                 AngularSleepThreshold = w.AngularSleepThreshold,
@@ -1862,6 +1995,7 @@ public static class Snapshot
             Dose = b.Nuclear.Dose,
             CaptureProgress = b.Nuclear.CaptureProgress,
         },
+        Electro = ElectroBody3From(b.Electro),
         CollisionGroup = b.CollisionGroup,
         CollisionMask = b.CollisionMask,
         IsSensor = b.IsSensor,
@@ -2180,11 +2314,206 @@ public static class Snapshot
         return dto;
     }
 
+    // ---- Electromagnetic DTO conversions (schema v17) ----
+
+    private static ElectroBody2Dto ElectroBody2From(ElectroState2 s) => new()
+    {
+        Charge = s.Charge,
+        ChargeScale = s.ChargeScale,
+        Conductivity = s.Conductivity,
+        Permittivity = s.Permittivity,
+        Permeability = s.Permeability,
+        MagneticMoment = s.MagneticMoment,
+        Capacitance = s.Capacitance,
+        Resistance = s.Resistance,
+        IsConductor = s.IsConductor,
+        IsGrounded = s.IsGrounded,
+    };
+
+    private static ElectroState2 ElectroBody2To(ElectroBody2Dto d) => new()
+    {
+        Charge = d.Charge,
+        ChargeScale = d.ChargeScale,
+        Conductivity = d.Conductivity,
+        Permittivity = d.Permittivity,
+        Permeability = d.Permeability,
+        MagneticMoment = d.MagneticMoment,
+        Capacitance = d.Capacitance,
+        Resistance = d.Resistance,
+        IsConductor = d.IsConductor,
+        IsGrounded = d.IsGrounded,
+    };
+
+    private static ElectroBody3Dto ElectroBody3From(ElectroState3 s) => new()
+    {
+        Charge = s.Charge,
+        ChargeScale = s.ChargeScale,
+        Conductivity = s.Conductivity,
+        Permittivity = s.Permittivity,
+        Permeability = s.Permeability,
+        MagneticMoment = new[] { s.MagneticMoment.X, s.MagneticMoment.Y, s.MagneticMoment.Z },
+        Capacitance = s.Capacitance,
+        Resistance = s.Resistance,
+        IsConductor = s.IsConductor,
+        IsGrounded = s.IsGrounded,
+    };
+
+    private static ElectroState3 ElectroBody3To(ElectroBody3Dto d) => new()
+    {
+        Charge = d.Charge,
+        ChargeScale = d.ChargeScale,
+        Conductivity = d.Conductivity,
+        Permittivity = d.Permittivity,
+        Permeability = d.Permeability,
+        MagneticMoment = new Vector3(d.MagneticMoment[0], d.MagneticMoment[1], d.MagneticMoment[2]),
+        Capacitance = d.Capacitance,
+        Resistance = d.Resistance,
+        IsConductor = d.IsConductor,
+        IsGrounded = d.IsGrounded,
+    };
+
+    private static Electro2Dto ElectroFrom(World2 w)
+    {
+        var dto = new Electro2Dto
+        {
+            Config = new ElectroConfig2Dto
+            {
+                Enabled = w.Electro.Config.Enabled,
+                Mode = (uint)w.Electro.Config.Mode,
+                CoulombK = w.Electro.Config.CoulombK,
+                Softening = w.Electro.Config.Softening,
+                Ex = w.Electro.Config.UniformE.X,
+                Ey = w.Electro.Config.UniformE.Y,
+                Bz = w.Electro.Config.UniformB,
+                Permittivity = w.Electro.Config.Permittivity,
+                Permeability = w.Electro.Config.Permeability,
+                MaxAcceleration = w.Electro.Config.MaxAcceleration,
+                Field = new ElectroFieldConfig2Dto
+                {
+                    Nx = w.Electro.Config.Field.Nx,
+                    Ny = w.Electro.Config.Field.Ny,
+                    Dx = w.Electro.Config.Field.Dx,
+                    Origin = new[] { w.Electro.Config.Field.Origin.X, w.Electro.Config.Field.Origin.Y },
+                    Iterations = w.Electro.Config.Field.Iterations,
+                    Omega = w.Electro.Config.Field.Omega,
+                    Boundary = (uint)w.Electro.Config.Field.Boundary,
+                    EpsR = w.Electro.Config.Field.EpsR,
+                    SnapshotField = w.Electro.Config.Field.SnapshotField,
+                },
+            },
+            Time = w.Electro.Time,
+        };
+        if (w.Electro.Config.Mode == ElectroMode.Field && w.Electro.Config.Field.SnapshotField
+            && w.Electro.Poisson is not null)
+        {
+            dto.Phi.AddRange(w.Electro.Poisson.Phi);
+        }
+        return dto;
+    }
+
+    private static Electro3Dto ElectroFrom(World3 w)
+    {
+        var dto = new Electro3Dto
+        {
+            Config = new ElectroConfig3Dto
+            {
+                Enabled = w.Electro.Config.Enabled,
+                Mode = (uint)w.Electro.Config.Mode,
+                CoulombK = w.Electro.Config.CoulombK,
+                Softening = w.Electro.Config.Softening,
+                Ex = w.Electro.Config.UniformE.X,
+                Ey = w.Electro.Config.UniformE.Y,
+                Ez = w.Electro.Config.UniformE.Z,
+                Bx = w.Electro.Config.UniformB.X,
+                By = w.Electro.Config.UniformB.Y,
+                Bz = w.Electro.Config.UniformB.Z,
+                Permittivity = w.Electro.Config.Permittivity,
+                Permeability = w.Electro.Config.Permeability,
+                MaxAcceleration = w.Electro.Config.MaxAcceleration,
+                Field = new ElectroFieldConfig3Dto
+                {
+                    Nx = w.Electro.Config.Field.Nx,
+                    Ny = w.Electro.Config.Field.Ny,
+                    Nz = w.Electro.Config.Field.Nz,
+                    Dx = w.Electro.Config.Field.Dx,
+                    Origin = new[]
+                    {
+                        w.Electro.Config.Field.Origin.X,
+                        w.Electro.Config.Field.Origin.Y,
+                        w.Electro.Config.Field.Origin.Z,
+                    },
+                    Iterations = w.Electro.Config.Field.Iterations,
+                    Omega = w.Electro.Config.Field.Omega,
+                    Boundary = (uint)w.Electro.Config.Field.Boundary,
+                    EpsR = w.Electro.Config.Field.EpsR,
+                    SnapshotField = w.Electro.Config.Field.SnapshotField,
+                },
+            },
+            Time = w.Electro.Time,
+        };
+        if (w.Electro.Config.Mode == ElectroMode.Field && w.Electro.Config.Field.SnapshotField
+            && w.Electro.Poisson is not null)
+        {
+            dto.Phi.AddRange(w.Electro.Poisson.Phi);
+        }
+        return dto;
+    }
+
+    private static ElectroConfig2 ElectroConfig2To(ElectroConfig2Dto d) => new()
+    {
+        Enabled = d.Enabled,
+        Mode = (ElectroMode)d.Mode,
+        CoulombK = d.CoulombK,
+        Softening = d.Softening,
+        UniformE = new Vector2(d.Ex, d.Ey),
+        UniformB = d.Bz,
+        Permittivity = d.Permittivity,
+        Permeability = d.Permeability,
+        MaxAcceleration = d.MaxAcceleration,
+        Field = new FieldConfig2
+        {
+            Nx = d.Field.Nx,
+            Ny = d.Field.Ny,
+            Dx = d.Field.Dx,
+            Origin = new Vector2(d.Field.Origin[0], d.Field.Origin[1]),
+            Iterations = d.Field.Iterations,
+            Omega = d.Field.Omega,
+            Boundary = (FieldBoundary)d.Field.Boundary,
+            EpsR = d.Field.EpsR,
+            SnapshotField = d.Field.SnapshotField,
+        },
+    };
+
+    private static ElectroConfig3 ElectroConfig3To(ElectroConfig3Dto d) => new()
+    {
+        Enabled = d.Enabled,
+        Mode = (ElectroMode)d.Mode,
+        CoulombK = d.CoulombK,
+        Softening = d.Softening,
+        UniformE = new Vector3(d.Ex, d.Ey, d.Ez),
+        UniformB = new Vector3(d.Bx, d.By, d.Bz),
+        Permittivity = d.Permittivity,
+        Permeability = d.Permeability,
+        MaxAcceleration = d.MaxAcceleration,
+        Field = new FieldConfig3
+        {
+            Nx = d.Field.Nx,
+            Ny = d.Field.Ny,
+            Nz = d.Field.Nz,
+            Dx = d.Field.Dx,
+            Origin = new Vector3(d.Field.Origin[0], d.Field.Origin[1], d.Field.Origin[2]),
+            Iterations = d.Field.Iterations,
+            Omega = d.Field.Omega,
+            Boundary = (FieldBoundary)d.Field.Boundary,
+            EpsR = d.Field.EpsR,
+            SnapshotField = d.Field.SnapshotField,
+        },
+    };
+
     /// <summary>
     /// Rebuilds an engine quantum configuration from the schema v15 DTO.
     /// </summary>
-    private static QuantumConfig QuantumConfigFrom(QuantumConfigDto c)
-    {
+    private static QuantumConfig QuantumConfigFrom(QuantumConfigDto c)    {
         if (c.GridSize > MaxQuantumGrid)
         {
             throw new ArgumentException(
@@ -2345,6 +2674,24 @@ public static class Snapshot
             },
         };
         w.Nuclear.Config = NuclearConfigFrom(dto.Nuclear);
+        if (dto.Schema >= ElectroSchemaVersion)
+        {
+            if (dto.Electro.Config.Mode > 2 || dto.Electro.Config.Field.Boundary > 2
+                || dto.Electro.Config.Field.Origin.Length < 2)
+                throw new ArgumentException("invalid electromagnetic configuration.");
+            var electro = ElectroConfig2To(dto.Electro.Config);
+            if (!w.Electro.Configure(electro))
+                throw new ArgumentException("invalid electromagnetic configuration.");
+            w.Electro.Time = dto.Electro.Time;
+            if (dto.Electro.Phi.Count > 0)
+            {
+                var grid = new PoissonGrid2(electro.Field, electro.CoulombK);
+                if (grid.Cells != dto.Electro.Phi.Count)
+                    throw new ArgumentException("electro field length mismatch.");
+                grid.SetPhi(dto.Electro.Phi.ToArray());
+                w.Electro.Poisson = grid;
+            }
+        }
         w.Solver.Iterations = dto.Solver.Iterations > 1024
             ? throw new ArgumentException("Solver iterations exceed 1024.")
             : dto.Solver.Iterations;
@@ -2400,6 +2747,7 @@ public static class Snapshot
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
+            body.Electro = ElectroBody2To(b.Electro);
             // The collision filter (schema v13). A file without one keeps
             // the default layer and mask, which accept every pair.
             body.CollisionGroup = b.CollisionGroup;
@@ -2582,6 +2930,24 @@ public static class Snapshot
             },
         };
         w.Nuclear.Config = NuclearConfigFrom(dto.Nuclear);
+        if (dto.Schema >= ElectroSchemaVersion)
+        {
+            if (dto.Electro.Config.Mode > 2 || dto.Electro.Config.Field.Boundary > 2
+                || dto.Electro.Config.Field.Origin.Length < 3)
+                throw new ArgumentException("invalid electromagnetic configuration.");
+            var electro = ElectroConfig3To(dto.Electro.Config);
+            if (!w.Electro.Configure(electro))
+                throw new ArgumentException("invalid electromagnetic configuration.");
+            w.Electro.Time = dto.Electro.Time;
+            if (dto.Electro.Phi.Count > 0)
+            {
+                var grid = new PoissonGrid3(electro.Field, electro.CoulombK);
+                if (grid.Cells != dto.Electro.Phi.Count)
+                    throw new ArgumentException("electro field length mismatch.");
+                grid.SetPhi(dto.Electro.Phi.ToArray());
+                w.Electro.Poisson = grid;
+            }
+        }
         w.Solver.Iterations = dto.Solver.Iterations > 1024
             ? throw new ArgumentException("Solver iterations exceed 1024.")
             : dto.Solver.Iterations;
@@ -2638,6 +3004,7 @@ public static class Snapshot
             body.Nuclear.DelayedNeutrons = Fin(b.Nuclear.DelayedNeutrons, "nuclear_delayed_neutrons");
             body.Nuclear.Dose = Fin(b.Nuclear.Dose, "nuclear_dose");
             body.Nuclear.CaptureProgress = Fin(b.Nuclear.CaptureProgress, "nuclear_capture_progress");
+            body.Electro = ElectroBody3To(b.Electro);
             // The collision filter (schema v13). A file without one keeps
             // the default layer and mask, which accept every pair.
             body.CollisionGroup = b.CollisionGroup;
@@ -3340,6 +3707,10 @@ public static class Snapshot
             {
                 w.Write(b.IsSensor ? (byte)1 : (byte)0);
             }
+            if (dto.Schema >= ElectroSchemaVersion)
+            {
+                WriteElectroBody2(w, b.Electro);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint2(w, j, dto.Schema);
@@ -3363,6 +3734,10 @@ public static class Snapshot
         if (dto.Schema >= QuantumSchemaVersion)
         {
             WriteQuantum(w, dto.Quantum);
+        }
+        if (dto.Schema >= ElectroSchemaVersion)
+        {
+            WriteElectro2(w, dto.Electro);
         }
     }
 
@@ -3560,6 +3935,197 @@ public static class Snapshot
     /// The block is appended at the end of the payload, so every earlier
     /// payload still decodes.
     /// </remarks>
+    private static void WriteElectroBody2(BinaryWriter w, ElectroBody2Dto s)
+    {
+        w.Write(s.Charge);
+        w.Write(s.ChargeScale);
+        w.Write(s.Conductivity);
+        w.Write(s.Permittivity);
+        w.Write(s.Permeability);
+        w.Write(s.MagneticMoment);
+        w.Write(s.Capacitance);
+        w.Write(s.Resistance);
+        w.Write((byte)((s.IsConductor ? 1 : 0) | (s.IsGrounded ? 2 : 0)));
+    }
+
+    private static ElectroBody2Dto ReadElectroBody2(BinaryReader r)
+    {
+        var dto = new ElectroBody2Dto
+        {
+            Charge = r.ReadSingle(),
+            ChargeScale = r.ReadSingle(),
+            Conductivity = r.ReadSingle(),
+            Permittivity = r.ReadSingle(),
+            Permeability = r.ReadSingle(),
+            MagneticMoment = r.ReadSingle(),
+            Capacitance = r.ReadSingle(),
+            Resistance = r.ReadSingle(),
+        };
+        byte flags = r.ReadByte();
+        dto.IsConductor = (flags & 1) != 0;
+        dto.IsGrounded = (flags & 2) != 0;
+        return dto;
+    }
+
+    private static void WriteElectroBody3(BinaryWriter w, ElectroBody3Dto s)
+    {
+        w.Write(s.Charge);
+        w.Write(s.ChargeScale);
+        w.Write(s.Conductivity);
+        w.Write(s.Permittivity);
+        w.Write(s.Permeability);
+        w.Write(s.MagneticMoment[0]);
+        w.Write(s.MagneticMoment[1]);
+        w.Write(s.MagneticMoment[2]);
+        w.Write(s.Capacitance);
+        w.Write(s.Resistance);
+        w.Write((byte)((s.IsConductor ? 1 : 0) | (s.IsGrounded ? 2 : 0)));
+    }
+
+    private static ElectroBody3Dto ReadElectroBody3(BinaryReader r)
+    {
+        var dto = new ElectroBody3Dto
+        {
+            Charge = r.ReadSingle(),
+            ChargeScale = r.ReadSingle(),
+            Conductivity = r.ReadSingle(),
+            Permittivity = r.ReadSingle(),
+            Permeability = r.ReadSingle(),
+            MagneticMoment = new[] { r.ReadSingle(), r.ReadSingle(), r.ReadSingle() },
+            Capacitance = r.ReadSingle(),
+            Resistance = r.ReadSingle(),
+        };
+        byte flags = r.ReadByte();
+        dto.IsConductor = (flags & 1) != 0;
+        dto.IsGrounded = (flags & 2) != 0;
+        return dto;
+    }
+
+    private static void WriteElectro2(BinaryWriter w, Electro2Dto e)
+    {
+        w.Write(e.Config.Enabled ? (byte)1 : (byte)0);
+        w.Write(e.Config.Mode);
+        w.Write(e.Config.CoulombK);
+        w.Write(e.Config.Softening);
+        w.Write(e.Config.Ex);
+        w.Write(e.Config.Ey);
+        w.Write(e.Config.Bz);
+        w.Write(e.Config.Permittivity);
+        w.Write(e.Config.Permeability);
+        w.Write(e.Config.MaxAcceleration);
+        w.Write(e.Config.Field.Nx);
+        w.Write(e.Config.Field.Ny);
+        w.Write(e.Config.Field.Dx);
+        w.Write(e.Config.Field.Origin[0]);
+        w.Write(e.Config.Field.Origin[1]);
+        w.Write(e.Config.Field.Iterations);
+        w.Write(e.Config.Field.Omega);
+        w.Write(e.Config.Field.Boundary);
+        w.Write(e.Config.Field.EpsR);
+        w.Write(e.Config.Field.SnapshotField ? (byte)1 : (byte)0);
+        w.Write(e.Phi.Count);
+        foreach (var p in e.Phi) w.Write(p);
+        w.Write(e.Time);
+    }
+
+    private static Electro2Dto ReadElectro2(BinaryReader r, uint version)
+    {
+        var e = new Electro2Dto();
+        if (version < ElectroSchemaVersion) return e;
+        e.Config.Enabled = r.ReadByte() != 0;
+        e.Config.Mode = r.ReadUInt32();
+        e.Config.CoulombK = r.ReadSingle();
+        e.Config.Softening = r.ReadSingle();
+        e.Config.Ex = r.ReadSingle();
+        e.Config.Ey = r.ReadSingle();
+        e.Config.Bz = r.ReadSingle();
+        e.Config.Permittivity = r.ReadSingle();
+        e.Config.Permeability = r.ReadSingle();
+        e.Config.MaxAcceleration = r.ReadSingle();
+        e.Config.Field.Nx = r.ReadUInt32();
+        e.Config.Field.Ny = r.ReadUInt32();
+        e.Config.Field.Dx = r.ReadSingle();
+        e.Config.Field.Origin = new[] { r.ReadSingle(), r.ReadSingle() };
+        e.Config.Field.Iterations = r.ReadUInt32();
+        e.Config.Field.Omega = r.ReadSingle();
+        e.Config.Field.Boundary = r.ReadUInt32();
+        e.Config.Field.EpsR = r.ReadSingle();
+        e.Config.Field.SnapshotField = r.ReadByte() != 0;
+        int count = r.ReadInt32();
+        if (count < 0 || count > ElectroConstants.MaxFieldCells)
+            throw new ArgumentException("Electro field count out of range.");
+        for (int i = 0; i < count; i++) e.Phi.Add(Fin(r.ReadSingle(), "electro_phi"));
+        e.Time = Fin(r.ReadSingle(), "electro_time");
+        return e;
+    }
+
+    private static void WriteElectro3(BinaryWriter w, Electro3Dto e)
+    {
+        w.Write(e.Config.Enabled ? (byte)1 : (byte)0);
+        w.Write(e.Config.Mode);
+        w.Write(e.Config.CoulombK);
+        w.Write(e.Config.Softening);
+        w.Write(e.Config.Ex);
+        w.Write(e.Config.Ey);
+        w.Write(e.Config.Ez);
+        w.Write(e.Config.Bx);
+        w.Write(e.Config.By);
+        w.Write(e.Config.Bz);
+        w.Write(e.Config.Permittivity);
+        w.Write(e.Config.Permeability);
+        w.Write(e.Config.MaxAcceleration);
+        w.Write(e.Config.Field.Nx);
+        w.Write(e.Config.Field.Ny);
+        w.Write(e.Config.Field.Nz);
+        w.Write(e.Config.Field.Dx);
+        w.Write(e.Config.Field.Origin[0]);
+        w.Write(e.Config.Field.Origin[1]);
+        w.Write(e.Config.Field.Origin[2]);
+        w.Write(e.Config.Field.Iterations);
+        w.Write(e.Config.Field.Omega);
+        w.Write(e.Config.Field.Boundary);
+        w.Write(e.Config.Field.EpsR);
+        w.Write(e.Config.Field.SnapshotField ? (byte)1 : (byte)0);
+        w.Write(e.Phi.Count);
+        foreach (var p in e.Phi) w.Write(p);
+        w.Write(e.Time);
+    }
+
+    private static Electro3Dto ReadElectro3(BinaryReader r, uint version)
+    {
+        var e = new Electro3Dto();
+        if (version < ElectroSchemaVersion) return e;
+        e.Config.Enabled = r.ReadByte() != 0;
+        e.Config.Mode = r.ReadUInt32();
+        e.Config.CoulombK = r.ReadSingle();
+        e.Config.Softening = r.ReadSingle();
+        e.Config.Ex = r.ReadSingle();
+        e.Config.Ey = r.ReadSingle();
+        e.Config.Ez = r.ReadSingle();
+        e.Config.Bx = r.ReadSingle();
+        e.Config.By = r.ReadSingle();
+        e.Config.Bz = r.ReadSingle();
+        e.Config.Permittivity = r.ReadSingle();
+        e.Config.Permeability = r.ReadSingle();
+        e.Config.MaxAcceleration = r.ReadSingle();
+        e.Config.Field.Nx = r.ReadUInt32();
+        e.Config.Field.Ny = r.ReadUInt32();
+        e.Config.Field.Nz = r.ReadUInt32();
+        e.Config.Field.Dx = r.ReadSingle();
+        e.Config.Field.Origin = new[] { r.ReadSingle(), r.ReadSingle(), r.ReadSingle() };
+        e.Config.Field.Iterations = r.ReadUInt32();
+        e.Config.Field.Omega = r.ReadSingle();
+        e.Config.Field.Boundary = r.ReadUInt32();
+        e.Config.Field.EpsR = r.ReadSingle();
+        e.Config.Field.SnapshotField = r.ReadByte() != 0;
+        int count = r.ReadInt32();
+        if (count < 0 || count > ElectroConstants.MaxFieldCells)
+            throw new ArgumentException("Electro field count out of range.");
+        for (int i = 0; i < count; i++) e.Phi.Add(Fin(r.ReadSingle(), "electro_phi"));
+        e.Time = Fin(r.ReadSingle(), "electro_time");
+        return e;
+    }
+
     private static void WriteQuantum(BinaryWriter w, QuantumDto q)
     {
         if (q.Real.Count != q.Imag.Count)
@@ -3719,6 +4285,7 @@ public static class Snapshot
                     ? r.ReadUInt32()
                     : CollisionFilter.DefaultMask,
                 IsSensor = version >= SensorsSchemaVersion ? r.ReadByte() != 0 : false,
+                Electro = version >= ElectroSchemaVersion ? ReadElectroBody2(r) : new ElectroBody2Dto(),
             };
             dto.Bodies.Add(b);
         }
@@ -3748,6 +4315,7 @@ public static class Snapshot
         // Schema v15: the quantum field block (at the end of the
         // payload).
         dto.Quantum = ReadQuantum(r, version);
+        dto.Electro = ReadElectro2(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;
@@ -4089,6 +4657,10 @@ public static class Snapshot
             {
                 w.Write(b.IsSensor ? (byte)1 : (byte)0);
             }
+            if (dto.Schema >= ElectroSchemaVersion)
+            {
+                WriteElectroBody3(w, b.Electro);
+            }
         }
         w.Write(dto.Joints.Count);
         foreach (var j in dto.Joints) WriteJoint3(w, j, dto.Schema);
@@ -4112,6 +4684,10 @@ public static class Snapshot
         if (dto.Schema >= QuantumSchemaVersion)
         {
             WriteQuantum(w, dto.Quantum);
+        }
+        if (dto.Schema >= ElectroSchemaVersion)
+        {
+            WriteElectro3(w, dto.Electro);
         }
     }
 
@@ -4204,6 +4780,7 @@ public static class Snapshot
                     ? r.ReadUInt32()
                     : CollisionFilter.DefaultMask,
                 IsSensor = version >= SensorsSchemaVersion ? r.ReadByte() != 0 : false,
+                Electro = version >= ElectroSchemaVersion ? ReadElectroBody3(r) : new ElectroBody3Dto(),
             });
         }
         int nj = r.ReadInt32();
@@ -4233,6 +4810,7 @@ public static class Snapshot
         dto.Fluid = ReadFluid3(r, version);
         // Schema v15: the quantum field block (see ReadWorld2Payload).
         dto.Quantum = ReadQuantum(r, version);
+        dto.Electro = ReadElectro3(r, version);
         if (r.BaseStream.Position != r.BaseStream.Length)
             throw new ArgumentException("Trailing bytes in snapshot payload.");
         return dto;
@@ -4400,3 +4978,6 @@ public static class Snapshot
         return ms.ToArray();
     }
 }
+
+
+

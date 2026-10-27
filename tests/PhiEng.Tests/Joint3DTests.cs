@@ -510,7 +510,7 @@ public class Joint3DTests
         var (world, arm) = MotorPendulum3(2.0f, 1000.0f, 0.0f);
         for (int i = 0; i < 60; i++) world.Step(Dt);
         string text = Snapshot.World3ToJson(world, SnapshotLoadMode.Exact);
-        Assert.Equal(Snapshot.SchemaVersion, JsonSchema(text));
+        Assert.Equal(Snapshot.MotorsSchemaVersion, (uint)JsonSchema(text));
         Assert.Contains("motor_speed", text);
         byte[] bytes = Snapshot.World3ToBinary(world, SnapshotLoadMode.Exact);
         var back = Snapshot.World3FromBinary(bytes, SnapshotLoadMode.Exact);
@@ -540,3 +540,4 @@ public class Joint3DTests
         Assert.Equal(0.0f, h2.MotorImpulse);
     }
 }
+

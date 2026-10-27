@@ -8701,3 +8701,847 @@ pub unsafe extern "C" fn phieng_world3_overlap_shape(
     slice.copy_from_slice(&hits[..n]);
     n as u32
 }
+
+// ==== Electromagnetics FFI (schema v17) ====
+
+/// The per-body electromagnetic state, as it crosses the C ABI.
+///
+/// The layout is `#[repr(C)]` and must match the C# `ElectroBodyFfi`.
+/// `flags` bit 0 is "conductor", bit 1 is "grounded". The 2D world uses
+/// `magnetic_moment_x` as its scalar moment and ignores Y/Z.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ElectroBodyFfi {
+    /// The net charge.
+    pub charge: f32,
+    /// The coupling multiplier.
+    pub charge_scale: f32,
+    /// Reserved conductivity.
+    pub conductivity: f32,
+    /// Relative permittivity.
+    pub permittivity: f32,
+    /// Relative permeability.
+    pub permeability: f32,
+    /// The magnetic moment X (scalar in 2D).
+    pub magnetic_moment_x: f32,
+    /// The magnetic moment Y.
+    pub magnetic_moment_y: f32,
+    /// The magnetic moment Z.
+    pub magnetic_moment_z: f32,
+    /// The capacitance to ground.
+    pub capacitance: f32,
+    /// The resistance to ground.
+    pub resistance: f32,
+    /// Bit 0 conductor, bit 1 grounded.
+    pub flags: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<ElectroBodyFfi>() == 44);
+
+/// The 2D electromagnetic configuration, as it crosses the C ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ElectroConfigFfi2 {
+    /// 0 off, 1 pairwise, 2 field.
+    pub mode: u32,
+    /// 0 Dirichlet, 1 Neumann, 2 periodic.
+    pub boundary: u32,
+    /// Master switch (0/1).
+    pub enabled: u32,
+    /// Coulomb's constant.
+    pub coulomb_k: f32,
+    /// Softening length.
+    pub softening: f32,
+    /// Uniform external electric field X.
+    pub ex: f32,
+    /// Uniform external electric field Y.
+    pub ey: f32,
+    /// Uniform external magnetic field (out of plane).
+    pub bz: f32,
+    /// Relative permittivity of the medium.
+    pub permittivity: f32,
+    /// Relative permeability of the medium.
+    pub permeability: f32,
+    /// The acceleration cap.
+    pub max_acceleration: f32,
+    /// Grid cells along X.
+    pub nx: u32,
+    /// Grid cells along Y.
+    pub ny: u32,
+    /// Grid spacing.
+    pub dx: f32,
+    /// Grid origin X.
+    pub ox: f32,
+    /// Grid origin Y.
+    pub oy: f32,
+    /// Fixed SOR iterations.
+    pub iterations: u32,
+    /// SOR over-relaxation.
+    pub omega: f32,
+    /// Relative permittivity of the grid medium.
+    pub eps_r: f32,
+    /// Whether the field grid is stored in a snapshot (0/1).
+    pub snapshot_field: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<ElectroConfigFfi2>() == 80);
+
+/// The 3D electromagnetic configuration, as it crosses the C ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ElectroConfigFfi3 {
+    /// 0 off, 1 pairwise, 2 field.
+    pub mode: u32,
+    /// 0 Dirichlet, 1 Neumann, 2 periodic.
+    pub boundary: u32,
+    /// Master switch (0/1).
+    pub enabled: u32,
+    /// Coulomb's constant.
+    pub coulomb_k: f32,
+    /// Softening length.
+    pub softening: f32,
+    /// Uniform external electric field X.
+    pub ex: f32,
+    /// Uniform external electric field Y.
+    pub ey: f32,
+    /// Uniform external electric field Z.
+    pub ez: f32,
+    /// Uniform external magnetic field X.
+    pub bx: f32,
+    /// Uniform external magnetic field Y.
+    pub by: f32,
+    /// Uniform external magnetic field Z.
+    pub bz: f32,
+    /// Relative permittivity of the medium.
+    pub permittivity: f32,
+    /// Relative permeability of the medium.
+    pub permeability: f32,
+    /// The acceleration cap.
+    pub max_acceleration: f32,
+    /// Grid cells along X.
+    pub nx: u32,
+    /// Grid cells along Y.
+    pub ny: u32,
+    /// Grid cells along Z.
+    pub nz: u32,
+    /// Grid spacing.
+    pub dx: f32,
+    /// Grid origin X.
+    pub ox: f32,
+    /// Grid origin Y.
+    pub oy: f32,
+    /// Grid origin Z.
+    pub oz: f32,
+    /// Fixed SOR iterations.
+    pub iterations: u32,
+    /// SOR over-relaxation.
+    pub omega: f32,
+    /// Relative permittivity of the grid medium.
+    pub eps_r: f32,
+    /// Whether the field grid is stored in a snapshot (0/1).
+    pub snapshot_field: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<ElectroConfigFfi3>() == 100);
+
+fn electro_mode_from_tag(tag: u32) -> Option<phieng_electromagnetics::ElectroMode> {
+    use phieng_electromagnetics::ElectroMode;
+    match tag {
+        0 => Some(ElectroMode::Off),
+        1 => Some(ElectroMode::Pairwise),
+        2 => Some(ElectroMode::Field),
+        _ => None,
+    }
+}
+
+fn electro_boundary_from_tag(tag: u32) -> Option<phieng_electromagnetics::FieldBoundary> {
+    use phieng_electromagnetics::FieldBoundary;
+    match tag {
+        0 => Some(FieldBoundary::Dirichlet),
+        1 => Some(FieldBoundary::Neumann),
+        2 => Some(FieldBoundary::Periodic),
+        _ => None,
+    }
+}
+
+fn electro_config_from_ffi2(
+    c: &ElectroConfigFfi2,
+) -> Option<phieng_electromagnetics::ElectroConfig2> {
+    let mode = electro_mode_from_tag(c.mode)?;
+    let boundary = electro_boundary_from_tag(c.boundary)?;
+    let cfg = phieng_electromagnetics::ElectroConfig2 {
+        enabled: c.enabled != 0,
+        mode,
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        uniform_e: Vec2::new(c.ex, c.ey),
+        uniform_b: c.bz,
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        field: phieng_electromagnetics::FieldConfig2 {
+            nx: c.nx,
+            ny: c.ny,
+            dx: c.dx,
+            origin: Vec2::new(c.ox, c.oy),
+            iterations: c.iterations,
+            omega: c.omega,
+            boundary,
+            eps_r: c.eps_r,
+            snapshot_field: c.snapshot_field != 0,
+        },
+    };
+    cfg.validate().ok()?;
+    Some(cfg)
+}
+
+fn electro_config_to_ffi2(c: &phieng_electromagnetics::ElectroConfig2) -> ElectroConfigFfi2 {
+    ElectroConfigFfi2 {
+        mode: c.mode as u32,
+        boundary: c.field.boundary as u32,
+        enabled: u32::from(c.enabled),
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        ex: c.uniform_e.x,
+        ey: c.uniform_e.y,
+        bz: c.uniform_b,
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        nx: c.field.nx,
+        ny: c.field.ny,
+        dx: c.field.dx,
+        ox: c.field.origin.x,
+        oy: c.field.origin.y,
+        iterations: c.field.iterations,
+        omega: c.field.omega,
+        eps_r: c.field.eps_r,
+        snapshot_field: u32::from(c.field.snapshot_field),
+    }
+}
+
+fn electro_config_from_ffi3(
+    c: &ElectroConfigFfi3,
+) -> Option<phieng_electromagnetics::ElectroConfig3> {
+    let mode = electro_mode_from_tag(c.mode)?;
+    let boundary = electro_boundary_from_tag(c.boundary)?;
+    let cfg = phieng_electromagnetics::ElectroConfig3 {
+        enabled: c.enabled != 0,
+        mode,
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        uniform_e: Vec3::new(c.ex, c.ey, c.ez),
+        uniform_b: Vec3::new(c.bx, c.by, c.bz),
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        field: phieng_electromagnetics::FieldConfig3 {
+            nx: c.nx,
+            ny: c.ny,
+            nz: c.nz,
+            dx: c.dx,
+            origin: Vec3::new(c.ox, c.oy, c.oz),
+            iterations: c.iterations,
+            omega: c.omega,
+            boundary,
+            eps_r: c.eps_r,
+            snapshot_field: c.snapshot_field != 0,
+        },
+    };
+    cfg.validate().ok()?;
+    Some(cfg)
+}
+
+fn electro_config_to_ffi3(c: &phieng_electromagnetics::ElectroConfig3) -> ElectroConfigFfi3 {
+    ElectroConfigFfi3 {
+        mode: c.mode as u32,
+        boundary: c.field.boundary as u32,
+        enabled: u32::from(c.enabled),
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        ex: c.uniform_e.x,
+        ey: c.uniform_e.y,
+        ez: c.uniform_e.z,
+        bx: c.uniform_b.x,
+        by: c.uniform_b.y,
+        bz: c.uniform_b.z,
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        nx: c.field.nx,
+        ny: c.field.ny,
+        nz: c.field.nz,
+        dx: c.field.dx,
+        ox: c.field.origin.x,
+        oy: c.field.origin.y,
+        oz: c.field.origin.z,
+        iterations: c.field.iterations,
+        omega: c.field.omega,
+        eps_r: c.field.eps_r,
+        snapshot_field: u32::from(c.field.snapshot_field),
+    }
+}
+
+fn electro_body_from_ffi2(s: &ElectroBodyFfi) -> Option<phieng_electromagnetics::ElectroState2> {
+    if !s.charge.is_finite()
+        || !s.charge_scale.is_finite()
+        || !s.conductivity.is_finite()
+        || !s.permittivity.is_finite()
+        || !s.permeability.is_finite()
+        || !s.magnetic_moment_x.is_finite()
+        || !s.capacitance.is_finite()
+        || !s.resistance.is_finite()
+    {
+        return None;
+    }
+    Some(phieng_electromagnetics::ElectroState2 {
+        charge: s.charge.clamp(
+            -phieng_electromagnetics::MAX_CHARGE,
+            phieng_electromagnetics::MAX_CHARGE,
+        ),
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity.max(0.0),
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment: s.magnetic_moment_x,
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        is_conductor: s.flags & 1 != 0,
+        is_grounded: s.flags & 2 != 0,
+    })
+}
+
+fn electro_body_to_ffi2(s: &phieng_electromagnetics::ElectroState2) -> ElectroBodyFfi {
+    ElectroBodyFfi {
+        charge: s.charge,
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity,
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment_x: s.magnetic_moment,
+        magnetic_moment_y: 0.0,
+        magnetic_moment_z: 0.0,
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        flags: u32::from(s.is_conductor) | (u32::from(s.is_grounded) << 1),
+    }
+}
+
+fn electro_body_from_ffi3(s: &ElectroBodyFfi) -> Option<phieng_electromagnetics::ElectroState3> {
+    if !s.charge.is_finite()
+        || !s.charge_scale.is_finite()
+        || !s.conductivity.is_finite()
+        || !s.permittivity.is_finite()
+        || !s.permeability.is_finite()
+        || !s.magnetic_moment_x.is_finite()
+        || !s.magnetic_moment_y.is_finite()
+        || !s.magnetic_moment_z.is_finite()
+        || !s.capacitance.is_finite()
+        || !s.resistance.is_finite()
+    {
+        return None;
+    }
+    Some(phieng_electromagnetics::ElectroState3 {
+        charge: s.charge.clamp(
+            -phieng_electromagnetics::MAX_CHARGE,
+            phieng_electromagnetics::MAX_CHARGE,
+        ),
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity.max(0.0),
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment: Vec3::new(
+            s.magnetic_moment_x,
+            s.magnetic_moment_y,
+            s.magnetic_moment_z,
+        ),
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        is_conductor: s.flags & 1 != 0,
+        is_grounded: s.flags & 2 != 0,
+    })
+}
+
+fn electro_body_to_ffi3(s: &phieng_electromagnetics::ElectroState3) -> ElectroBodyFfi {
+    ElectroBodyFfi {
+        charge: s.charge,
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity,
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment_x: s.magnetic_moment.x,
+        magnetic_moment_y: s.magnetic_moment.y,
+        magnetic_moment_z: s.magnetic_moment.z,
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        flags: u32::from(s.is_conductor) | (u32::from(s.is_grounded) << 1),
+    }
+}
+
+/// Set the 2D electromagnetic configuration. Returns 1 on success, 0 for a
+/// null world, a null config, or an invalid configuration (the world is
+/// left unchanged).
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `cfg` a valid pointer to an [`ElectroConfigFfi2`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_electro_config(
+    world: *mut World2,
+    cfg: *const ElectroConfigFfi2,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref = unsafe { &*cfg };
+    let Some(parsed) = electro_config_from_ffi2(cfg_ref) else {
+        return 0;
+    };
+    match unsafe { &mut *world }.electro.configure(parsed) {
+        Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Read the 2D electromagnetic configuration. Returns 1 on success, 0 for
+/// a null world/out pointer.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `out` a valid pointer to an [`ElectroConfigFfi2`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_electro_config(
+    world: *mut World2,
+    out: *mut ElectroConfigFfi2,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    unsafe {
+        *out = electro_config_to_ffi2(&world_ref.electro.config);
+    }
+    1
+}
+
+/// Set the 3D electromagnetic configuration. See
+/// [`phieng_world_set_electro_config`].
+///
+/// # Safety
+/// See [`phieng_world_set_electro_config`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_electro_config(
+    world: *mut phieng_dynamics::World3,
+    cfg: *const ElectroConfigFfi3,
+) -> i32 {
+    if world.is_null() || cfg.is_null() {
+        return 0;
+    }
+    let cfg_ref = unsafe { &*cfg };
+    let Some(parsed) = electro_config_from_ffi3(cfg_ref) else {
+        return 0;
+    };
+    match unsafe { &mut *world }.electro.configure(parsed) {
+        Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Read the 3D electromagnetic configuration. See
+/// [`phieng_world_get_electro_config`].
+///
+/// # Safety
+/// See [`phieng_world_get_electro_config`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_electro_config(
+    world: *mut phieng_dynamics::World3,
+    out: *mut ElectroConfigFfi3,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    unsafe {
+        *out = electro_config_to_ffi3(&world_ref.electro.config);
+    }
+    1
+}
+
+/// Set the 2D per-body electromagnetic state. Returns 1 on success, 0 for
+/// a null pointer, a stale id, or a non-finite field.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `state` a valid pointer to an [`ElectroBodyFfi`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_electro_state(
+    world: *mut World2,
+    body_id: u32,
+    state: *const ElectroBodyFfi,
+) -> i32 {
+    if world.is_null() || state.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    let Some(parsed) = electro_body_from_ffi2(unsafe { &*state }) else {
+        return 0;
+    };
+    world_ref.bodies[index].electro = parsed;
+    1
+}
+
+/// Read the 2D per-body electromagnetic state. Returns 1 on success, 0 for
+/// a null pointer or a stale id.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `out` a valid pointer to an [`ElectroBodyFfi`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_electro_state(
+    world: *mut World2,
+    body_id: u32,
+    out: *mut ElectroBodyFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    unsafe {
+        *out = electro_body_to_ffi2(&world_ref.bodies[index].electro);
+    }
+    1
+}
+
+/// Set the 3D per-body electromagnetic state. See
+/// [`phieng_world_set_body_electro_state`].
+///
+/// # Safety
+/// See [`phieng_world_set_body_electro_state`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_electro_state(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    state: *const ElectroBodyFfi,
+) -> i32 {
+    if world.is_null() || state.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &mut *world };
+    let index = body_id as usize;
+    if index >= world_ref.bodies.len() || world_ref.bodies[index].id != index {
+        return 0;
+    }
+    let Some(parsed) = electro_body_from_ffi3(unsafe { &*state }) else {
+        return 0;
+    };
+    world_ref.bodies[index].electro = parsed;
+    1
+}
+
+/// Read the 3D per-body electromagnetic state. See
+/// [`phieng_world_get_body_electro_state`].
+///
+/// # Safety
+/// See [`phieng_world_get_body_electro_state`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_electro_state(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    out: *mut ElectroBodyFfi,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let index = body_id as usize;
+    if index >= world_ref.bodies.len() || world_ref.bodies[index].id != index {
+        return 0;
+    }
+    unsafe {
+        *out = electro_body_to_ffi3(&world_ref.bodies[index].electro);
+    }
+    1
+}
+
+/// Set a 2D body's net charge. Returns 1 on success, 0 for a null world,
+/// a stale id, or a non-finite charge.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_set_body_charge(
+    world: *mut World2,
+    body_id: u32,
+    charge: f32,
+) -> i32 {
+    if world.is_null() || !charge.is_finite() {
+        return 0;
+    }
+    let world_ref = unsafe { &mut *world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    world_ref.bodies[index].electro.charge = charge.clamp(
+        -phieng_electromagnetics::MAX_CHARGE,
+        phieng_electromagnetics::MAX_CHARGE,
+    );
+    1
+}
+
+/// Read a 2D body's net charge. Returns 1 on success, 0 otherwise.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `out` a valid pointer to an `f32` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_get_body_charge(
+    world: *mut World2,
+    body_id: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let Some(index) = body_by_id(world_ref, body_id) else {
+        return 0;
+    };
+    unsafe {
+        *out = world_ref.bodies[index].electro.charge;
+    }
+    1
+}
+
+/// Set a 3D body's net charge. See [`phieng_world_set_body_charge`].
+///
+/// # Safety
+/// See [`phieng_world_set_body_charge`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_set_body_charge(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    charge: f32,
+) -> i32 {
+    if world.is_null() || !charge.is_finite() {
+        return 0;
+    }
+    let world_ref = unsafe { &mut *world };
+    let index = body_id as usize;
+    if index >= world_ref.bodies.len() || world_ref.bodies[index].id != index {
+        return 0;
+    }
+    world_ref.bodies[index].electro.charge = charge.clamp(
+        -phieng_electromagnetics::MAX_CHARGE,
+        phieng_electromagnetics::MAX_CHARGE,
+    );
+    1
+}
+
+/// Read a 3D body's net charge. See [`phieng_world_get_body_charge`].
+///
+/// # Safety
+/// See [`phieng_world_get_body_charge`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_get_body_charge(
+    world: *mut phieng_dynamics::World3,
+    body_id: u32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let index = body_id as usize;
+    if index >= world_ref.bodies.len() || world_ref.bodies[index].id != index {
+        return 0;
+    }
+    unsafe {
+        *out = world_ref.bodies[index].electro.charge;
+    }
+    1
+}
+
+/// The electric field at a world point. Returns 1 on success, 0 for a
+/// null world/output or non-finite coordinates. `out` receives two `f32`s.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `out` a valid pointer to two `f32`s (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_electric_field_at(
+    world: *mut World2,
+    x: f32,
+    y: f32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() || !x.is_finite() || !y.is_finite() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let e = phieng_dynamics::electro::electric_field_at_2(
+        &world_ref.bodies,
+        &world_ref.electro,
+        Vec2::new(x, y),
+    );
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, 2) };
+    slice[0] = e.x;
+    slice[1] = e.y;
+    1
+}
+
+/// The electric potential at a world point. Returns `f32::NAN` for a null
+/// world or non-finite coordinates.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_electric_potential_at(
+    world: *mut World2,
+    x: f32,
+    y: f32,
+) -> f32 {
+    if world.is_null() || !x.is_finite() || !y.is_finite() {
+        return f32::NAN;
+    }
+    let world_ref = unsafe { &*world };
+    phieng_dynamics::electro::electric_potential_at_2(
+        &world_ref.bodies,
+        &world_ref.electro,
+        Vec2::new(x, y),
+    )
+}
+
+/// The 3D electric field at a world point. See
+/// [`phieng_world_electric_field_at`].
+///
+/// # Safety
+/// See [`phieng_world_electric_field_at`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_electric_field_at(
+    world: *mut phieng_dynamics::World3,
+    x: f32,
+    y: f32,
+    z: f32,
+    out: *mut f32,
+) -> i32 {
+    if world.is_null() || out.is_null() || !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    let e = phieng_dynamics::electro::electric_field_at_3(
+        &world_ref.bodies,
+        &world_ref.electro,
+        Vec3::new(x, y, z),
+    );
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, 3) };
+    slice[0] = e.x;
+    slice[1] = e.y;
+    slice[2] = e.z;
+    1
+}
+
+/// The 3D electric potential at a world point. See
+/// [`phieng_world_electric_potential_at`].
+///
+/// # Safety
+/// See [`phieng_world_electric_potential_at`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_electric_potential_at(
+    world: *mut phieng_dynamics::World3,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> f32 {
+    if world.is_null() || !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return f32::NAN;
+    }
+    let world_ref = unsafe { &*world };
+    phieng_dynamics::electro::electric_potential_at_3(
+        &world_ref.bodies,
+        &world_ref.electro,
+        Vec3::new(x, y, z),
+    )
+}
+
+/// The 2D field energy. Returns 1 when a solved grid exists and `out`
+/// receives the energy, 0 otherwise.
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null) and
+/// `out` a valid pointer to an `f64` (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_electro_field_energy(
+    world: *mut World2,
+    out: *mut f64,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    match world_ref.electro.field() {
+        Some(grid) => {
+            unsafe {
+                *out = grid.energy() as f64;
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// The 3D field energy. See [`phieng_world_electro_field_energy`].
+///
+/// # Safety
+/// See [`phieng_world_electro_field_energy`].
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_electro_field_energy(
+    world: *mut phieng_dynamics::World3,
+    out: *mut f64,
+) -> i32 {
+    if world.is_null() || out.is_null() {
+        return 0;
+    }
+    let world_ref = unsafe { &*world };
+    match world_ref.electro.field() {
+        Some(grid) => {
+            unsafe {
+                *out = grid.energy() as f64;
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Whether the last field solve was refused. Returns 1 when stalled, 0
+/// otherwise (including a null world).
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world_electro_field_stalled(world: *mut World2) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    i32::from(unsafe { &*world }.electro.last_field_stalled)
+}
+
+/// The 3D counterpart of [`phieng_world_electro_field_stalled`].
+///
+/// # Safety
+/// `world` must be a live pointer from [`phieng_world3_new`] (or null).
+#[no_mangle]
+pub unsafe extern "C" fn phieng_world3_electro_field_stalled(
+    world: *mut phieng_dynamics::World3,
+) -> i32 {
+    if world.is_null() {
+        return 0;
+    }
+    i32::from(unsafe { &*world }.electro.last_field_stalled)
+}

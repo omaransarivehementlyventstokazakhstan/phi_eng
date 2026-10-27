@@ -218,6 +218,14 @@ ID blocks (numeric ranges are disjoint, so the reused S is unambiguous):
               deposited in the nearby bodies and clamped, the nuclear
               state round-trips through a snapshot, and the config and
               the per-body state round-trip through the native FFI)
+    EM01-EM12  electromagnetics (mirrored both languages, two-letter
+              prefix: Coulomb repulsion and attraction, the uniform
+              field's q/m acceleration, charge-scale immunity, a static
+              body exerting without moving, enabled-but-zero charge
+              being bit-identical, the field mode pushing like charges
+              apart, a grounded conductor draining, the 3D mirror, the
+              analytic field/potential query, the native config/body
+              round-trip, and the JSON+binary snapshot round-trip)
 """
 
 import re
@@ -232,8 +240,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # native DLL on both sides).
 EXEMPT_CS_ONLY = {"F28", "F29", "F30", "F36", "F40"}
 
-RUST_FN = re.compile(r"\bfn\s+([A-Za-z])(\d{2})\w*")
-CS_METHOD = re.compile(r"public\s+(?:unsafe\s+)?(?:void|async\s+Task)\s+([A-Za-z])(\d{2})\w*\s*\(")
+RUST_FN = re.compile(r"\bfn\s+([A-Za-z]{1,2})(\d{2})\w*")
+CS_METHOD = re.compile(r"public\s+(?:unsafe\s+)?(?:void|async\s+Task)\s+([A-Za-z]{1,2})(\d{2})\w*\s*\(")
 
 
 def collect(pattern: re.Pattern, files) -> set[str]:

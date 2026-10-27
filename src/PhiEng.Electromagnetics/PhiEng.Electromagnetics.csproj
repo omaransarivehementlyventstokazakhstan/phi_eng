@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>PhiEng.Electromagnetics</PackageId>
+    <Title>PhiEng.Electromagnetics</Title>
+    <Description>Electrostatics and electrodynamics for PhiEng: Coulomb forces, Lorentz forces and the electrostatic grid.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhiEng.Math\PhiEng.Math.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -30,6 +30,8 @@
 pub struct PhaseTimings {
     /// Gravity kick plus the ambient-force kick.
     pub gravity: f64,
+    /// The electromagnetic kick.
+    pub em: f64,
     /// The SPH fluid phase (zero when the fluid holds no particles).
     pub fluid: f64,
     /// Broad-phase AABB computation (one AABB per body).
@@ -63,6 +65,7 @@ impl PhaseTimings {
     /// bookkeeping around the phases are not attributed to a phase.
     pub fn total_ms(&self) -> f64 {
         self.gravity
+            + self.em
             + self.fluid
             + self.broadphase_aabb
             + self.broadphase_rebuild
@@ -87,6 +90,7 @@ impl PhaseTimings {
     /// Add one step's worth of accumulators into this total.
     pub(crate) fn merge(&mut self, other: PhaseTimings) {
         self.gravity += other.gravity;
+        self.em += other.em;
         self.fluid += other.fluid;
         self.broadphase_aabb += other.broadphase_aabb;
         self.broadphase_rebuild += other.broadphase_rebuild;

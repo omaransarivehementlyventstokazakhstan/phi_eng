@@ -160,6 +160,11 @@ public class World2
     public NuclearState2 Nuclear => _nuclear;
 
     private readonly NuclearState2 _nuclear = new();
+    /// <summary>
+    /// The electromagnetic simulation state (see <see cref="ElectroConfig2"/>).
+    /// Disabled by default.
+    /// </summary>
+    public ElectroWorldState2 Electro { get; } = new();
     private readonly List<(int, int)> _pairs = new();
     private readonly List<Vector2> _vertsA = new();
     private readonly List<Vector2> _vertsB = new();
@@ -660,6 +665,13 @@ public class World2
             AmbientIntegration.Kick2(Bodies, Ambient, Time, h);
         }
 
+        // 1a-2. Electromagnetic kick (see ElectroIntegration). Same slot
+        // and Verlet split as gravity.
+        if (Electro.IsActive)
+        {
+            ElectroIntegration.Kick2(Bodies, Electro, h);
+        }
+
         // 1b. Fluid phase - SPH particles and two-way body coupling. Runs
         // before broadphase so the rigid pipeline observes post-fluid
         // velocities; a no-op when the fluid holds no particles.
@@ -891,6 +903,10 @@ public class World2
             {
                 AmbientIntegration.Kick2(Bodies, Ambient, Time, dt * 0.5f);
             }
+            if (Electro.IsActive)
+            {
+                ElectroIntegration.Kick2(Bodies, Electro, dt * 0.5f);
+            }
         }
         else
         {
@@ -899,6 +915,12 @@ public class World2
             {
                 if (!body.IsSleeping) body.Integrate(dt);
             }
+        }
+
+        // 5b-2. Electromagnetic bookkeeping (drains and the field solve).
+        if (Electro.IsActive)
+        {
+            ElectroIntegration.Step2(Bodies, Electro, dt);
         }
 
         // 5c. Nuclear decay and fission: fills a per-body heat budget

@@ -1,4 +1,5 @@
 using System.Numerics;
+using PhiEng.Electromagnetics;
 using PhiEng.Math;
 
 namespace PhiEng.Dynamics;
@@ -131,6 +132,11 @@ public class RigidBody3
     /// <see cref="RigidBody2.Nuclear"/>.
     /// </summary>
     public NuclearState Nuclear { get; } = new();
+    /// <summary>
+    /// The electromagnetic state (cold: the electro phase). See
+    /// <see cref="RigidBody2.Electro"/>.
+    /// </summary>
+    public ElectroState3 Electro { get; set; } = ElectroState3.Default;
     /// <summary>
     /// Thermal-expansion factor currently applied to this body's shape
     /// (1.0 = not expanded). See <see cref="RigidBody2.ExpansionScale"/>.
@@ -366,3 +372,4 @@ public class RigidBody3
         return Velocity.Length() < linearThreshold && AngularVelocity.Length() < angularThreshold;
     }
 }
+

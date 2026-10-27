@@ -1762,4 +1762,140 @@ public float OccluderTransmittance;
         uint* @out,
         uint cap);
 
+    // ---- Electromagnetics (mirrors the phieng_world[_3]_*_electro_* functions in ffi.rs) ----
+
+    /// <summary>2D electromagnetic config. Mirrors Rust <c>ElectroConfigFfi2</c> — never reorder (80 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ElectroConfigFfi2
+    {
+        public uint Mode;
+        public uint Boundary;
+        public uint Enabled;
+        public float CoulombK;
+        public float Softening;
+        public float Ex;
+        public float Ey;
+        public float Bz;
+        public float Permittivity;
+        public float Permeability;
+        public float MaxAcceleration;
+        public uint Nx;
+        public uint Ny;
+        public float Dx;
+        public float Ox;
+        public float Oy;
+        public uint Iterations;
+        public float Omega;
+        public float EpsR;
+        public uint SnapshotField;
+    }
+
+    /// <summary>3D electromagnetic config. Mirrors Rust <c>ElectroConfigFfi3</c> — never reorder (100 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ElectroConfigFfi3
+    {
+        public uint Mode;
+        public uint Boundary;
+        public uint Enabled;
+        public float CoulombK;
+        public float Softening;
+        public float Ex;
+        public float Ey;
+        public float Ez;
+        public float Bx;
+        public float By;
+        public float Bz;
+        public float Permittivity;
+        public float Permeability;
+        public float MaxAcceleration;
+        public uint Nx;
+        public uint Ny;
+        public uint Nz;
+        public float Dx;
+        public float Ox;
+        public float Oy;
+        public float Oz;
+        public uint Iterations;
+        public float Omega;
+        public float EpsR;
+        public uint SnapshotField;
+    }
+
+    /// <summary>Per-body electromagnetic state. Mirrors Rust <c>ElectroBodyFfi</c> — never reorder (44 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ElectroBodyFfi
+    {
+        public float Charge;
+        public float ChargeScale;
+        public float Conductivity;
+        public float Permittivity;
+        public float Permeability;
+        public float MagneticMomentX;
+        public float MagneticMomentY;
+        public float MagneticMomentZ;
+        public float Capacitance;
+        public float Resistance;
+        public uint Flags;
+    }
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_electro_config(IntPtr world, ElectroConfigFfi2* cfg);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_electro_config(IntPtr world, ElectroConfigFfi2* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_electro_config(IntPtr world, ElectroConfigFfi3* cfg);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_electro_config(IntPtr world, ElectroConfigFfi3* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_body_electro_state(IntPtr world, uint bodyId, ElectroBodyFfi* state);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_electro_state(IntPtr world, uint bodyId, ElectroBodyFfi* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_body_electro_state(IntPtr world, uint bodyId, ElectroBodyFfi* state);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_electro_state(IntPtr world, uint bodyId, ElectroBodyFfi* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_set_body_charge(IntPtr world, uint bodyId, float charge);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_get_body_charge(IntPtr world, uint bodyId, float* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_set_body_charge(IntPtr world, uint bodyId, float charge);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_get_body_charge(IntPtr world, uint bodyId, float* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_electric_field_at(IntPtr world, float x, float y, float* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial float phieng_world_electric_potential_at(IntPtr world, float x, float y);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_electric_field_at(IntPtr world, float x, float y, float z, float* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial float phieng_world3_electric_potential_at(IntPtr world, float x, float y, float z);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_electro_field_energy(IntPtr world, double* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_electro_field_energy(IntPtr world, double* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world_electro_field_stalled(IntPtr world);
+
+    [LibraryImport(LibraryName)]
+    internal static unsafe partial int phieng_world3_electro_field_stalled(IntPtr world);
+
 }

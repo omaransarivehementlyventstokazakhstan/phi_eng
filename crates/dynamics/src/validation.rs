@@ -123,6 +123,11 @@ pub fn validate_body_2d(
             body.gravity_scale = 1.0;
             has_nonfinite = true;
         }
+        let electro = body.electro.sanitized();
+        if electro != body.electro {
+            body.electro = electro;
+            has_nonfinite = true;
+        }
         if has_nonfinite {
             if config.log_warnings {
                 log::warn!("body {} had non-finite state; zeroed", body.id);
@@ -212,6 +217,11 @@ pub fn validate_body_3d(
         }
         if !body.gravity_scale.is_finite() {
             body.gravity_scale = 1.0;
+            has_nonfinite = true;
+        }
+        let electro = body.electro.sanitized();
+        if electro != body.electro {
+            body.electro = electro;
             has_nonfinite = true;
         }
         if has_nonfinite {

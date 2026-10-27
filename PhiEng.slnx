@@ -3,6 +3,7 @@
     <Project Path="src/PhiEng.Broadphase/PhiEng.Broadphase.csproj" />
     <Project Path="src/PhiEng.Collision/PhiEng.Collision.csproj" />
     <Project Path="src/PhiEng.Dynamics/PhiEng.Dynamics.csproj" />
+    <Project Path="src/PhiEng.Electromagnetics/PhiEng.Electromagnetics.csproj" />
     <Project Path="src/PhiEng.Math/PhiEng.Math.csproj" />
     <Project Path="src/PhiEng/PhiEng.csproj" />
     <Project Path="src/PhiEng.Native/PhiEng.Native.csproj" />

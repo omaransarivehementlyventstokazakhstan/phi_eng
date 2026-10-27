@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\PhiEng.Collision\PhiEng.Collision.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Broadphase\PhiEng.Broadphase.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Dynamics\PhiEng.Dynamics.csproj" />
+    <ProjectReference Include="..\..\src\PhiEng.Electromagnetics\PhiEng.Electromagnetics.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Native\PhiEng.Native.csproj" />
     <ProjectReference Include="..\..\src\PhiEng.Quantum\PhiEng.Quantum.csproj" />
   </ItemGroup>

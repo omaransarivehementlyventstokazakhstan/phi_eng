@@ -88,6 +88,8 @@ cargo build --target x86_64-pc-windows-gnu --release -p phieng
 | `math` | `PhiEng.Math` | Vectors, quaternions, transforms, AABBs, inertia tensors |
 | `collision` | `PhiEng.Collision` | 2D SAT, 3D SAT / GJK / EPA, contact generation |
 | `broadphase` | `PhiEng.Broadphase` | Tiered backends (`BroadphaseMode`: brute force, spatial hash, dynamic AABB tree, hybrid auto-select) |
+| `electromagnetics` | `PhiEng.Electromagnetics` | Coulomb/Lorentz forces, field and potential queries, the electrostatic Poisson grid |
+| `quantum` | `PhiEng.Quantum` | Quantum states, operators, gates, grids and solvers |
 | `dynamics` | `PhiEng.Dynamics` | Bodies, materials, sequential-impulse solvers, worlds, 2D joints, snapshots |
 | `engine` | `PhiEng` (root) + `PhiEng.Native` | Re-exports, C ABI (`phieng_world_*`, `phieng_world3_*`, `phieng_world_*_joint`) |
 
@@ -101,7 +103,7 @@ counts, tolerances, and policy decisions).
 |---|---|
 | Rust crates (`phieng-*`) | 0.4.0, MSRV 1.78, edition 2021 |
 | NuGet packages (`PhiEng.*`) | 0.4.0, .NET 10 |
-| Snapshot schema | v12 (loaders accept v3–v12; older unknown versions are rejected, never misparsed) |
+| Snapshot schema | v17 (loaders accept v3–v17; older unknown versions are rejected, never misparsed) |
 | C ABI | `phieng_world_*` / `phieng_world3_*` symbols, `phieng.dll` / `libphieng.so(.dylib)` |
 | Determinism | bit-exact within one backend; behavior parity (not bit parity) across Rust↔C# |
 

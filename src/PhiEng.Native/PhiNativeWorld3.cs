@@ -1,5 +1,6 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Electromagnetics;
 using PhiEng.Quantum;
 
 namespace PhiEng.Native;
@@ -1968,4 +1969,186 @@ public sealed class PhiNativeWorld3 : IDisposable
         }
     }
 
+    // ---- Electromagnetics ----
+
+    /// <summary>Set the 3D electromagnetic configuration.</summary>
+    public bool SetElectroConfig(ElectroConfig3 config)
+    {
+        var ffi = ToElectroFfi(config);
+        unsafe { return NativeMethods.phieng_world3_set_electro_config(_handle, &ffi) == 1; }
+    }
+
+    /// <summary>Read the 3D electromagnetic configuration.</summary>
+    public ElectroConfig3 GetElectroConfig()
+    {
+        NativeMethods.ElectroConfigFfi3 ffi;
+        unsafe
+        {
+            if (NativeMethods.phieng_world3_get_electro_config(_handle, &ffi) != 1)
+                return ElectroConfig3.Default;
+        }
+        return FromElectroFfi(ffi);
+    }
+
+    /// <summary>Set a body's net charge.</summary>
+    public bool SetBodyCharge(int bodyId, float charge)
+    {
+        unsafe { return NativeMethods.phieng_world3_set_body_charge(_handle, (uint)bodyId, charge) == 1; }
+    }
+
+    /// <summary>Read a body's net charge (NaN for a stale id).</summary>
+    public float GetBodyCharge(int bodyId)
+    {
+        float q;
+        unsafe
+        {
+            return NativeMethods.phieng_world3_get_body_charge(_handle, (uint)bodyId, &q) == 1
+                ? q
+                : float.NaN;
+        }
+    }
+
+    /// <summary>Set a body's full electromagnetic state.</summary>
+    public bool SetBodyElectroState(int bodyId, ElectroState3 state)
+    {
+        var ffi = ToElectroBodyFfi(state);
+        unsafe
+        {
+            return NativeMethods.phieng_world3_set_body_electro_state(_handle, (uint)bodyId, &ffi) == 1;
+        }
+    }
+
+    /// <summary>Read a body's full electromagnetic state.</summary>
+    public ElectroState3 GetBodyElectroState(int bodyId)
+    {
+        NativeMethods.ElectroBodyFfi ffi;
+        unsafe
+        {
+            if (NativeMethods.phieng_world3_get_body_electro_state(_handle, (uint)bodyId, &ffi) != 1)
+                return ElectroState3.Default;
+        }
+        return FromElectroBodyFfi(ffi);
+    }
+
+    /// <summary>The electric field at a world point (zero on bad input).</summary>
+    public Vector3 ElectricFieldAt(Vector3 p)
+    {
+        float ex = 0.0f, ey = 0.0f, ez = 0.0f;
+        unsafe
+        {
+            return NativeMethods.phieng_world3_electric_field_at(_handle, p.X, p.Y, p.Z, &ex) == 1
+                ? new Vector3(ex, ey, ez)
+                : Vector3.Zero;
+        }
+    }
+
+    /// <summary>The electric potential at a world point (NaN on bad input).</summary>
+    public float ElectricPotentialAt(Vector3 p)
+    {
+        unsafe { return NativeMethods.phieng_world3_electric_potential_at(_handle, p.X, p.Y, p.Z); }
+    }
+
+    /// <summary>The solved field energy, or 0 when no grid exists.</summary>
+    public double ElectroFieldEnergy()
+    {
+        double e;
+        unsafe { return NativeMethods.phieng_world3_electro_field_energy(_handle, &e) == 1 ? e : 0.0; }
+    }
+
+    /// <summary>Whether the last field solve was refused.</summary>
+    public bool ElectroFieldStalled
+    {
+        get
+        {
+            unsafe { return NativeMethods.phieng_world3_electro_field_stalled(_handle) == 1; }
+        }
+    }
+
+    private static NativeMethods.ElectroConfigFfi3 ToElectroFfi(ElectroConfig3 c) => new()
+    {
+        Mode = (uint)c.Mode,
+        Boundary = (uint)c.Field.Boundary,
+        Enabled = c.Enabled ? 1u : 0u,
+        CoulombK = c.CoulombK,
+        Softening = c.Softening,
+        Ex = c.UniformE.X,
+        Ey = c.UniformE.Y,
+        Ez = c.UniformE.Z,
+        Bx = c.UniformB.X,
+        By = c.UniformB.Y,
+        Bz = c.UniformB.Z,
+        Permittivity = c.Permittivity,
+        Permeability = c.Permeability,
+        MaxAcceleration = c.MaxAcceleration,
+        Nx = c.Field.Nx,
+        Ny = c.Field.Ny,
+        Nz = c.Field.Nz,
+        Dx = c.Field.Dx,
+        Ox = c.Field.Origin.X,
+        Oy = c.Field.Origin.Y,
+        Oz = c.Field.Origin.Z,
+        Iterations = c.Field.Iterations,
+        Omega = c.Field.Omega,
+        EpsR = c.Field.EpsR,
+        SnapshotField = c.Field.SnapshotField ? 1u : 0u,
+    };
+
+    private static ElectroConfig3 FromElectroFfi(NativeMethods.ElectroConfigFfi3 f) => new()
+    {
+        Enabled = f.Enabled != 0,
+        Mode = (ElectroMode)f.Mode,
+        CoulombK = f.CoulombK,
+        Softening = f.Softening,
+        UniformE = new Vector3(f.Ex, f.Ey, f.Ez),
+        UniformB = new Vector3(f.Bx, f.By, f.Bz),
+        Permittivity = f.Permittivity,
+        Permeability = f.Permeability,
+        MaxAcceleration = f.MaxAcceleration,
+        Field = new FieldConfig3
+        {
+            Nx = f.Nx,
+            Ny = f.Ny,
+            Nz = f.Nz,
+            Dx = f.Dx,
+            Origin = new Vector3(f.Ox, f.Oy, f.Oz),
+            Iterations = f.Iterations,
+            Omega = f.Omega,
+            Boundary = (FieldBoundary)f.Boundary,
+            EpsR = f.EpsR,
+            SnapshotField = f.SnapshotField != 0,
+        },
+    };
+
+    private static NativeMethods.ElectroBodyFfi ToElectroBodyFfi(ElectroState3 s) => new()
+    {
+        Charge = s.Charge,
+        ChargeScale = s.ChargeScale,
+        Conductivity = s.Conductivity,
+        Permittivity = s.Permittivity,
+        Permeability = s.Permeability,
+        MagneticMomentX = s.MagneticMoment.X,
+        MagneticMomentY = s.MagneticMoment.Y,
+        MagneticMomentZ = s.MagneticMoment.Z,
+        Capacitance = s.Capacitance,
+        Resistance = s.Resistance,
+        Flags = (s.IsConductor ? 1u : 0u) | (s.IsGrounded ? 2u : 0u),
+    };
+
+    private static ElectroState3 FromElectroBodyFfi(NativeMethods.ElectroBodyFfi f) => new()
+    {
+        Charge = f.Charge,
+        ChargeScale = f.ChargeScale,
+        Conductivity = f.Conductivity,
+        Permittivity = f.Permittivity,
+        Permeability = f.Permeability,
+        MagneticMoment = new Vector3(f.MagneticMomentX, f.MagneticMomentY, f.MagneticMomentZ),
+        Capacitance = f.Capacitance,
+        Resistance = f.Resistance,
+        IsConductor = (f.Flags & 1) != 0,
+        IsGrounded = (f.Flags & 2) != 0,
+    };
+
 }
+
+
+

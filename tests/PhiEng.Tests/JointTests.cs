@@ -382,7 +382,7 @@ public class JointTests
         var (world, arm) = MotorPendulum(3.0f, 1000.0f, 0.0f);
         for (int i = 0; i < 60; i++) world.Step(Dt);
         string text = Snapshot.World2ToJson(world, SnapshotLoadMode.Exact);
-        Assert.Equal(Snapshot.SchemaVersion, JsonSchema(text));
+        Assert.Equal(Snapshot.MotorsSchemaVersion, (uint)JsonSchema(text));
         Assert.Contains("motor_speed", text);
         byte[] bytes = Snapshot.World2ToBinary(world, SnapshotLoadMode.Exact);
         var back = Snapshot.World2FromBinary(bytes, SnapshotLoadMode.Exact);
@@ -433,3 +433,4 @@ public class JointTests
         return a;
     }
 }
+

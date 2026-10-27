@@ -59,7 +59,7 @@ use super::{CachedContact, CachedContact3D, World2, World3};
 /// v6 adds the CCD config block (adaptive-substepping tunables).
 /// v5 adds the ambient-force config block (spring/drag/turbulence), the
 /// simulation clock, and per-body `ambient_scale`.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 16;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 17;
 /// Schema that introduced the thermal block (v8). Gates below must use
 /// this (not `VERSION`), so v8 payloads keep decoding after future
 /// schemas land.
@@ -96,7 +96,11 @@ const SNAPSHOT_SCHEMA_QUANTUM: u32 = 15;
 /// Schema that introduced joint motor records (v16): the speed, budget
 /// and accumulated impulse ride inside the hinge/prismatic joint
 /// records (2D and 3D), so older payloads decode with motors off.
-const SNAPSHOT_SCHEMA_MOTORS: u32 = 16;
+pub(crate) const SNAPSHOT_SCHEMA_MOTORS: u32 = 16;
+/// Schema that introduced the electromagnetic block (v17): the
+/// configuration, the per-body charge state and, when the field mode is
+/// on, the solved potential grid.
+const SNAPSHOT_SCHEMA_ELECTRO: u32 = 17;
 /// Schema that introduced the solver friction/restitution switches (v7).
 /// Explicit rather than `VERSION - 1`: the schema ladder is not
 /// contiguous-by-one (v8 is thermal, v9 is the tier block), so a
@@ -297,6 +301,9 @@ struct Body2Dto {
     /// Nuclear state (schema v12).
     #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
     nuclear: NuclearBodyDto,
+    /// Electromagnetic state (schema v17).
+    #[serde(default, skip_serializing_if = "ElectroBody2Dto::is_default")]
+    electro: ElectroBody2Dto,
     /// Collision layer the body belongs to (schema v13; default 1,
     /// elided).
     #[serde(
@@ -347,6 +354,9 @@ struct Body3Dto {
     /// Nuclear state (schema v12). See `Body2Dto::nuclear`.
     #[serde(default, skip_serializing_if = "NuclearBodyDto::is_default")]
     nuclear: NuclearBodyDto,
+    /// Electromagnetic state (schema v17). See `Body2Dto::electro`.
+    #[serde(default, skip_serializing_if = "ElectroBody3Dto::is_default")]
+    electro: ElectroBody3Dto,
     /// See `Body2Dto::collision_group`.
     #[serde(
         default = "default_collision_group",
@@ -2017,6 +2027,650 @@ fn apply_quantum(
     Ok(())
 }
 
+// ---- Electromagnetic DTOs (schema v17) ----
+
+/// Schema v17 field-grid configuration (2D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroFieldConfig2Dto {
+    /// The number of cells along X.
+    pub nx: u32,
+    /// The number of cells along Y.
+    pub ny: u32,
+    /// The cell size.
+    pub dx: f32,
+    /// The world-space origin `[x, y]`.
+    pub origin: [f32; 2],
+    /// Fixed SOR iterations.
+    pub iterations: u32,
+    /// SOR over-relaxation.
+    pub omega: f32,
+    /// 0 Dirichlet, 1 Neumann, 2 periodic.
+    pub boundary: u32,
+    /// Relative permittivity of the medium.
+    pub eps_r: f32,
+    /// Whether the field is stored in the snapshot.
+    pub snapshot_field: bool,
+}
+
+impl Default for ElectroFieldConfig2Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::FieldConfig2::default();
+        Self {
+            nx: d.nx,
+            ny: d.ny,
+            dx: d.dx,
+            origin: [d.origin.x, d.origin.y],
+            iterations: d.iterations,
+            omega: d.omega,
+            boundary: d.boundary as u32,
+            eps_r: d.eps_r,
+            snapshot_field: d.snapshot_field,
+        }
+    }
+}
+
+/// Schema v17 field-grid configuration (3D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroFieldConfig3Dto {
+    /// The number of cells along X.
+    pub nx: u32,
+    /// The number of cells along Y.
+    pub ny: u32,
+    /// The number of cells along Z.
+    pub nz: u32,
+    /// The cell size.
+    pub dx: f32,
+    /// The world-space origin `[x, y, z]`.
+    pub origin: [f32; 3],
+    /// Fixed SOR iterations.
+    pub iterations: u32,
+    /// SOR over-relaxation.
+    pub omega: f32,
+    /// 0 Dirichlet, 1 Neumann, 2 periodic.
+    pub boundary: u32,
+    /// Relative permittivity of the medium.
+    pub eps_r: f32,
+    /// Whether the field is stored in the snapshot.
+    pub snapshot_field: bool,
+}
+
+impl Default for ElectroFieldConfig3Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::FieldConfig3::default();
+        Self {
+            nx: d.nx,
+            ny: d.ny,
+            nz: d.nz,
+            dx: d.dx,
+            origin: [d.origin.x, d.origin.y, d.origin.z],
+            iterations: d.iterations,
+            omega: d.omega,
+            boundary: d.boundary as u32,
+            eps_r: d.eps_r,
+            snapshot_field: d.snapshot_field,
+        }
+    }
+}
+
+/// Schema v17 electromagnetic configuration (2D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroConfig2Dto {
+    /// Master switch.
+    pub enabled: bool,
+    /// 0 off, 1 pairwise, 2 field.
+    pub mode: u32,
+    /// Coulomb's constant.
+    pub coulomb_k: f32,
+    /// Softening length.
+    pub softening: f32,
+    /// Uniform external electric field X.
+    pub ex: f32,
+    /// Uniform external electric field Y.
+    pub ey: f32,
+    /// Uniform external magnetic field (out of plane).
+    pub bz: f32,
+    /// Relative permittivity of the medium.
+    pub permittivity: f32,
+    /// Relative permeability of the medium.
+    pub permeability: f32,
+    /// The acceleration cap.
+    pub max_acceleration: f32,
+    /// The field grid.
+    pub field: ElectroFieldConfig2Dto,
+}
+
+impl Default for ElectroConfig2Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::ElectroConfig2::default();
+        Self {
+            enabled: d.enabled,
+            mode: d.mode as u32,
+            coulomb_k: d.coulomb_k,
+            softening: d.softening,
+            ex: d.uniform_e.x,
+            ey: d.uniform_e.y,
+            bz: d.uniform_b,
+            permittivity: d.permittivity,
+            permeability: d.permeability,
+            max_acceleration: d.max_acceleration,
+            field: ElectroFieldConfig2Dto::default(),
+        }
+    }
+}
+
+impl ElectroConfig2Dto {
+    /// True when every field holds the engine default.
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Schema v17 electromagnetic configuration (3D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroConfig3Dto {
+    /// Master switch.
+    pub enabled: bool,
+    /// 0 off, 1 pairwise, 2 field.
+    pub mode: u32,
+    /// Coulomb's constant.
+    pub coulomb_k: f32,
+    /// Softening length.
+    pub softening: f32,
+    /// Uniform external electric field X.
+    pub ex: f32,
+    /// Uniform external electric field Y.
+    pub ey: f32,
+    /// Uniform external electric field Z.
+    pub ez: f32,
+    /// Uniform external magnetic field X.
+    pub bx: f32,
+    /// Uniform external magnetic field Y.
+    pub by: f32,
+    /// Uniform external magnetic field Z.
+    pub bz: f32,
+    /// Relative permittivity of the medium.
+    pub permittivity: f32,
+    /// Relative permeability of the medium.
+    pub permeability: f32,
+    /// The acceleration cap.
+    pub max_acceleration: f32,
+    /// The field grid.
+    pub field: ElectroFieldConfig3Dto,
+}
+
+impl Default for ElectroConfig3Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::ElectroConfig3::default();
+        Self {
+            enabled: d.enabled,
+            mode: d.mode as u32,
+            coulomb_k: d.coulomb_k,
+            softening: d.softening,
+            ex: d.uniform_e.x,
+            ey: d.uniform_e.y,
+            ez: d.uniform_e.z,
+            bx: d.uniform_b.x,
+            by: d.uniform_b.y,
+            bz: d.uniform_b.z,
+            permittivity: d.permittivity,
+            permeability: d.permeability,
+            max_acceleration: d.max_acceleration,
+            field: ElectroFieldConfig3Dto::default(),
+        }
+    }
+}
+
+impl ElectroConfig3Dto {
+    /// True when every field holds the engine default.
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Schema v17 per-body electromagnetic state (2D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroBody2Dto {
+    /// The net charge.
+    pub charge: f32,
+    /// The coupling multiplier.
+    pub charge_scale: f32,
+    /// Reserved conductivity.
+    pub conductivity: f32,
+    /// Relative permittivity.
+    pub permittivity: f32,
+    /// Relative permeability.
+    pub permeability: f32,
+    /// The out-of-plane magnetic moment.
+    pub magnetic_moment: f32,
+    /// The capacitance to ground.
+    pub capacitance: f32,
+    /// The resistance to ground.
+    pub resistance: f32,
+    /// Whether the body is a conductor.
+    pub is_conductor: bool,
+    /// Whether the conductor is grounded.
+    pub is_grounded: bool,
+}
+
+impl Default for ElectroBody2Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::ElectroState2::default();
+        Self {
+            charge: d.charge,
+            charge_scale: d.charge_scale,
+            conductivity: d.conductivity,
+            permittivity: d.permittivity,
+            permeability: d.permeability,
+            magnetic_moment: d.magnetic_moment,
+            capacitance: d.capacitance,
+            resistance: d.resistance,
+            is_conductor: d.is_conductor,
+            is_grounded: d.is_grounded,
+        }
+    }
+}
+
+impl ElectroBody2Dto {
+    /// True when every field holds the engine default.
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Schema v17 per-body electromagnetic state (3D).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ElectroBody3Dto {
+    /// The net charge.
+    pub charge: f32,
+    /// The coupling multiplier.
+    pub charge_scale: f32,
+    /// Reserved conductivity.
+    pub conductivity: f32,
+    /// Relative permittivity.
+    pub permittivity: f32,
+    /// Relative permeability.
+    pub permeability: f32,
+    /// The magnetic dipole moment `[x, y, z]`.
+    pub magnetic_moment: [f32; 3],
+    /// The capacitance to ground.
+    pub capacitance: f32,
+    /// The resistance to ground.
+    pub resistance: f32,
+    /// Whether the body is a conductor.
+    pub is_conductor: bool,
+    /// Whether the conductor is grounded.
+    pub is_grounded: bool,
+}
+
+impl Default for ElectroBody3Dto {
+    fn default() -> Self {
+        let d = phieng_electromagnetics::ElectroState3::default();
+        Self {
+            charge: d.charge,
+            charge_scale: d.charge_scale,
+            conductivity: d.conductivity,
+            permittivity: d.permittivity,
+            permeability: d.permeability,
+            magnetic_moment: [
+                d.magnetic_moment.x,
+                d.magnetic_moment.y,
+                d.magnetic_moment.z,
+            ],
+            capacitance: d.capacitance,
+            resistance: d.resistance,
+            is_conductor: d.is_conductor,
+            is_grounded: d.is_grounded,
+        }
+    }
+}
+
+impl ElectroBody3Dto {
+    /// True when every field holds the engine default.
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Schema v17 world-level electromagnetic block (2D).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct Electro2Dto {
+    /// The configuration.
+    pub config: ElectroConfig2Dto,
+    /// The solved potential grid, row-major; empty when not stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phi: Vec<f32>,
+    /// The phase clock.
+    pub time: f32,
+}
+
+impl Electro2Dto {
+    /// True when the block carries nothing worth writing.
+    fn is_default(&self) -> bool {
+        self.config.is_default() && self.phi.is_empty() && self.time == 0.0
+    }
+}
+
+/// Schema v17 world-level electromagnetic block (3D). See
+/// [`Electro2Dto`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct Electro3Dto {
+    /// The configuration.
+    pub config: ElectroConfig3Dto,
+    /// The solved potential grid, row-major; empty when not stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phi: Vec<f32>,
+    /// The phase clock.
+    pub time: f32,
+}
+
+impl Electro3Dto {
+    /// True when the block carries nothing worth writing.
+    fn is_default(&self) -> bool {
+        self.config.is_default() && self.phi.is_empty() && self.time == 0.0
+    }
+}
+
+fn electro_config_dto_2(c: &phieng_electromagnetics::ElectroConfig2) -> ElectroConfig2Dto {
+    ElectroConfig2Dto {
+        enabled: c.enabled,
+        mode: c.mode as u32,
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        ex: c.uniform_e.x,
+        ey: c.uniform_e.y,
+        bz: c.uniform_b,
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        field: ElectroFieldConfig2Dto {
+            nx: c.field.nx,
+            ny: c.field.ny,
+            dx: c.field.dx,
+            origin: [c.field.origin.x, c.field.origin.y],
+            iterations: c.field.iterations,
+            omega: c.field.omega,
+            boundary: c.field.boundary as u32,
+            eps_r: c.field.eps_r,
+            snapshot_field: c.field.snapshot_field,
+        },
+    }
+}
+
+fn electro_config_from_dto_2(
+    d: &ElectroConfig2Dto,
+) -> Result<phieng_electromagnetics::ElectroConfig2, SnapshotError> {
+    let mode = match d.mode {
+        0 => phieng_electromagnetics::ElectroMode::Off,
+        1 => phieng_electromagnetics::ElectroMode::Pairwise,
+        2 => phieng_electromagnetics::ElectroMode::Field,
+        other => return corrupt(format!("unknown electro mode {other}")),
+    };
+    let boundary = match d.field.boundary {
+        0 => phieng_electromagnetics::FieldBoundary::Dirichlet,
+        1 => phieng_electromagnetics::FieldBoundary::Neumann,
+        2 => phieng_electromagnetics::FieldBoundary::Periodic,
+        other => return corrupt(format!("unknown field boundary {other}")),
+    };
+    let cfg = phieng_electromagnetics::ElectroConfig2 {
+        enabled: d.enabled,
+        mode,
+        coulomb_k: d.coulomb_k,
+        softening: d.softening,
+        uniform_e: Vec2::new(d.ex, d.ey),
+        uniform_b: d.bz,
+        permittivity: d.permittivity,
+        permeability: d.permeability,
+        max_acceleration: d.max_acceleration,
+        field: phieng_electromagnetics::FieldConfig2 {
+            nx: d.field.nx,
+            ny: d.field.ny,
+            dx: d.field.dx,
+            origin: Vec2::new(d.field.origin[0], d.field.origin[1]),
+            iterations: d.field.iterations,
+            omega: d.field.omega,
+            boundary,
+            eps_r: d.field.eps_r,
+            snapshot_field: d.field.snapshot_field,
+        },
+    };
+    cfg.validate()
+        .map_err(|e| SnapshotError::Corrupt(format!("invalid electro config: {e:?}")))?;
+    Ok(cfg)
+}
+
+fn electro_config_dto_3(c: &phieng_electromagnetics::ElectroConfig3) -> ElectroConfig3Dto {
+    ElectroConfig3Dto {
+        enabled: c.enabled,
+        mode: c.mode as u32,
+        coulomb_k: c.coulomb_k,
+        softening: c.softening,
+        ex: c.uniform_e.x,
+        ey: c.uniform_e.y,
+        ez: c.uniform_e.z,
+        bx: c.uniform_b.x,
+        by: c.uniform_b.y,
+        bz: c.uniform_b.z,
+        permittivity: c.permittivity,
+        permeability: c.permeability,
+        max_acceleration: c.max_acceleration,
+        field: ElectroFieldConfig3Dto {
+            nx: c.field.nx,
+            ny: c.field.ny,
+            nz: c.field.nz,
+            dx: c.field.dx,
+            origin: [c.field.origin.x, c.field.origin.y, c.field.origin.z],
+            iterations: c.field.iterations,
+            omega: c.field.omega,
+            boundary: c.field.boundary as u32,
+            eps_r: c.field.eps_r,
+            snapshot_field: c.field.snapshot_field,
+        },
+    }
+}
+
+fn electro_config_from_dto_3(
+    d: &ElectroConfig3Dto,
+) -> Result<phieng_electromagnetics::ElectroConfig3, SnapshotError> {
+    let mode = match d.mode {
+        0 => phieng_electromagnetics::ElectroMode::Off,
+        1 => phieng_electromagnetics::ElectroMode::Pairwise,
+        2 => phieng_electromagnetics::ElectroMode::Field,
+        other => return corrupt(format!("unknown electro mode {other}")),
+    };
+    let boundary = match d.field.boundary {
+        0 => phieng_electromagnetics::FieldBoundary::Dirichlet,
+        1 => phieng_electromagnetics::FieldBoundary::Neumann,
+        2 => phieng_electromagnetics::FieldBoundary::Periodic,
+        other => return corrupt(format!("unknown field boundary {other}")),
+    };
+    let cfg = phieng_electromagnetics::ElectroConfig3 {
+        enabled: d.enabled,
+        mode,
+        coulomb_k: d.coulomb_k,
+        softening: d.softening,
+        uniform_e: Vec3::new(d.ex, d.ey, d.ez),
+        uniform_b: Vec3::new(d.bx, d.by, d.bz),
+        permittivity: d.permittivity,
+        permeability: d.permeability,
+        max_acceleration: d.max_acceleration,
+        field: phieng_electromagnetics::FieldConfig3 {
+            nx: d.field.nx,
+            ny: d.field.ny,
+            nz: d.field.nz,
+            dx: d.field.dx,
+            origin: Vec3::new(d.field.origin[0], d.field.origin[1], d.field.origin[2]),
+            iterations: d.field.iterations,
+            omega: d.field.omega,
+            boundary,
+            eps_r: d.field.eps_r,
+            snapshot_field: d.field.snapshot_field,
+        },
+    };
+    cfg.validate()
+        .map_err(|e| SnapshotError::Corrupt(format!("invalid electro config: {e:?}")))?;
+    Ok(cfg)
+}
+
+fn electro_body_dto_2(s: &phieng_electromagnetics::ElectroState2) -> ElectroBody2Dto {
+    ElectroBody2Dto {
+        charge: s.charge,
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity,
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment: s.magnetic_moment,
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        is_conductor: s.is_conductor,
+        is_grounded: s.is_grounded,
+    }
+}
+
+fn electro_body_from_dto_2(d: &ElectroBody2Dto) -> phieng_electromagnetics::ElectroState2 {
+    phieng_electromagnetics::ElectroState2 {
+        charge: d.charge,
+        charge_scale: d.charge_scale,
+        conductivity: d.conductivity,
+        permittivity: d.permittivity,
+        permeability: d.permeability,
+        magnetic_moment: d.magnetic_moment,
+        capacitance: d.capacitance,
+        resistance: d.resistance,
+        is_conductor: d.is_conductor,
+        is_grounded: d.is_grounded,
+    }
+}
+
+fn electro_body_dto_3(s: &phieng_electromagnetics::ElectroState3) -> ElectroBody3Dto {
+    ElectroBody3Dto {
+        charge: s.charge,
+        charge_scale: s.charge_scale,
+        conductivity: s.conductivity,
+        permittivity: s.permittivity,
+        permeability: s.permeability,
+        magnetic_moment: [
+            s.magnetic_moment.x,
+            s.magnetic_moment.y,
+            s.magnetic_moment.z,
+        ],
+        capacitance: s.capacitance,
+        resistance: s.resistance,
+        is_conductor: s.is_conductor,
+        is_grounded: s.is_grounded,
+    }
+}
+
+fn electro_body_from_dto_3(d: &ElectroBody3Dto) -> phieng_electromagnetics::ElectroState3 {
+    phieng_electromagnetics::ElectroState3 {
+        charge: d.charge,
+        charge_scale: d.charge_scale,
+        conductivity: d.conductivity,
+        permittivity: d.permittivity,
+        permeability: d.permeability,
+        magnetic_moment: Vec3::new(
+            d.magnetic_moment[0],
+            d.magnetic_moment[1],
+            d.magnetic_moment[2],
+        ),
+        capacitance: d.capacitance,
+        resistance: d.resistance,
+        is_conductor: d.is_conductor,
+        is_grounded: d.is_grounded,
+    }
+}
+
+fn electro_dto_2(w: &World2) -> Electro2Dto {
+    let cfg = &w.electro.config;
+    let mut phi = Vec::new();
+    if cfg.mode == phieng_electromagnetics::ElectroMode::Field && cfg.field.snapshot_field {
+        if let Some(grid) = w.electro.field() {
+            phi.extend_from_slice(grid.phi());
+        }
+    }
+    Electro2Dto {
+        config: electro_config_dto_2(cfg),
+        phi,
+        time: w.electro.time,
+    }
+}
+
+fn electro_dto_3(w: &World3) -> Electro3Dto {
+    let cfg = &w.electro.config;
+    let mut phi = Vec::new();
+    if cfg.mode == phieng_electromagnetics::ElectroMode::Field && cfg.field.snapshot_field {
+        if let Some(grid) = w.electro.field() {
+            phi.extend_from_slice(grid.phi());
+        }
+    }
+    Electro3Dto {
+        config: electro_config_dto_3(cfg),
+        phi,
+        time: w.electro.time,
+    }
+}
+
+fn apply_electro_2(w: &mut World2, e: &Electro2Dto) -> Result<(), SnapshotError> {
+    if e.is_default() {
+        return Ok(());
+    }
+    let config = electro_config_from_dto_2(&e.config)?;
+    w.electro.config = config;
+    w.electro.time = e.time;
+    if !e.phi.is_empty() {
+        if config.mode != phieng_electromagnetics::ElectroMode::Field {
+            return corrupt("electro field data without field mode");
+        }
+        let mut grid =
+            phieng_electromagnetics::PoissonGrid2::new(config.field, config.coulomb_k)
+                .map_err(|err| SnapshotError::Corrupt(format!("invalid electro grid: {err:?}")))?;
+        if e.phi.len() != grid.cells() {
+            return corrupt(format!(
+                "electro field length {} disagrees with the grid's {}",
+                e.phi.len(),
+                grid.cells()
+            ));
+        }
+        grid.set_phi(e.phi.clone())
+            .map_err(|err| SnapshotError::Corrupt(format!("invalid electro field: {err:?}")))?;
+        w.electro.poisson = Some(grid);
+    }
+    Ok(())
+}
+
+fn apply_electro_3(w: &mut World3, e: &Electro3Dto) -> Result<(), SnapshotError> {
+    if e.is_default() {
+        return Ok(());
+    }
+    let config = electro_config_from_dto_3(&e.config)?;
+    w.electro.config = config;
+    w.electro.time = e.time;
+    if !e.phi.is_empty() {
+        if config.mode != phieng_electromagnetics::ElectroMode::Field {
+            return corrupt("electro field data without field mode");
+        }
+        let mut grid =
+            phieng_electromagnetics::PoissonGrid3::new(config.field, config.coulomb_k)
+                .map_err(|err| SnapshotError::Corrupt(format!("invalid electro grid: {err:?}")))?;
+        if e.phi.len() != grid.cells() {
+            return corrupt(format!(
+                "electro field length {} disagrees with the grid's {}",
+                e.phi.len(),
+                grid.cells()
+            ));
+        }
+        grid.set_phi(e.phi.clone())
+            .map_err(|err| SnapshotError::Corrupt(format!("invalid electro field: {err:?}")))?;
+        w.electro.poisson = Some(grid);
+    }
+    Ok(())
+}
+
 /// Broad-phase backend tag used by schema-everything worlds (the default
 /// grid). Tag values are part of the schema: 0 brute force, 1 spatial
 /// hash, 2 dynamic tree, 3 hybrid — matching
@@ -2434,6 +3088,9 @@ struct World2Dto {
     /// Nuclear configuration and nuclide table (schema v12).
     #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
     nuclear: NuclearConfigDto,
+    /// The electromagnetic block (schema v17).
+    #[serde(default, skip_serializing_if = "Electro2Dto::is_default")]
+    electro: Electro2Dto,
     /// The quantum field's configuration and wavefunction (schema v15).
     /// Omitted (and defaulted) for pre-v15 files so default output
     /// stays byte-identical.
@@ -2567,6 +3224,9 @@ struct World3Dto {
     /// Nuclear configuration and nuclide table (schema v12).
     #[serde(default, skip_serializing_if = "NuclearConfigDto::is_default")]
     nuclear: NuclearConfigDto,
+    /// The electromagnetic block (schema v17). See `World2Dto::electro`.
+    #[serde(default, skip_serializing_if = "Electro3Dto::is_default")]
+    electro: Electro3Dto,
     /// The quantum field's configuration and wavefunction (schema v15).
     /// See `World2Dto::quantum`.
     #[serde(default, skip_serializing_if = "QuantumDto::is_default")]
@@ -3097,6 +3757,7 @@ fn body2_dto(b: &RigidBody2) -> Body2Dto {
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
         nuclear: nuclear_body_dto(&b.nuclear),
+        electro: electro_body_dto_2(&b.electro),
         collision_group: b.collision_group,
         collision_mask: b.collision_mask,
         is_sensor: b.is_sensor,
@@ -3122,6 +3783,7 @@ fn body3_dto(b: &RigidBody3) -> Body3Dto {
         temperature: b.temperature,
         expansion_scale: b.expansion_scale,
         nuclear: nuclear_body_dto(&b.nuclear),
+        electro: electro_body_dto_3(&b.electro),
         collision_group: b.collision_group,
         collision_mask: b.collision_mask,
         is_sensor: b.is_sensor,
@@ -3334,6 +3996,9 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
+    // Schema v17: the electromagnetic block.
+    let electro = electro_dto_2(w);
+    let has_electro = !electro.is_default();
     // Schema v16: the label is the newest feature in use (minimality:
     // a motorless quantum world still writes v15, not v16). Each high
     // feature maps to the version that introduced it; the low ladder
@@ -3348,6 +4013,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         (has_collision_filters, SNAPSHOT_SCHEMA_COLLISION_FILTERS),
         (has_sensors, SNAPSHOT_SCHEMA_SENSORS),
         (has_quantum, SNAPSHOT_SCHEMA_QUANTUM),
+        (has_electro, SNAPSHOT_SCHEMA_ELECTRO),
         (
             w.joints.iter().any(|j| j.has_motor()),
             SNAPSHOT_SCHEMA_MOTORS,
@@ -3381,6 +4047,7 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
         nuclear: nuclear_config_dto(&w.nuclear.config),
+        electro,
         quantum,
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
@@ -3608,6 +4275,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
+    // Schema v17: the electromagnetic block.
+    let electro = electro_dto_3(w);
+    let has_electro = !electro.is_default();
     // Schema v16: the label is the newest feature in use (minimality:
     // a motorless quantum world still writes v15, not v16). Each high
     // feature maps to the version that introduced it; the low ladder
@@ -3622,6 +4292,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         (has_collision_filters, SNAPSHOT_SCHEMA_COLLISION_FILTERS),
         (has_sensors, SNAPSHOT_SCHEMA_SENSORS),
         (has_quantum, SNAPSHOT_SCHEMA_QUANTUM),
+        (has_electro, SNAPSHOT_SCHEMA_ELECTRO),
         (
             w.joints.iter().any(|j| j.has_motor()),
             SNAPSHOT_SCHEMA_MOTORS,
@@ -3655,6 +4326,7 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
         thermal_extras: thermal_extras_dto(&w.thermal.config),
         radiation_extras: radiation_extras_dto(&w.thermal.config),
         nuclear: nuclear_config_dto(&w.nuclear.config),
+        electro,
         quantum,
         broadphase_mode: broadphase_mode_discriminant(&w.broadphase_mode),
         collision_tier: collision_tier_dto(&w.collision_tier),
@@ -4053,6 +4725,8 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     };
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
+    // The electromagnetic state (schema v17).
+    body.electro = electro_body_from_dto_2(&b.electro);
     // The collision filter (schema v13). A file without one keeps
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
@@ -4131,6 +4805,8 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     };
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
+    // The electromagnetic state (schema v17).
+    body.electro = electro_body_from_dto_3(&b.electro);
     // The collision filter (schema v13). A file without one keeps
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
@@ -4717,6 +5393,11 @@ fn world2_from_dto(dto: &World2Dto, mode: LoadMode) -> Result<World2, SnapshotEr
     if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
         apply_quantum(&mut w.quantum, &dto.quantum)?;
     }
+    // Schema v17: the electromagnetic block. An older payload carries no
+    // block, so the phase stays off.
+    if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+        apply_electro_2(&mut w, &dto.electro)?;
+    }
     Ok(w)
 }
 
@@ -4786,6 +5467,10 @@ fn world3_from_dto(dto: &World3Dto, mode: LoadMode) -> Result<World3, SnapshotEr
     // Schema v15: the quantum field (see `world2_from_dto`).
     if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
         apply_quantum(&mut w.quantum, &dto.quantum)?;
+    }
+    // Schema v17: the electromagnetic block (see `world2_from_dto`).
+    if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+        apply_electro_3(&mut w, &dto.electro)?;
     }
     Ok(w)
 }
@@ -5482,6 +6167,10 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
         if dto.schema >= SNAPSHOT_SCHEMA_SENSORS {
             write_u8(&mut p, u8::from(b.is_sensor));
         }
+        // Schema v17: the per-body electromagnetic state.
+        if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+            encode_electro_body_2(&mut p, &b.electro);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -5506,6 +6195,10 @@ fn encode_world2(dto: &World2Dto) -> Result<Vec<u8>, SnapshotError> {
     // payload (own block, so every earlier payload still decodes).
     if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
         encode_quantum(&mut p, &dto.quantum)?;
+    }
+    // Schema v17: the electromagnetic block, appended at the end.
+    if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+        encode_electro_2(&mut p, &dto.electro)?;
     }
     Ok(encode_envelope(KIND_WORLD2, dto.schema, &p))
 }
@@ -6068,6 +6761,233 @@ fn decode_quantum(r: &mut Reader, version: u32) -> Result<QuantumDto, SnapshotEr
         real,
         imag,
     })
+}
+
+// ---- Electromagnetic binary helpers (schema v17) ----
+
+fn encode_electro_body_2(out: &mut Vec<u8>, s: &ElectroBody2Dto) {
+    write_f32(out, s.charge);
+    write_f32(out, s.charge_scale);
+    write_f32(out, s.conductivity);
+    write_f32(out, s.permittivity);
+    write_f32(out, s.permeability);
+    write_f32(out, s.magnetic_moment);
+    write_f32(out, s.capacitance);
+    write_f32(out, s.resistance);
+    let flags = u8::from(s.is_conductor) | (u8::from(s.is_grounded) << 1);
+    write_u8(out, flags);
+}
+
+fn decode_electro_body_2(r: &mut Reader) -> Result<ElectroBody2Dto, SnapshotError> {
+    let dto = ElectroBody2Dto {
+        charge: r.read_f32()?,
+        charge_scale: r.read_f32()?,
+        conductivity: r.read_f32()?,
+        permittivity: r.read_f32()?,
+        permeability: r.read_f32()?,
+        magnetic_moment: r.read_f32()?,
+        capacitance: r.read_f32()?,
+        resistance: r.read_f32()?,
+        is_conductor: r.read_u8()? & 1 != 0,
+        is_grounded: r.read_u8()? & 2 != 0,
+    };
+    Ok(dto)
+}
+
+fn encode_electro_body_3(out: &mut Vec<u8>, s: &ElectroBody3Dto) {
+    write_f32(out, s.charge);
+    write_f32(out, s.charge_scale);
+    write_f32(out, s.conductivity);
+    write_f32(out, s.permittivity);
+    write_f32(out, s.permeability);
+    write_f32(out, s.magnetic_moment[0]);
+    write_f32(out, s.magnetic_moment[1]);
+    write_f32(out, s.magnetic_moment[2]);
+    write_f32(out, s.capacitance);
+    write_f32(out, s.resistance);
+    let flags = u8::from(s.is_conductor) | (u8::from(s.is_grounded) << 1);
+    write_u8(out, flags);
+}
+
+fn decode_electro_body_3(r: &mut Reader) -> Result<ElectroBody3Dto, SnapshotError> {
+    let dto = ElectroBody3Dto {
+        charge: r.read_f32()?,
+        charge_scale: r.read_f32()?,
+        conductivity: r.read_f32()?,
+        permittivity: r.read_f32()?,
+        permeability: r.read_f32()?,
+        magnetic_moment: [r.read_f32()?, r.read_f32()?, r.read_f32()?],
+        capacitance: r.read_f32()?,
+        resistance: r.read_f32()?,
+        is_conductor: r.read_u8()? & 1 != 0,
+        is_grounded: r.read_u8()? & 2 != 0,
+    };
+    Ok(dto)
+}
+
+fn encode_electro_2(out: &mut Vec<u8>, e: &Electro2Dto) -> Result<(), SnapshotError> {
+    if e.phi.len() > phieng_electromagnetics::MAX_FIELD_CELLS {
+        return Err(SnapshotError::Corrupt(
+            "electro field is larger than the snapshot cap".into(),
+        ));
+    }
+    write_u8(out, u8::from(e.config.enabled));
+    write_u32(out, e.config.mode);
+    write_f32(out, e.config.coulomb_k);
+    write_f32(out, e.config.softening);
+    write_f32(out, e.config.ex);
+    write_f32(out, e.config.ey);
+    write_f32(out, e.config.bz);
+    write_f32(out, e.config.permittivity);
+    write_f32(out, e.config.permeability);
+    write_f32(out, e.config.max_acceleration);
+    write_u32(out, e.config.field.nx);
+    write_u32(out, e.config.field.ny);
+    write_f32(out, e.config.field.dx);
+    write_f32(out, e.config.field.origin[0]);
+    write_f32(out, e.config.field.origin[1]);
+    write_u32(out, e.config.field.iterations);
+    write_f32(out, e.config.field.omega);
+    write_u32(out, e.config.field.boundary);
+    write_f32(out, e.config.field.eps_r);
+    write_u8(out, u8::from(e.config.field.snapshot_field));
+    write_u32(out, e.phi.len() as u32);
+    for p in &e.phi {
+        write_f32(out, *p);
+    }
+    write_f32(out, e.time);
+    Ok(())
+}
+
+fn decode_electro_2(r: &mut Reader, version: u32) -> Result<Electro2Dto, SnapshotError> {
+    if version < SNAPSHOT_SCHEMA_ELECTRO {
+        return Ok(Electro2Dto::default());
+    }
+    let config = ElectroConfig2Dto {
+        enabled: r.read_u8()? != 0,
+        mode: r.read_u32()?,
+        coulomb_k: r.read_f32()?,
+        softening: r.read_f32()?,
+        ex: r.read_f32()?,
+        ey: r.read_f32()?,
+        bz: r.read_f32()?,
+        permittivity: r.read_f32()?,
+        permeability: r.read_f32()?,
+        max_acceleration: r.read_f32()?,
+        field: ElectroFieldConfig2Dto {
+            nx: r.read_u32()?,
+            ny: r.read_u32()?,
+            dx: r.read_f32()?,
+            origin: [r.read_f32()?, r.read_f32()?],
+            iterations: r.read_u32()?,
+            omega: r.read_f32()?,
+            boundary: r.read_u32()?,
+            eps_r: r.read_f32()?,
+            snapshot_field: r.read_u8()? != 0,
+        },
+    };
+    let count = r.read_u32()? as usize;
+    if count > phieng_electromagnetics::MAX_FIELD_CELLS {
+        return Err(SnapshotError::Parse(
+            "electro field exceeds the snapshot cap".into(),
+        ));
+    }
+    let mut phi = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        let p = r.read_f32()?;
+        finite(p, "electro.phi")?;
+        phi.push(p);
+    }
+    let time = r.read_f32()?;
+    finite(time, "electro.time")?;
+    Ok(Electro2Dto { config, phi, time })
+}
+
+fn encode_electro_3(out: &mut Vec<u8>, e: &Electro3Dto) -> Result<(), SnapshotError> {
+    if e.phi.len() > phieng_electromagnetics::MAX_FIELD_CELLS {
+        return Err(SnapshotError::Corrupt(
+            "electro field is larger than the snapshot cap".into(),
+        ));
+    }
+    write_u8(out, u8::from(e.config.enabled));
+    write_u32(out, e.config.mode);
+    write_f32(out, e.config.coulomb_k);
+    write_f32(out, e.config.softening);
+    write_f32(out, e.config.ex);
+    write_f32(out, e.config.ey);
+    write_f32(out, e.config.ez);
+    write_f32(out, e.config.bx);
+    write_f32(out, e.config.by);
+    write_f32(out, e.config.bz);
+    write_f32(out, e.config.permittivity);
+    write_f32(out, e.config.permeability);
+    write_f32(out, e.config.max_acceleration);
+    write_u32(out, e.config.field.nx);
+    write_u32(out, e.config.field.ny);
+    write_u32(out, e.config.field.nz);
+    write_f32(out, e.config.field.dx);
+    write_f32(out, e.config.field.origin[0]);
+    write_f32(out, e.config.field.origin[1]);
+    write_f32(out, e.config.field.origin[2]);
+    write_u32(out, e.config.field.iterations);
+    write_f32(out, e.config.field.omega);
+    write_u32(out, e.config.field.boundary);
+    write_f32(out, e.config.field.eps_r);
+    write_u8(out, u8::from(e.config.field.snapshot_field));
+    write_u32(out, e.phi.len() as u32);
+    for p in &e.phi {
+        write_f32(out, *p);
+    }
+    write_f32(out, e.time);
+    Ok(())
+}
+
+fn decode_electro_3(r: &mut Reader, version: u32) -> Result<Electro3Dto, SnapshotError> {
+    if version < SNAPSHOT_SCHEMA_ELECTRO {
+        return Ok(Electro3Dto::default());
+    }
+    let config = ElectroConfig3Dto {
+        enabled: r.read_u8()? != 0,
+        mode: r.read_u32()?,
+        coulomb_k: r.read_f32()?,
+        softening: r.read_f32()?,
+        ex: r.read_f32()?,
+        ey: r.read_f32()?,
+        ez: r.read_f32()?,
+        bx: r.read_f32()?,
+        by: r.read_f32()?,
+        bz: r.read_f32()?,
+        permittivity: r.read_f32()?,
+        permeability: r.read_f32()?,
+        max_acceleration: r.read_f32()?,
+        field: ElectroFieldConfig3Dto {
+            nx: r.read_u32()?,
+            ny: r.read_u32()?,
+            nz: r.read_u32()?,
+            dx: r.read_f32()?,
+            origin: [r.read_f32()?, r.read_f32()?, r.read_f32()?],
+            iterations: r.read_u32()?,
+            omega: r.read_f32()?,
+            boundary: r.read_u32()?,
+            eps_r: r.read_f32()?,
+            snapshot_field: r.read_u8()? != 0,
+        },
+    };
+    let count = r.read_u32()? as usize;
+    if count > phieng_electromagnetics::MAX_FIELD_CELLS {
+        return Err(SnapshotError::Parse(
+            "electro field exceeds the snapshot cap".into(),
+        ));
+    }
+    let mut phi = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        let p = r.read_f32()?;
+        finite(p, "electro.phi")?;
+        phi.push(p);
+    }
+    let time = r.read_f32()?;
+    finite(time, "electro.time")?;
+    Ok(Electro3Dto { config, phi, time })
 }
 
 fn encode_joint2(out: &mut Vec<u8>, j: &Joint2Dto, version: u32) {
@@ -6873,6 +7793,12 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
                     } else {
                         false
                     },
+                    // Schema v17: the per-body electromagnetic state.
+                    electro: if version >= SNAPSHOT_SCHEMA_ELECTRO {
+                        decode_electro_body_2(&mut r)?
+                    } else {
+                        ElectroBody2Dto::default()
+                    },
                 };
                 v.push(body);
             }
@@ -6933,6 +7859,8 @@ pub fn world2_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World2, Snapsh
         // Schema v15: the quantum field block (at the end of the
         // payload).
         quantum: decode_quantum(&mut r, version)?,
+        // Schema v17: the electromagnetic block.
+        electro: decode_electro_2(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(
@@ -7120,6 +8048,10 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
         if dto.schema >= SNAPSHOT_SCHEMA_SENSORS {
             write_u8(&mut p, u8::from(b.is_sensor));
         }
+        // Schema v17: the per-body electromagnetic state.
+        if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+            encode_electro_body_3(&mut p, &b.electro);
+        }
     }
     write_u32(&mut p, dto.joints.len() as u32);
     for j in &dto.joints {
@@ -7146,6 +8078,10 @@ fn encode_world3(dto: &World3Dto) -> Result<Vec<u8>, SnapshotError> {
     // Schema v15: the quantum field block (see `encode_world2`).
     if dto.schema >= SNAPSHOT_SCHEMA_QUANTUM {
         encode_quantum(&mut p, &dto.quantum)?;
+    }
+    // Schema v17: the electromagnetic block, appended at the end.
+    if dto.schema >= SNAPSHOT_SCHEMA_ELECTRO {
+        encode_electro_3(&mut p, &dto.electro)?;
     }
     Ok(encode_envelope(KIND_WORLD3, dto.schema, &p))
 }
@@ -7386,6 +8322,12 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
                     } else {
                         false
                     },
+                    // Schema v17: the per-body electromagnetic state.
+                    electro: if version >= SNAPSHOT_SCHEMA_ELECTRO {
+                        decode_electro_body_3(&mut r)?
+                    } else {
+                        ElectroBody3Dto::default()
+                    },
                 });
             }
             v
@@ -7447,6 +8389,8 @@ pub fn world3_from_binary(bytes: &[u8], mode: LoadMode) -> Result<World3, Snapsh
         fluid: decode_fluid3(&mut r, version)?,
         // Schema v15: the quantum field block (see `world2_from_binary`).
         quantum: decode_quantum(&mut r, version)?,
+        // Schema v17: the electromagnetic block.
+        electro: decode_electro_3(&mut r, version)?,
     };
     if r.pos != payload.len() {
         return Err(SnapshotError::Parse(

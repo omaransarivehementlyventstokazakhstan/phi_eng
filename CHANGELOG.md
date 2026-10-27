@@ -18,6 +18,25 @@ This project follows [Semantic Versioning](https://semver.org/) and
   benchmark hash (`HASH_PILE_3D`) is re-pinned to `0x4aad96014e832f5b`.
 
 ### Added
+- **The electromagnetics module: charges, Coulomb forces, Lorentz forces
+  and the electrostatic grid.** A new crate `phieng-electromagnetics`
+  (mirrored by `src/PhiEng.Electromagnetics`) provides the body-agnostic
+  arithmetic: softened Coulomb pair forces, the electric field and
+  potential at a point, the 2D/3D Lorentz acceleration in uniform fields,
+  the magnetic-dipole torque, and a deterministic red-black SOR Poisson
+  grid. `World2`/`World3` own an `ElectroWorldState` (config + field +
+  scratch) and each body carries an `ElectroState` at the cold tail. The
+  phase is a velocity kick in the gravity/ambient slot with the same
+  Verlet split, followed by a per-step drain/field solve. `Pairwise` and
+  `Field` modes are mutually exclusive, so a field is never counted twice.
+  The whole path uses only IEEE-exact operations (no platform libm), so
+  trajectories are bit-identical across platforms and the Rust/C# mirrors
+  agree. Snapshot schema v17 carries the configuration, the per-body
+  state and (when enabled) the solved potential; untouched worlds still
+  emit their old schema. `EM01`-`EM12` are mirrored in both languages,
+  including the native FFI config/body round-trip.
+  FDTD Maxwell waves, per-cell materials and contact charge sharing are
+  documented as future work in `LIMITATIONS.md`.
 - **The shape-overlap query over the C ABI.** `phieng_world[_3]_overlap_shape`
   closes the bridge: the query shape arrives as a small JSON blob (the
   same convention the joint bridge already uses) —

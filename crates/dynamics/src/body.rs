@@ -3,6 +3,7 @@ use glam::{Mat2, Mat3, Vec2, Vec3};
 use phieng_math::{InertiaTensor3, Transform2, Transform3};
 
 use super::nuclear::NuclearState;
+use phieng_electromagnetics::{ElectroState2, ElectroState3};
 use std::collections::HashSet;
 
 /// The collision layer a body belongs to unless it is configured
@@ -174,6 +175,10 @@ pub struct RigidBody2 {
     /// "none", so a body takes no part in the nuclear phase until it is
     /// given one.
     pub nuclear: NuclearState,
+    /// Electromagnetic state (cold: electro phase). The default charge is
+    /// zero, so a body takes no part in the electromagnetics until it is
+    /// given one.
+    pub electro: ElectroState2,
     /// Collision group this body belongs to (warm: narrowphase pair
     /// filter). A pair collides only when each body accepts the other's
     /// group.
@@ -582,6 +587,7 @@ impl RigidBody2 {
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
             nuclear: NuclearState::default(),
+            electro: ElectroState2::default(),
             collision_group: DEFAULT_COLLISION_GROUP,
             collision_mask: DEFAULT_COLLISION_MASK,
             is_sensor: false,
@@ -925,6 +931,9 @@ pub struct RigidBody3 {
     pub expansion_scale: f32,
     /// Nuclear state (cold: nuclear phase). See `RigidBody2::nuclear`.
     pub nuclear: NuclearState,
+    /// Electromagnetic state (cold: electro phase). See
+    /// `RigidBody2::electro`.
+    pub electro: ElectroState3,
     /// Collision layer this body belongs to (warm: narrowphase pair
     /// filter). See `RigidBody2::collision_group`.
     pub collision_group: u32,
@@ -1232,6 +1241,7 @@ impl RigidBody3 {
             temperature: phieng_math::DEFAULT_TEMPERATURE,
             expansion_scale: 1.0,
             nuclear: NuclearState::default(),
+            electro: ElectroState3::default(),
             collision_group: DEFAULT_COLLISION_GROUP,
             collision_mask: DEFAULT_COLLISION_MASK,
             is_sensor: false,

@@ -16,6 +16,7 @@ phieng-math = { path = "../math", version = "0.5.0-dev" }
 phieng-collision = { path = "../collision", version = "0.5.0-dev" }
 phieng-broadphase = { path = "../broadphase", version = "0.5.0-dev" }
 phieng-quantum = { path = "../quantum", version = "0.5.0-dev" }
+phieng-electromagnetics = { path = "../electromagnetics", version = "0.5.0-dev" }
 phieng-dynamics = { path = "../dynamics", version = "0.5.0-dev" }
 glam = { workspace = true }
 serde_json = "1.0"

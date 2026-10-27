@@ -1,0 +1,16 @@
+[package]
+name = "phieng-electromagnetics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Electrostatics and electrodynamics for the PhiEng physics engine"
+documentation = "https://docs.rs/phieng-electromagnetics"
+homepage = "https://github.com/omaransarivehementlyventstokazakhstan/phi_eng"
+keywords = ["physics", "electromagnetics", "electrostatics", "game-development"]
+categories = ["physics", "game-development"]
+
+[dependencies]
+phieng-math = { path = "../math", version = "0.5.0-dev" }
+glam = { workspace = true }

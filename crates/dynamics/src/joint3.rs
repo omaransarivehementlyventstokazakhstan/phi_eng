@@ -2322,7 +2322,8 @@ mod tests {
     #[test]
     fn k48_motors_persist_through_save_load() {
         use crate::snapshot::{
-            world3_from_binary, world3_to_binary, LoadMode, SNAPSHOT_SCHEMA_VERSION,
+            world3_from_binary, world3_to_binary, LoadMode, SNAPSHOT_SCHEMA_MOTORS,
+            SNAPSHOT_SCHEMA_VERSION,
         };
         fn json_schema(text: &str) -> u32 {
             let marker = "\"schema\": ";
@@ -2341,7 +2342,7 @@ mod tests {
         let text = crate::snapshot::world3_to_json(&world, LoadMode::Exact).expect("serializes");
         assert_eq!(
             json_schema(&text),
-            SNAPSHOT_SCHEMA_VERSION,
+            SNAPSHOT_SCHEMA_MOTORS,
             "a motorized world writes v16"
         );
         assert!(text.contains("motor_speed"), "motors must serialize");

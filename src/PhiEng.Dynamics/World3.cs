@@ -157,6 +157,11 @@ public class World3
     public NuclearState2 Nuclear => _nuclear;
 
     private readonly NuclearState2 _nuclear = new();
+    /// <summary>
+    /// The electromagnetic simulation state (see <see cref="ElectroConfig3"/>).
+    /// Disabled by default.
+    /// </summary>
+    public ElectroWorldState3 Electro { get; } = new();
     private readonly List<(int, int)> _pairs = new();
     private readonly List<Vector3> _points = new();
     private readonly List<Vector3> _clipTmp = new();
@@ -579,6 +584,13 @@ public class World3
             AmbientIntegration.Kick3(Bodies, Ambient, Time, h);
         }
 
+        // 1a-2. Electromagnetic kick (see ElectroIntegration). Same slot
+        // and Verlet split as gravity.
+        if (Electro.IsActive)
+        {
+            ElectroIntegration.Kick3(Bodies, Electro, h);
+        }
+
         // Fluid phase - SPH particles and two-way body coupling (no-op
         // when the fluid holds no particles).
         FluidIntegration3.StepFluid3(Fluid, Bodies, Gravity, Ambient, Time, dt);
@@ -774,12 +786,22 @@ public class World3
             {
                 AmbientIntegration.Kick3(Bodies, Ambient, Time, dt * 0.5f);
             }
+            if (Electro.IsActive)
+            {
+                ElectroIntegration.Kick3(Bodies, Electro, dt * 0.5f);
+            }
         }
         else
         {
             // Sleeping bodies are frozen until woken.
             foreach (var body in Bodies)
                 if (!body.IsSleeping) body.Integrate(dt);
+        }
+
+        // 5b-2. Electromagnetic bookkeeping.
+        if (Electro.IsActive)
+        {
+            ElectroIntegration.Step3(Bodies, Electro, dt);
         }
 
         // 5c. Nuclear decay and fission (see World2.StepInner).

@@ -1,5 +1,6 @@
 using System.Numerics;
 using PhiEng.Broadphase;
+using PhiEng.Electromagnetics;
 using PhiEng.Quantum;
 
 namespace PhiEng.Native;
@@ -2036,4 +2037,179 @@ public sealed class PhiNativeWorld : IDisposable
         }
     }
 
+    // ---- Electromagnetics ----
+
+    /// <summary>Set the electromagnetic configuration. Returns false on invalid input.</summary>
+    public bool SetElectroConfig(ElectroConfig2 config)
+    {
+        var ffi = ToElectroFfi(config);
+        unsafe { return NativeMethods.phieng_world_set_electro_config(_handle, &ffi) == 1; }
+    }
+
+    /// <summary>Read the electromagnetic configuration.</summary>
+    public ElectroConfig2 GetElectroConfig()
+    {
+        NativeMethods.ElectroConfigFfi2 ffi;
+        unsafe
+        {
+            if (NativeMethods.phieng_world_get_electro_config(_handle, &ffi) != 1)
+                return ElectroConfig2.Default;
+        }
+        return FromElectroFfi(ffi);
+    }
+
+    /// <summary>Set a body's net charge. Returns false for a stale id or non-finite input.</summary>
+    public bool SetBodyCharge(int bodyId, float charge)
+    {
+        unsafe { return NativeMethods.phieng_world_set_body_charge(_handle, (uint)bodyId, charge) == 1; }
+    }
+
+    /// <summary>Read a body's net charge (NaN for a stale id).</summary>
+    public float GetBodyCharge(int bodyId)
+    {
+        float q;
+        unsafe
+        {
+            return NativeMethods.phieng_world_get_body_charge(_handle, (uint)bodyId, &q) == 1
+                ? q
+                : float.NaN;
+        }
+    }
+
+    /// <summary>Set a body's full electromagnetic state.</summary>
+    public bool SetBodyElectroState(int bodyId, ElectroState2 state)
+    {
+        var ffi = ToElectroBodyFfi(state);
+        unsafe
+        {
+            return NativeMethods.phieng_world_set_body_electro_state(_handle, (uint)bodyId, &ffi) == 1;
+        }
+    }
+
+    /// <summary>Read a body's full electromagnetic state.</summary>
+    public ElectroState2 GetBodyElectroState(int bodyId)
+    {
+        NativeMethods.ElectroBodyFfi ffi;
+        unsafe
+        {
+            if (NativeMethods.phieng_world_get_body_electro_state(_handle, (uint)bodyId, &ffi) != 1)
+                return ElectroState2.Default;
+        }
+        return FromElectroBodyFfi(ffi);
+    }
+
+    /// <summary>The electric field at a world point (zero on bad input).</summary>
+    public Vector2 ElectricFieldAt(Vector2 p)
+    {
+        float ex = 0.0f, ey = 0.0f;
+        unsafe
+        {
+            return NativeMethods.phieng_world_electric_field_at(_handle, p.X, p.Y, &ex) == 1
+                ? new Vector2(ex, ey)
+                : Vector2.Zero;
+        }
+    }
+
+    /// <summary>The electric potential at a world point (NaN on bad input).</summary>
+    public float ElectricPotentialAt(Vector2 p)
+    {
+        unsafe { return NativeMethods.phieng_world_electric_potential_at(_handle, p.X, p.Y); }
+    }
+
+    /// <summary>The solved field energy, or 0 when no grid exists.</summary>
+    public double ElectroFieldEnergy()
+    {
+        double e;
+        unsafe { return NativeMethods.phieng_world_electro_field_energy(_handle, &e) == 1 ? e : 0.0; }
+    }
+
+    /// <summary>Whether the last field solve was refused.</summary>
+    public bool ElectroFieldStalled
+    {
+        get
+        {
+            unsafe { return NativeMethods.phieng_world_electro_field_stalled(_handle) == 1; }
+        }
+    }
+
+    private static NativeMethods.ElectroConfigFfi2 ToElectroFfi(ElectroConfig2 c) => new()
+    {
+        Mode = (uint)c.Mode,
+        Boundary = (uint)c.Field.Boundary,
+        Enabled = c.Enabled ? 1u : 0u,
+        CoulombK = c.CoulombK,
+        Softening = c.Softening,
+        Ex = c.UniformE.X,
+        Ey = c.UniformE.Y,
+        Bz = c.UniformB,
+        Permittivity = c.Permittivity,
+        Permeability = c.Permeability,
+        MaxAcceleration = c.MaxAcceleration,
+        Nx = c.Field.Nx,
+        Ny = c.Field.Ny,
+        Dx = c.Field.Dx,
+        Ox = c.Field.Origin.X,
+        Oy = c.Field.Origin.Y,
+        Iterations = c.Field.Iterations,
+        Omega = c.Field.Omega,
+        EpsR = c.Field.EpsR,
+        SnapshotField = c.Field.SnapshotField ? 1u : 0u,
+    };
+
+    private static ElectroConfig2 FromElectroFfi(NativeMethods.ElectroConfigFfi2 f) => new()
+    {
+        Enabled = f.Enabled != 0,
+        Mode = (ElectroMode)f.Mode,
+        CoulombK = f.CoulombK,
+        Softening = f.Softening,
+        UniformE = new Vector2(f.Ex, f.Ey),
+        UniformB = f.Bz,
+        Permittivity = f.Permittivity,
+        Permeability = f.Permeability,
+        MaxAcceleration = f.MaxAcceleration,
+        Field = new FieldConfig2
+        {
+            Nx = f.Nx,
+            Ny = f.Ny,
+            Dx = f.Dx,
+            Origin = new Vector2(f.Ox, f.Oy),
+            Iterations = f.Iterations,
+            Omega = f.Omega,
+            Boundary = (FieldBoundary)f.Boundary,
+            EpsR = f.EpsR,
+            SnapshotField = f.SnapshotField != 0,
+        },
+    };
+
+    private static NativeMethods.ElectroBodyFfi ToElectroBodyFfi(ElectroState2 s) => new()
+    {
+        Charge = s.Charge,
+        ChargeScale = s.ChargeScale,
+        Conductivity = s.Conductivity,
+        Permittivity = s.Permittivity,
+        Permeability = s.Permeability,
+        MagneticMomentX = s.MagneticMoment,
+        MagneticMomentY = 0.0f,
+        MagneticMomentZ = 0.0f,
+        Capacitance = s.Capacitance,
+        Resistance = s.Resistance,
+        Flags = (s.IsConductor ? 1u : 0u) | (s.IsGrounded ? 2u : 0u),
+    };
+
+    private static ElectroState2 FromElectroBodyFfi(NativeMethods.ElectroBodyFfi f) => new()
+    {
+        Charge = f.Charge,
+        ChargeScale = f.ChargeScale,
+        Conductivity = f.Conductivity,
+        Permittivity = f.Permittivity,
+        Permeability = f.Permeability,
+        MagneticMoment = f.MagneticMomentX,
+        Capacitance = f.Capacitance,
+        Resistance = f.Resistance,
+        IsConductor = (f.Flags & 1) != 0,
+        IsGrounded = (f.Flags & 2) != 0,
+    };
+
 }
+
+
