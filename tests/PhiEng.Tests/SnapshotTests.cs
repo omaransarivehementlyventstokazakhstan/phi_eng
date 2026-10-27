@@ -1,6 +1,7 @@
 using System.Numerics;
 using Xunit;
 using PhiEng.Dynamics;
+using PhiEng.Electromagnetics;
 using PhiEng.Native;
 
 namespace PhiEng.Tests;
@@ -190,6 +191,18 @@ public class SnapshotTests
         using var world = new PhiNativeWorld();
         world.AddStaticBody(new Vector2(0.0f, -1.0f), new Vector2(10.0f, 0.5f));
         int ball = world.AddDynamicBall(new Vector2(0.0f, 5.0f), 0.5f, 1.0f);
+        var em = ElectroState2.Default;
+        em.Charge = 2.5f;
+        em.ChargeScale = 0.5f;
+        em.Conductivity = 0.1f;
+        em.Permittivity = 2.0f;
+        em.Permeability = 3.0f;
+        em.MagneticMoment = 0.4f;
+        em.Capacitance = 2.0f;
+        em.Resistance = 5.0f;
+        em.IsConductor = true;
+        em.IsGrounded = true;
+        Assert.True(world.SetBodyElectroState(ball, em));
         for (int i = 0; i < 60; i++) world.Step(Dt);
         string pb = Path.Combine(Path.GetTempPath(), "phieng_f36.bin");
         try
@@ -205,6 +218,16 @@ public class SnapshotTests
             Assert.Equal(
                 BitConverter.SingleToInt32Bits(npos.Y),
                 BitConverter.SingleToInt32Bits(mbody.Transform.Position.Y));
+            Assert.Equal(2.5f, mbody.Electro.Charge);
+            Assert.Equal(0.5f, mbody.Electro.ChargeScale);
+            Assert.Equal(0.1f, mbody.Electro.Conductivity);
+            Assert.Equal(2.0f, mbody.Electro.Permittivity);
+            Assert.Equal(3.0f, mbody.Electro.Permeability);
+            Assert.Equal(0.4f, mbody.Electro.MagneticMoment);
+            Assert.Equal(2.0f, mbody.Electro.Capacitance);
+            Assert.Equal(5.0f, mbody.Electro.Resistance);
+            Assert.True(mbody.Electro.IsConductor);
+            Assert.True(mbody.Electro.IsGrounded);
         }
         finally
         {

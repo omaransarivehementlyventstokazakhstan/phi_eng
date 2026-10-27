@@ -2101,12 +2101,12 @@ public sealed class PhiNativeWorld : IDisposable
     /// <summary>The electric field at a world point (zero on bad input).</summary>
     public Vector2 ElectricFieldAt(Vector2 p)
     {
-        float ex = 0.0f, ey = 0.0f;
         unsafe
         {
-            return NativeMethods.phieng_world_electric_field_at(_handle, p.X, p.Y, &ex) == 1
-                ? new Vector2(ex, ey)
-                : Vector2.Zero;
+            float* e = stackalloc float[2];
+            if (NativeMethods.phieng_world_electric_field_at(_handle, p.X, p.Y, e) != 1)
+                return Vector2.Zero;
+            return new Vector2(e[0], e[1]);
         }
     }
 

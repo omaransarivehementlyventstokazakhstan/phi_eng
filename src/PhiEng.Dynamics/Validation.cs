@@ -190,6 +190,13 @@ if (config.CheckFinite)
                 body.GravityScale = 1.0f;
                 hasNonFinite = true;
             }
+            // Electromagnetic state: clamp and drop non-finite values.
+            var electro = body.Electro.Sanitized();
+            if (!electro.Equals(body.Electro))
+            {
+                body.Electro = electro;
+                hasNonFinite = true;
+            }
             if (hasNonFinite) result = ValidationResult.NonFiniteCorrected;
         }
 
@@ -365,6 +372,13 @@ public static class Validation3D
             if (!float.IsFinite(body.GravityScale))
             {
                 body.GravityScale = 1.0f;
+                hasNonFinite = true;
+            }
+            // Electromagnetic state: clamp and drop non-finite values.
+            var electro = body.Electro.Sanitized();
+            if (!electro.Equals(body.Electro))
+            {
+                body.Electro = electro;
                 hasNonFinite = true;
             }
             if (hasNonFinite) result = ValidationResult.NonFiniteCorrected;

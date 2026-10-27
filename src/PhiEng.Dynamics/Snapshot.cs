@@ -1215,6 +1215,7 @@ public static class Snapshot
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
             bool hasElectro = !w.Electro.Config.IsDefault()
+                || w.Electro.Time != 0.0f
                 || w.Bodies.Any(b => !b.Electro.IsDefault());
             // Schema v16: a joint with a set motor speed or budget needs
             // the v16 motor records, or they would be silently dropped.
@@ -1670,6 +1671,7 @@ public static class Snapshot
             QuantumDto quantum = QuantumFrom(w.Quantum);
             bool hasQuantum = !quantum.IsDefault();
             bool hasElectro = !w.Electro.Config.IsDefault()
+                || w.Electro.Time != 0.0f
                 || w.Bodies.Any(b => !b.Electro.IsDefault());
             // Schema v16: a joint with a set motor speed or budget needs
             // the v16 motor records, or they would be silently dropped.
@@ -2332,14 +2334,14 @@ public static class Snapshot
 
     private static ElectroState2 ElectroBody2To(ElectroBody2Dto d) => new()
     {
-        Charge = d.Charge,
-        ChargeScale = d.ChargeScale,
-        Conductivity = d.Conductivity,
-        Permittivity = d.Permittivity,
-        Permeability = d.Permeability,
-        MagneticMoment = d.MagneticMoment,
-        Capacitance = d.Capacitance,
-        Resistance = d.Resistance,
+        Charge = Fin(d.Charge, "electro_charge"),
+        ChargeScale = Fin(d.ChargeScale, "electro_charge_scale"),
+        Conductivity = Fin(d.Conductivity, "electro_conductivity"),
+        Permittivity = Fin(d.Permittivity, "electro_permittivity"),
+        Permeability = Fin(d.Permeability, "electro_permeability"),
+        MagneticMoment = Fin(d.MagneticMoment, "electro_magnetic_moment"),
+        Capacitance = Fin(d.Capacitance, "electro_capacitance"),
+        Resistance = Fin(d.Resistance, "electro_resistance"),
         IsConductor = d.IsConductor,
         IsGrounded = d.IsGrounded,
     };
@@ -2358,19 +2360,27 @@ public static class Snapshot
         IsGrounded = s.IsGrounded,
     };
 
-    private static ElectroState3 ElectroBody3To(ElectroBody3Dto d) => new()
+    private static ElectroState3 ElectroBody3To(ElectroBody3Dto d)
     {
-        Charge = d.Charge,
-        ChargeScale = d.ChargeScale,
-        Conductivity = d.Conductivity,
-        Permittivity = d.Permittivity,
-        Permeability = d.Permeability,
-        MagneticMoment = new Vector3(d.MagneticMoment[0], d.MagneticMoment[1], d.MagneticMoment[2]),
-        Capacitance = d.Capacitance,
-        Resistance = d.Resistance,
-        IsConductor = d.IsConductor,
-        IsGrounded = d.IsGrounded,
-    };
+        if (d.MagneticMoment.Length != 3)
+            throw new ArgumentException("electro magnetic moment must have 3 components.");
+        return new ElectroState3
+        {
+            Charge = Fin(d.Charge, "electro_charge"),
+            ChargeScale = Fin(d.ChargeScale, "electro_charge_scale"),
+            Conductivity = Fin(d.Conductivity, "electro_conductivity"),
+            Permittivity = Fin(d.Permittivity, "electro_permittivity"),
+            Permeability = Fin(d.Permeability, "electro_permeability"),
+            MagneticMoment = new Vector3(
+                Fin(d.MagneticMoment[0], "electro_magnetic_moment.x"),
+                Fin(d.MagneticMoment[1], "electro_magnetic_moment.y"),
+                Fin(d.MagneticMoment[2], "electro_magnetic_moment.z")),
+            Capacitance = Fin(d.Capacitance, "electro_capacitance"),
+            Resistance = Fin(d.Resistance, "electro_resistance"),
+            IsConductor = d.IsConductor,
+            IsGrounded = d.IsGrounded,
+        };
+    }
 
     private static Electro2Dto ElectroFrom(World2 w)
     {
@@ -2685,6 +2695,8 @@ public static class Snapshot
             w.Electro.Time = dto.Electro.Time;
             if (dto.Electro.Phi.Count > 0)
             {
+                if (electro.Mode != ElectroMode.Field)
+                    throw new ArgumentException("electro field data without field mode.");
                 var grid = new PoissonGrid2(electro.Field, electro.CoulombK);
                 if (grid.Cells != dto.Electro.Phi.Count)
                     throw new ArgumentException("electro field length mismatch.");
@@ -2941,6 +2953,8 @@ public static class Snapshot
             w.Electro.Time = dto.Electro.Time;
             if (dto.Electro.Phi.Count > 0)
             {
+                if (electro.Mode != ElectroMode.Field)
+                    throw new ArgumentException("electro field data without field mode.");
                 var grid = new PoissonGrid3(electro.Field, electro.CoulombK);
                 if (grid.Cells != dto.Electro.Phi.Count)
                     throw new ArgumentException("electro field length mismatch.");
@@ -4978,6 +4992,7 @@ public static class Snapshot
         return ms.ToArray();
     }
 }
+
 
 
 

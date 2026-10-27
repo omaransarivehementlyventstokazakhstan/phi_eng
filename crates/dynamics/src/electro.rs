@@ -99,16 +99,26 @@ impl ElectroWorldState2 {
     /// and solving it from `bodies` when needed.
     fn ensure_field(&mut self, bodies: &[RigidBody2]) -> Result<(), ElectroError> {
         let want = self.config.field;
-        let matches = self.poisson.as_ref().is_some_and(|g| *g.config() == want);
+        let matches = self
+            .poisson
+            .as_ref()
+            .is_some_and(|g| *g.config() == want && g.coulomb_k() == self.config.coulomb_k);
         if matches {
             return Ok(());
         }
-        let mut grid = PoissonGrid2::new(want, self.config.coulomb_k)?;
+        let mut grid = match PoissonGrid2::new(want, self.config.coulomb_k) {
+            Ok(grid) => grid,
+            Err(err) => {
+                self.poisson = None;
+                return Err(err);
+            }
+        };
         for body in bodies {
             grid.deposit_charge(body.transform.position, body.electro.charge);
         }
         grid.solve();
         self.poisson = Some(grid);
+        self.last_field_stalled = false;
         Ok(())
     }
 }
@@ -168,16 +178,26 @@ impl ElectroWorldState3 {
 
     fn ensure_field(&mut self, bodies: &[RigidBody3]) -> Result<(), ElectroError> {
         let want = self.config.field;
-        let matches = self.poisson.as_ref().is_some_and(|g| *g.config() == want);
+        let matches = self
+            .poisson
+            .as_ref()
+            .is_some_and(|g| *g.config() == want && g.coulomb_k() == self.config.coulomb_k);
         if matches {
             return Ok(());
         }
-        let mut grid = PoissonGrid3::new(want, self.config.coulomb_k)?;
+        let mut grid = match PoissonGrid3::new(want, self.config.coulomb_k) {
+            Ok(grid) => grid,
+            Err(err) => {
+                self.poisson = None;
+                return Err(err);
+            }
+        };
         for body in bodies {
             grid.deposit_charge(body.transform.position, body.electro.charge);
         }
         grid.solve();
         self.poisson = Some(grid);
+        self.last_field_stalled = false;
         Ok(())
     }
 }

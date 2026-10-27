@@ -50,19 +50,22 @@ public struct FieldConfig2
     /// <summary>Whether the field is stored in a snapshot.</summary>
     public bool SnapshotField { get; set; }
 
-    /// <summary>The engine default (128x128, dx 0.1).</summary>
-    public static FieldConfig2 Default => new()
+    /// <summary>A grid with the engine defaults (128x128, dx 0.1).</summary>
+    public FieldConfig2()
     {
-        Nx = 128,
-        Ny = 128,
-        Dx = 0.1f,
-        Origin = Vector2.Zero,
-        Iterations = 40,
-        Omega = 1.8f,
-        Boundary = FieldBoundary.Dirichlet,
-        EpsR = 1.0f,
-        SnapshotField = true,
-    };
+        Nx = 128;
+        Ny = 128;
+        Dx = 0.1f;
+        Origin = Vector2.Zero;
+        Iterations = 40;
+        Omega = 1.8f;
+        Boundary = FieldBoundary.Dirichlet;
+        EpsR = 1.0f;
+        SnapshotField = true;
+    }
+
+    /// <summary>The engine default (128x128, dx 0.1).</summary>
+    public static FieldConfig2 Default => new();
 
     /// <summary>Number of cells.</summary>
     public readonly int Cells => checked((int)((long)Nx * Ny));
@@ -92,20 +95,23 @@ public struct FieldConfig3
     /// <summary>Whether the field is stored in a snapshot.</summary>
     public bool SnapshotField { get; set; }
 
-    /// <summary>The engine default (32^3, dx 0.25).</summary>
-    public static FieldConfig3 Default => new()
+    /// <summary>A grid with the engine defaults (32^3, dx 0.25).</summary>
+    public FieldConfig3()
     {
-        Nx = 32,
-        Ny = 32,
-        Nz = 32,
-        Dx = 0.25f,
-        Origin = Vector3.Zero,
-        Iterations = 40,
-        Omega = 1.8f,
-        Boundary = FieldBoundary.Dirichlet,
-        EpsR = 1.0f,
-        SnapshotField = true,
-    };
+        Nx = 32;
+        Ny = 32;
+        Nz = 32;
+        Dx = 0.25f;
+        Origin = Vector3.Zero;
+        Iterations = 40;
+        Omega = 1.8f;
+        Boundary = FieldBoundary.Dirichlet;
+        EpsR = 1.0f;
+        SnapshotField = true;
+    }
+
+    /// <summary>The engine default (32^3, dx 0.25).</summary>
+    public static FieldConfig3 Default => new();
 
     /// <summary>Number of cells.</summary>
     public readonly int Cells => checked((int)((long)Nx * Ny * Nz));
@@ -135,20 +141,23 @@ public struct ElectroConfig2
     /// <summary>The field grid.</summary>
     public FieldConfig2 Field { get; set; }
 
-    /// <summary>The engine default (off).</summary>
-    public static ElectroConfig2 Default => new()
+    /// <summary>A configuration with the engine defaults (off).</summary>
+    public ElectroConfig2()
     {
-        Enabled = false,
-        Mode = ElectroMode.Off,
-        CoulombK = ElectroConstants.CoulombK,
-        Softening = 0.0f,
-        UniformE = Vector2.Zero,
-        UniformB = 0.0f,
-        Permittivity = 1.0f,
-        Permeability = 1.0f,
-        MaxAcceleration = ElectroConstants.MaxAcceleration,
-        Field = FieldConfig2.Default,
-    };
+        Enabled = false;
+        Mode = ElectroMode.Off;
+        CoulombK = ElectroConstants.CoulombK;
+        Softening = 0.0f;
+        UniformE = Vector2.Zero;
+        UniformB = 0.0f;
+        Permittivity = 1.0f;
+        Permeability = 1.0f;
+        MaxAcceleration = ElectroConstants.MaxAcceleration;
+        Field = new FieldConfig2();
+    }
+
+    /// <summary>The engine default (off).</summary>
+    public static ElectroConfig2 Default => new();
 
     /// <summary>True when every field holds its default.</summary>
     public readonly bool IsDefault()
@@ -170,7 +179,7 @@ public struct ElectroConfig2
     public readonly bool Validate()
     {
         if (!Enabled) return true;
-        if (!float.IsFinite(CoulombK)) return false;
+        if (!float.IsFinite(CoulombK) || CoulombK <= 0.0f) return false;
         if (!float.IsFinite(Softening) || Softening < 0.0f) return false;
         if (!IsFinite(UniformE) || !float.IsFinite(UniformB)) return false;
         if (!float.IsFinite(Permittivity) || Permittivity < ElectroConstants.MinMaterial) return false;
@@ -180,7 +189,7 @@ public struct ElectroConfig2
         {
             if (Field.Nx == 0 || Field.Ny == 0) return false;
             if (!float.IsFinite(Field.Dx) || Field.Dx <= 0.0f || !IsFinite(Field.Origin)) return false;
-            if (Field.Cells > ElectroConstants.MaxFieldCells) return false;
+            if ((long)Field.Nx * Field.Ny > ElectroConstants.MaxFieldCells) return false;
             if (Field.Iterations == 0) return false;
             if (!float.IsFinite(Field.Omega) || Field.Omega <= 0.0f || Field.Omega >= 2.0f) return false;
             if (!float.IsFinite(Field.EpsR) || Field.EpsR < ElectroConstants.MinMaterial) return false;
@@ -215,20 +224,23 @@ public struct ElectroConfig3
     /// <summary>The field grid.</summary>
     public FieldConfig3 Field { get; set; }
 
-    /// <summary>The engine default (off).</summary>
-    public static ElectroConfig3 Default => new()
+    /// <summary>A configuration with the engine defaults (off).</summary>
+    public ElectroConfig3()
     {
-        Enabled = false,
-        Mode = ElectroMode.Off,
-        CoulombK = ElectroConstants.CoulombK,
-        Softening = 0.0f,
-        UniformE = Vector3.Zero,
-        UniformB = Vector3.Zero,
-        Permittivity = 1.0f,
-        Permeability = 1.0f,
-        MaxAcceleration = ElectroConstants.MaxAcceleration,
-        Field = FieldConfig3.Default,
-    };
+        Enabled = false;
+        Mode = ElectroMode.Off;
+        CoulombK = ElectroConstants.CoulombK;
+        Softening = 0.0f;
+        UniformE = Vector3.Zero;
+        UniformB = Vector3.Zero;
+        Permittivity = 1.0f;
+        Permeability = 1.0f;
+        MaxAcceleration = ElectroConstants.MaxAcceleration;
+        Field = new FieldConfig3();
+    }
+
+    /// <summary>The engine default (off).</summary>
+    public static ElectroConfig3 Default => new();
 
     /// <summary>True when every field holds its default.</summary>
     public readonly bool IsDefault()
@@ -250,7 +262,7 @@ public struct ElectroConfig3
     public readonly bool Validate()
     {
         if (!Enabled) return true;
-        if (!float.IsFinite(CoulombK)) return false;
+        if (!float.IsFinite(CoulombK) || CoulombK <= 0.0f) return false;
         if (!float.IsFinite(Softening) || Softening < 0.0f) return false;
         if (!IsFinite(UniformE) || !IsFinite(UniformB)) return false;
         if (!float.IsFinite(Permittivity) || Permittivity < ElectroConstants.MinMaterial) return false;
@@ -260,7 +272,7 @@ public struct ElectroConfig3
         {
             if (Field.Nx == 0 || Field.Ny == 0 || Field.Nz == 0) return false;
             if (!float.IsFinite(Field.Dx) || Field.Dx <= 0.0f || !IsFinite(Field.Origin)) return false;
-            if (Field.Cells > ElectroConstants.MaxFieldCells) return false;
+            if ((long)Field.Nx * Field.Ny * Field.Nz > ElectroConstants.MaxFieldCells) return false;
             if (Field.Iterations == 0) return false;
             if (!float.IsFinite(Field.Omega) || Field.Omega <= 0.0f || Field.Omega >= 2.0f) return false;
             if (!float.IsFinite(Field.EpsR) || Field.EpsR < ElectroConstants.MinMaterial) return false;
@@ -296,20 +308,23 @@ public struct ElectroState2
     /// <summary>Whether the conductor is grounded.</summary>
     public bool IsGrounded { get; set; }
 
-    /// <summary>The engine default (uncharged, unit coupling).</summary>
-    public static ElectroState2 Default => new()
+    /// <summary>A state with the engine defaults (uncharged, unit coupling).</summary>
+    public ElectroState2()
     {
-        Charge = 0.0f,
-        ChargeScale = 1.0f,
-        Conductivity = 0.0f,
-        Permittivity = 1.0f,
-        Permeability = 1.0f,
-        MagneticMoment = 0.0f,
-        Capacitance = 1.0f,
-        Resistance = 0.0f,
-        IsConductor = false,
-        IsGrounded = false,
-    };
+        Charge = 0.0f;
+        ChargeScale = 1.0f;
+        Conductivity = 0.0f;
+        Permittivity = 1.0f;
+        Permeability = 1.0f;
+        MagneticMoment = 0.0f;
+        Capacitance = 1.0f;
+        Resistance = 0.0f;
+        IsConductor = false;
+        IsGrounded = false;
+    }
+
+    /// <summary>The engine default (uncharged, unit coupling).</summary>
+    public static ElectroState2 Default => new();
 
     /// <summary>True when every field holds its default.</summary>
     public readonly bool IsDefault() => this.Equals(Default);
@@ -355,20 +370,23 @@ public struct ElectroState3
     /// <summary>Whether the conductor is grounded.</summary>
     public bool IsGrounded { get; set; }
 
-    /// <summary>The engine default (uncharged, unit coupling).</summary>
-    public static ElectroState3 Default => new()
+    /// <summary>A state with the engine defaults (uncharged, unit coupling).</summary>
+    public ElectroState3()
     {
-        Charge = 0.0f,
-        ChargeScale = 1.0f,
-        Conductivity = 0.0f,
-        Permittivity = 1.0f,
-        Permeability = 1.0f,
-        MagneticMoment = Vector3.Zero,
-        Capacitance = 1.0f,
-        Resistance = 0.0f,
-        IsConductor = false,
-        IsGrounded = false,
-    };
+        Charge = 0.0f;
+        ChargeScale = 1.0f;
+        Conductivity = 0.0f;
+        Permittivity = 1.0f;
+        Permeability = 1.0f;
+        MagneticMoment = Vector3.Zero;
+        Capacitance = 1.0f;
+        Resistance = 0.0f;
+        IsConductor = false;
+        IsGrounded = false;
+    }
+
+    /// <summary>The engine default (uncharged, unit coupling).</summary>
+    public static ElectroState3 Default => new();
 
     /// <summary>True when every field holds its default.</summary>
     public readonly bool IsDefault() => this.Equals(Default);
@@ -390,5 +408,6 @@ public struct ElectroState3
         return s;
     }
 }
+
 
 

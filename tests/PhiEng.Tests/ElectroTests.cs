@@ -13,13 +13,11 @@ namespace PhiEng.Tests;
 /// </summary>
 public class ElectroTests
 {
-    private static ElectroConfig2 Pairwise()
+    private static ElectroConfig2 Pairwise() => new()
     {
-        var c = ElectroConfig2.Default;
-        c.Enabled = true;
-        c.Mode = ElectroMode.Pairwise;
-        return c;
-    }
+        Enabled = true,
+        Mode = ElectroMode.Pairwise,
+    };
 
     private static void SetCharge(RigidBody2 body, float q)
     {
@@ -189,10 +187,11 @@ public class ElectroTests
             e.Charge = charges[i].q;
             w.Bodies[ids[i]].Electro = e;
         }
-        var cfg3 = ElectroConfig3.Default;
-        cfg3.Enabled = true;
-        cfg3.Mode = ElectroMode.Pairwise;
-        Assert.True(w.Electro.Configure(cfg3));
+        Assert.True(w.Electro.Configure(new ElectroConfig3
+        {
+            Enabled = true,
+            Mode = ElectroMode.Pairwise,
+        }));
         w.Step(1.0f / 60.0f);
         Assert.True(w.Bodies[ids[0]].Velocity.X > 0.0f);
         Assert.True(w.Bodies[ids[1]].Velocity.X < 0.0f);
@@ -244,6 +243,10 @@ public class ElectroTests
 
         Assert.True(world.SetBodyCharge(id, 4.0f));
         Assert.Equal(4.0f, world.GetBodyCharge(id));
+        // k = 1, q = 4 at the origin, plus the configured uniform E =
+        // (2, 0): the field at (2,0) is 1 + 2 = 3 along X.
+        Vector2 e = world.ElectricFieldAt(new Vector2(2.0f, 0.0f));
+        Assert.True(MathF.Abs(e.X - 3.0f) < 1e-5f, $"E = {e}");
         Assert.False(world.SetBodyCharge(id, float.NaN));
     }
 
@@ -269,7 +272,28 @@ public class ElectroTests
         }
         foreach (int id in ids)
             Assert.Equal(w.Bodies[id].Transform.Position, loaded.Bodies[id].Transform.Position);
+
+        // A charged body with the default (disabled) configuration must
+        // still serialize its per-body state.
+        var plain = new World2();
+        int plainId = plain.AddDynamicBody(Vector2.Zero, new CircleShape(0.1f), 1.0f);
+        var plainElectro = plain.Bodies[plainId].Electro;
+        plainElectro.Charge = 1.5f;
+        plainElectro.IsConductor = true;
+        plainElectro.IsGrounded = true;
+        plain.Bodies[plainId].Electro = plainElectro;
+        var plainText = Snapshot.World2ToJson(plain, SnapshotLoadMode.Exact);
+        var plainBack = Snapshot.World2FromJson(plainText, SnapshotLoadMode.Exact);
+        Assert.Equal(1.5f, plainBack.Bodies[plainId].Electro.Charge);
+        Assert.True(plainBack.Bodies[plainId].Electro.IsConductor);
+        Assert.True(plainBack.Bodies[plainId].Electro.IsGrounded);
+        var plainBytes = Snapshot.World2ToBinary(plain, SnapshotLoadMode.Exact);
+        var plainBinaryBack = Snapshot.World2FromBinary(plainBytes, SnapshotLoadMode.Exact);
+        Assert.Equal(1.5f, plainBinaryBack.Bodies[plainId].Electro.Charge);
+        Assert.True(plainBinaryBack.Bodies[plainId].Electro.IsConductor);
+        Assert.True(plainBinaryBack.Bodies[plainId].Electro.IsGrounded);
     }
 }
+
 
 

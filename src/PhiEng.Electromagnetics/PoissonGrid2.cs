@@ -64,6 +64,8 @@ public sealed class PoissonGrid2
         float fx = (pos.X - Config.Origin.X) / Config.Dx;
         float fy = (pos.Y - Config.Origin.Y) / Config.Dx;
         if (!float.IsFinite(fx) || !float.IsFinite(fy)) return;
+        fx = System.Math.Clamp(fx, -1.0f, nx);
+        fy = System.Math.Clamp(fy, -1.0f, ny);
         float ix = MathF.Floor(fx);
         float iy = MathF.Floor(fy);
         float tx = fx - ix;
@@ -71,6 +73,7 @@ public sealed class PoissonGrid2
         long i0 = (long)ix;
         long j0 = (long)iy;
         float density = charge / (Config.Dx * Config.Dx);
+        if (!float.IsFinite(density)) return;
         Accumulate(i0, j0, (1.0f - tx) * (1.0f - ty), density, nx, ny);
         Accumulate(i0 + 1, j0, tx * (1.0f - ty), density, nx, ny);
         Accumulate(i0, j0 + 1, (1.0f - tx) * ty, density, nx, ny);
@@ -202,6 +205,7 @@ public sealed class PoissonGrid2
 
     private static bool IsFinite(Vector2 v) => float.IsFinite(v.X) && float.IsFinite(v.Y);
 }
+
 
 
 

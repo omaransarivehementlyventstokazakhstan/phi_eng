@@ -301,6 +301,14 @@ fn em11_ffi_config_and_body_round_trip() {
         let mut q = 0.0f32;
         assert_eq!(phieng_world_get_body_charge(world, id, &mut q), 1);
         assert_eq!(q, 4.0);
+        let mut e = [0.0f32; 2];
+        assert_eq!(
+            phieng::ffi::phieng_world_electric_field_at(world, 2.0, 0.0, e.as_mut_ptr()),
+            1
+        );
+        // k = 1, q = 4 at the origin, plus the configured uniform E = (2, 0):
+        // the field at (2,0) is 1 + 2 = 3 along X.
+        assert!((e[0] - 3.0).abs() < 1e-5, "E = {e:?}");
         assert_eq!(phieng_world_set_body_charge(world, id, f32::NAN), 0);
 
         phieng_world_free(world);
@@ -332,4 +340,24 @@ fn em12_snapshot_round_trips_the_block() {
             original.bodies[id].transform.position
         );
     }
+
+    // A charged body with the default (disabled) configuration must still
+    // serialize its per-body state; otherwise the charge is silently lost.
+    let mut plain = World2::new();
+    let id = plain
+        .add_dynamic_body(Vec2::ZERO, Shape2::Circle { radius: 0.1 }, 1.0)
+        .unwrap();
+    plain.bodies[id].electro.charge = 1.5;
+    plain.bodies[id].electro.is_conductor = true;
+    plain.bodies[id].electro.is_grounded = true;
+    let text = world2_to_json(&plain, LoadMode::Exact).unwrap();
+    let back = world2_from_json(&text, LoadMode::Exact).unwrap();
+    assert_eq!(back.bodies[id].electro.charge, 1.5);
+    assert!(back.bodies[id].electro.is_conductor);
+    assert!(back.bodies[id].electro.is_grounded);
+    let bytes = phieng::snapshot::world2_to_binary(&plain, LoadMode::Exact).unwrap();
+    let back = phieng::snapshot::world2_from_binary(&bytes, LoadMode::Exact).unwrap();
+    assert_eq!(back.bodies[id].electro.charge, 1.5);
+    assert!(back.bodies[id].electro.is_conductor);
+    assert!(back.bodies[id].electro.is_grounded);
 }

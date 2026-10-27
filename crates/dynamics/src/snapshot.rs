@@ -2339,6 +2339,7 @@ impl ElectroBody3Dto {
 
 /// Schema v17 world-level electromagnetic block (2D).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
 pub struct Electro2Dto {
     /// The configuration.
     pub config: ElectroConfig2Dto,
@@ -2359,6 +2360,7 @@ impl Electro2Dto {
 /// Schema v17 world-level electromagnetic block (3D). See
 /// [`Electro2Dto`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
 pub struct Electro3Dto {
     /// The configuration.
     pub config: ElectroConfig3Dto,
@@ -3996,9 +3998,11 @@ fn world2_dto(w: &World2, mode: LoadMode) -> World2Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
-    // Schema v17: the electromagnetic block.
+    // Schema v17: the electromagnetic block. A charged body needs the
+    // per-body record even when the world configuration is still the
+    // default (disabled), or the charge would be silently dropped.
     let electro = electro_dto_2(w);
-    let has_electro = !electro.is_default();
+    let has_electro = !electro.is_default() || w.bodies.iter().any(|b| !b.electro.is_default());
     // Schema v16: the label is the newest feature in use (minimality:
     // a motorless quantum world still writes v15, not v16). Each high
     // feature maps to the version that introduced it; the low ladder
@@ -4275,9 +4279,9 @@ fn world3_dto(w: &World3, mode: LoadMode) -> World3Dto {
     // need the v15 block, or they would be silently dropped on save.
     let quantum = quantum_dto(&w.quantum);
     let has_quantum = !quantum.is_default();
-    // Schema v17: the electromagnetic block.
+    // Schema v17: the electromagnetic block. See `world2_dto`.
     let electro = electro_dto_3(w);
-    let has_electro = !electro.is_default();
+    let has_electro = !electro.is_default() || w.bodies.iter().any(|b| !b.electro.is_default());
     // Schema v16: the label is the newest feature in use (minimality:
     // a motorless quantum world still writes v15, not v16). Each high
     // feature maps to the version that introduced it; the low ladder
@@ -4726,7 +4730,20 @@ fn load_body2(w: &mut World2, b: &Body2Dto) -> Result<(), SnapshotError> {
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
     // The electromagnetic state (schema v17).
-    body.electro = electro_body_from_dto_2(&b.electro);
+    let electro = electro_body_from_dto_2(&b.electro);
+    for (v, what) in [
+        (electro.charge, "electro.charge"),
+        (electro.charge_scale, "electro.charge_scale"),
+        (electro.conductivity, "electro.conductivity"),
+        (electro.permittivity, "electro.permittivity"),
+        (electro.permeability, "electro.permeability"),
+        (electro.magnetic_moment, "electro.magnetic_moment"),
+        (electro.capacitance, "electro.capacitance"),
+        (electro.resistance, "electro.resistance"),
+    ] {
+        finite(v, what)?;
+    }
+    body.electro = electro;
     // The collision filter (schema v13). A file without one keeps
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
@@ -4806,7 +4823,22 @@ fn load_body3(w: &mut World3, b: &Body3Dto) -> Result<(), SnapshotError> {
     // The nuclear state (schema v12).
     body.nuclear = nuclear_body_from_dto(&b.nuclear);
     // The electromagnetic state (schema v17).
-    body.electro = electro_body_from_dto_3(&b.electro);
+    let electro = electro_body_from_dto_3(&b.electro);
+    for (v, what) in [
+        (electro.charge, "electro.charge"),
+        (electro.charge_scale, "electro.charge_scale"),
+        (electro.conductivity, "electro.conductivity"),
+        (electro.permittivity, "electro.permittivity"),
+        (electro.permeability, "electro.permeability"),
+        (electro.magnetic_moment.x, "electro.magnetic_moment.x"),
+        (electro.magnetic_moment.y, "electro.magnetic_moment.y"),
+        (electro.magnetic_moment.z, "electro.magnetic_moment.z"),
+        (electro.capacitance, "electro.capacitance"),
+        (electro.resistance, "electro.resistance"),
+    ] {
+        finite(v, what)?;
+    }
+    body.electro = electro;
     // The collision filter (schema v13). A file without one keeps
     // the default layer and mask, which accept every pair.
     body.collision_group = b.collision_group;
@@ -6779,7 +6811,7 @@ fn encode_electro_body_2(out: &mut Vec<u8>, s: &ElectroBody2Dto) {
 }
 
 fn decode_electro_body_2(r: &mut Reader) -> Result<ElectroBody2Dto, SnapshotError> {
-    let dto = ElectroBody2Dto {
+    let mut dto = ElectroBody2Dto {
         charge: r.read_f32()?,
         charge_scale: r.read_f32()?,
         conductivity: r.read_f32()?,
@@ -6788,9 +6820,12 @@ fn decode_electro_body_2(r: &mut Reader) -> Result<ElectroBody2Dto, SnapshotErro
         magnetic_moment: r.read_f32()?,
         capacitance: r.read_f32()?,
         resistance: r.read_f32()?,
-        is_conductor: r.read_u8()? & 1 != 0,
-        is_grounded: r.read_u8()? & 2 != 0,
+        is_conductor: false,
+        is_grounded: false,
     };
+    let flags = r.read_u8()?;
+    dto.is_conductor = flags & 1 != 0;
+    dto.is_grounded = flags & 2 != 0;
     Ok(dto)
 }
 
@@ -6810,7 +6845,7 @@ fn encode_electro_body_3(out: &mut Vec<u8>, s: &ElectroBody3Dto) {
 }
 
 fn decode_electro_body_3(r: &mut Reader) -> Result<ElectroBody3Dto, SnapshotError> {
-    let dto = ElectroBody3Dto {
+    let mut dto = ElectroBody3Dto {
         charge: r.read_f32()?,
         charge_scale: r.read_f32()?,
         conductivity: r.read_f32()?,
@@ -6819,9 +6854,12 @@ fn decode_electro_body_3(r: &mut Reader) -> Result<ElectroBody3Dto, SnapshotErro
         magnetic_moment: [r.read_f32()?, r.read_f32()?, r.read_f32()?],
         capacitance: r.read_f32()?,
         resistance: r.read_f32()?,
-        is_conductor: r.read_u8()? & 1 != 0,
-        is_grounded: r.read_u8()? & 2 != 0,
+        is_conductor: false,
+        is_grounded: false,
     };
+    let flags = r.read_u8()?;
+    dto.is_conductor = flags & 1 != 0;
+    dto.is_grounded = flags & 2 != 0;
     Ok(dto)
 }
 

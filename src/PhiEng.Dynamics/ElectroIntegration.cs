@@ -44,11 +44,12 @@ public sealed class ElectroWorldState2
 
     internal void EnsureField(List<RigidBody2> bodies)
     {
-        if (Poisson is not null && Poisson.Config.Equals(Config.Field)) return;
+        if (Poisson is not null && Poisson.Config.Equals(Config.Field) && Poisson.CoulombK == Config.CoulombK) return;
         var grid = new PoissonGrid2(Config.Field, Config.CoulombK);
         foreach (var body in bodies) grid.DepositCharge(body.Transform.Position, body.Electro.Charge);
         grid.Solve();
         Poisson = grid;
+        LastFieldStalled = false;
     }
 }
 
@@ -88,11 +89,12 @@ public sealed class ElectroWorldState3
 
     internal void EnsureField(List<RigidBody3> bodies)
     {
-        if (Poisson is not null && Poisson.Config.Equals(Config.Field)) return;
+        if (Poisson is not null && Poisson.Config.Equals(Config.Field) && Poisson.CoulombK == Config.CoulombK) return;
         var grid = new PoissonGrid3(Config.Field, Config.CoulombK);
         foreach (var body in bodies) grid.DepositCharge(body.Transform.Position, body.Electro.Charge);
         grid.Solve();
         Poisson = grid;
+        LastFieldStalled = false;
     }
 }
 
@@ -118,7 +120,15 @@ public static class ElectroIntegration
     {
         var cfg = state.Config;
         if (!cfg.Enabled || h == 0.0f || bodies.Count == 0) return;
-        if (cfg.Mode == ElectroMode.Field) state.EnsureField(bodies);
+        if (cfg.Mode == ElectroMode.Field)
+        {
+            try { state.EnsureField(bodies); }
+            catch (ArgumentException)
+            {
+                state.LastFieldStalled = true;
+                state.Poisson = null;
+            }
+        }
         float kEff = cfg.CoulombK / cfg.Permittivity;
         float softening = cfg.Softening;
         float max = cfg.MaxAcceleration;
@@ -225,7 +235,15 @@ public static class ElectroIntegration
     {
         var cfg = state.Config;
         if (!cfg.Enabled || h == 0.0f || bodies.Count == 0) return;
-        if (cfg.Mode == ElectroMode.Field) state.EnsureField(bodies);
+        if (cfg.Mode == ElectroMode.Field)
+        {
+            try { state.EnsureField(bodies); }
+            catch (ArgumentException)
+            {
+                state.LastFieldStalled = true;
+                state.Poisson = null;
+            }
+        }
         float kEff = cfg.CoulombK / cfg.Permittivity;
         float softening = cfg.Softening;
         float max = cfg.MaxAcceleration;
@@ -404,3 +422,6 @@ public static class ElectroIntegration
             + Electrostatics.PotentialAt3(p, pos, q, cfg.CoulombK / cfg.Permittivity, cfg.Softening);
     }
 }
+
+
+

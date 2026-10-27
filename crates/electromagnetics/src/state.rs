@@ -119,14 +119,16 @@ impl Default for FieldConfig3 {
 impl FieldConfig2 {
     /// The number of cells.
     pub fn cells(&self) -> usize {
-        self.nx as usize * self.ny as usize
+        let n = self.nx as u64 * self.ny as u64;
+        n.min(usize::MAX as u64) as usize
     }
 }
 
 impl FieldConfig3 {
     /// The number of cells.
     pub fn cells(&self) -> usize {
-        self.nx as usize * self.ny as usize * self.nz as usize
+        let n = self.nx as u64 * self.ny as u64 * self.nz as u64;
+        n.min(usize::MAX as u64) as usize
     }
 }
 
@@ -195,7 +197,7 @@ impl ElectroConfig2 {
             // A disabled config is inert; only the master switch matters.
             return Ok(());
         }
-        if !self.coulomb_k.is_finite() {
+        if !self.coulomb_k.is_finite() || self.coulomb_k <= 0.0 {
             return Err(ElectroError::NonFinite);
         }
         if !self.softening.is_finite() || self.softening < 0.0 {
@@ -282,7 +284,7 @@ impl ElectroConfig3 {
         if !self.enabled {
             return Ok(());
         }
-        if !self.coulomb_k.is_finite() {
+        if !self.coulomb_k.is_finite() || self.coulomb_k <= 0.0 {
             return Err(ElectroError::NonFinite);
         }
         if !self.softening.is_finite() || self.softening < 0.0 {

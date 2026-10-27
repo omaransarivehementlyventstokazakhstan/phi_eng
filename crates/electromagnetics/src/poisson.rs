@@ -42,10 +42,11 @@ impl PoissonGrid2 {
         if !cfg.dx.is_finite() || cfg.dx <= 0.0 || !cfg.origin.is_finite() {
             return Err(ElectroError::InvalidGrid);
         }
-        let cells = cfg.nx as usize * cfg.ny as usize;
-        if cells > MAX_FIELD_CELLS {
+        let cells = cfg.nx as u64 * cfg.ny as u64;
+        if cells > MAX_FIELD_CELLS as u64 {
             return Err(ElectroError::GridTooLarge);
         }
+        let cells = cells as usize;
         if cfg.iterations == 0 || !cfg.omega.is_finite() || cfg.omega <= 0.0 || cfg.omega >= 2.0 {
             return Err(ElectroError::InvalidGrid);
         }
@@ -66,6 +67,11 @@ impl PoissonGrid2 {
     /// The configuration the grid was built from.
     pub fn config(&self) -> &FieldConfig2 {
         &self.cfg
+    }
+
+    /// The Coulomb constant the grid was solved with.
+    pub fn coulomb_k(&self) -> f32 {
+        self.coulomb_k
     }
 
     /// The number of cells.
@@ -122,6 +128,9 @@ impl PoissonGrid2 {
         let i0 = ix as i64;
         let j0 = iy as i64;
         let density = charge / (self.cfg.dx * self.cfg.dx);
+        if !density.is_finite() {
+            return;
+        }
         let w = [
             (i0, j0, (1.0 - tx) * (1.0 - ty)),
             (i0 + 1, j0, tx * (1.0 - ty)),
@@ -282,10 +291,11 @@ impl PoissonGrid3 {
         if !cfg.dx.is_finite() || cfg.dx <= 0.0 || !cfg.origin.is_finite() {
             return Err(ElectroError::InvalidGrid);
         }
-        let cells = cfg.nx as usize * cfg.ny as usize * cfg.nz as usize;
-        if cells > MAX_FIELD_CELLS {
+        let cells = cfg.nx as u64 * cfg.ny as u64 * cfg.nz as u64;
+        if cells > MAX_FIELD_CELLS as u64 {
             return Err(ElectroError::GridTooLarge);
         }
+        let cells = cells as usize;
         if cfg.iterations == 0 || !cfg.omega.is_finite() || cfg.omega <= 0.0 || cfg.omega >= 2.0 {
             return Err(ElectroError::InvalidGrid);
         }
@@ -306,6 +316,11 @@ impl PoissonGrid3 {
     /// The configuration.
     pub fn config(&self) -> &FieldConfig3 {
         &self.cfg
+    }
+
+    /// The Coulomb constant the grid was solved with.
+    pub fn coulomb_k(&self) -> f32 {
+        self.coulomb_k
     }
 
     /// The number of cells.
@@ -360,6 +375,9 @@ impl PoissonGrid3 {
         let j0 = iy as i64;
         let k0 = iz as i64;
         let density = charge / (self.cfg.dx * self.cfg.dx * self.cfg.dx);
+        if !density.is_finite() {
+            return;
+        }
         let nx = self.cfg.nx as i64;
         let ny = self.cfg.ny as i64;
         let nz = self.cfg.nz as i64;

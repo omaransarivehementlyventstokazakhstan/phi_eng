@@ -63,6 +63,12 @@ public sealed class PoissonGrid3
         float fy = (pos.Y - Config.Origin.Y) / Config.Dx;
         float fz = (pos.Z - Config.Origin.Z) / Config.Dx;
         if (!float.IsFinite(fx) || !float.IsFinite(fy) || !float.IsFinite(fz)) return;
+        long nx = Config.Nx;
+        long ny = Config.Ny;
+        long nz = Config.Nz;
+        fx = System.Math.Clamp(fx, -1.0f, nx);
+        fy = System.Math.Clamp(fy, -1.0f, ny);
+        fz = System.Math.Clamp(fz, -1.0f, nz);
         float ix = MathF.Floor(fx);
         float iy = MathF.Floor(fy);
         float iz = MathF.Floor(fz);
@@ -72,10 +78,8 @@ public sealed class PoissonGrid3
         long i0 = (long)ix;
         long j0 = (long)iy;
         long k0 = (long)iz;
-        long nx = Config.Nx;
-        long ny = Config.Ny;
-        long nz = Config.Nz;
         float density = charge / (Config.Dx * Config.Dx * Config.Dx);
+        if (!float.IsFinite(density)) return;
         for (int dz = 0; dz < 2; dz++)
         {
             float wz = dz == 0 ? 1.0f - tz : tz;
@@ -250,6 +254,7 @@ public sealed class PoissonGrid3
     private static bool IsFinite(Vector3 v) =>
         float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 }
+
 
 
 

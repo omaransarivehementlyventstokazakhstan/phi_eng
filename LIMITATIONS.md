@@ -32,6 +32,9 @@ EM01–EM12 electromagnetics).
   deposited field when it is sampled at its centre; the resulting
   self-force is a grid artefact. Use `Pairwise` mode for a few bodies
   where exactness matters.
+- **Sources outside the grid are clamped to the nearest boundary cell**,
+  and a field query issued before the first solve falls back to the
+  pairwise sum (the grid is built by the first step).
 - **No pairwise magnetostatics.** Only the uniform external `B` (the
   `q v x B` force) and the magnetic-dipole torque are modelled. Two
   moving charges do not attract/repel magnetically, and there is no
